@@ -25,126 +25,33 @@
 
 package com.oracle.svm.hosted.heap;
 
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import org.graalvm.nativeimage.ImageSingletons;
 
-import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
-import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
-import com.oracle.svm.core.BuildPhaseProvider;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-import com.oracle.svm.core.util.ImageHeapList.HostedImageHeapList;
-import com.oracle.svm.core.util.ImageHeapMap.HostedImageHeapMap;
-import com.oracle.svm.core.util.LayeredHostedImageHeapMapCollector;
-import com.oracle.svm.core.util.LayeredImageHeapMap;
-import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 
 @AutomaticallyRegisteredFeature
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 final class ImageHeapCollectionFeature implements InternalFeature {
 
-    private final Set<HostedImageHeapMap<?, ?>> allMaps = ConcurrentHashMap.newKeySet();
-    private final Set<HostedImageHeapList<?>> allLists = ConcurrentHashMap.newKeySet();
-    private final ScanReason scanReason = new OtherReason("Manual rescan triggered from " + ImageHeapCollectionFeature.class);
-
     @Override
     public void duringSetup(DuringSetupAccess config) {
-        config.registerObjectReplacer(this::replaceHostedWithRuntime);
+        ImageHeapCollectionSupport support = new ImageHeapCollectionSupport();
+        ImageSingletons.add(ImageHeapCollectionSupport.class, support);
+        config.registerObjectReplacer(support::replaceHostedWithRuntime);
     }
 
-    private Object replaceHostedWithRuntime(Object obj) {
-        if (obj instanceof HostedImageHeapMap) {
-            HostedImageHeapMap<?, ?> hostedImageHeapMap = (HostedImageHeapMap<?, ?>) obj;
-            if (BuildPhaseProvider.isAnalysisFinished()) {
-                VMError.guarantee(allMaps.contains(hostedImageHeapMap), "ImageHeapMap reachable after analysis that was not seen during analysis");
-            } else {
-                allMaps.add(hostedImageHeapMap);
-                if (hostedImageHeapMap.getRuntimeMap() instanceof LayeredImageHeapMap<Object, Object> layeredImageHeapMap) {
-                    LayeredHostedImageHeapMapCollector.singleton().registerReachableHostedImageHeapMap(layeredImageHeapMap);
-                }
-            }
-            return hostedImageHeapMap.getRuntimeMap();
-        } else if (obj instanceof HostedImageHeapList<?> hostedImageHeapList) {
-            if (BuildPhaseProvider.isAnalysisFinished()) {
-                VMError.guarantee(allLists.contains(hostedImageHeapList), "ImageHeapList reachable after analysis that was not seen during analysis");
-            } else {
-                allLists.add(hostedImageHeapList);
-            }
-            return hostedImageHeapList.getRuntimeList();
-        }
-        return obj;
-    }
-
-    /**
-     * This method makes sure that the content of all modified {@link HostedImageHeapMap}s and
-     * {@link HostedImageHeapList}s is properly propagated to their runtime counterparts. As both
-     * the number of these collections and their individual sizes are theoretically unbounded, we
-     * use <i>parallel streams</i> to divide the load across all cores.
-     * <p>
-     * We split the process into two stages. First, the content of each modified collection is
-     * propagated from the hosted to the runtime version. Then, the modified runtime collections are
-     * rescanned. The split is done to prevent concurrent modifications of the hosted collections
-     * during the execution of this method, as they may be updated indirectly during the heap
-     * scanning.
-     */
     @Override
     public void duringAnalysis(DuringAnalysisAccess a) {
-        DuringAnalysisAccessImpl access = (DuringAnalysisAccessImpl) a;
-        if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
-            allMaps.addAll(LayeredHostedImageHeapMapCollector.singleton().getPreviousLayerReachableMaps());
-        }
-        Set<Object> objectsToRescan = ConcurrentHashMap.newKeySet();
-        allMaps.parallelStream().forEach(hostedImageHeapMap -> {
-            if (hostedImageHeapMap.needsUpdate()) {
-                hostedImageHeapMap.update();
-                objectsToRescan.add(hostedImageHeapMap.getCurrentLayerMap());
-            }
-        });
-        allLists.parallelStream().forEach(hostedImageHeapList -> {
-            if (hostedImageHeapList.needsUpdate()) {
-                hostedImageHeapList.update();
-                objectsToRescan.add(hostedImageHeapList.getRuntimeList());
-            }
-        });
-        if (!objectsToRescan.isEmpty()) {
-            objectsToRescan.parallelStream().forEach(obj -> access.rescanObject(obj, scanReason));
-            access.requireAnalysisIteration();
-        }
-    }
-
-    public boolean needsUpdate() {
-        for (var hostedImageHeapMap : allMaps) {
-            if (hostedImageHeapMap.needsUpdate()) {
-                return true;
-            }
-        }
-        for (var hostedImageHeapList : allLists) {
-            if (hostedImageHeapList.needsUpdate()) {
-                return true;
-            }
-        }
-        return false;
+        ImageHeapCollectionSupport.singleton().updateAndRescanCollections((DuringAnalysisAccessImpl) a);
     }
 
     @Override
     public void afterImageWrite(AfterImageWriteAccess access) {
-        for (var hostedImageHeapMap : allMaps) {
-            if (hostedImageHeapMap.needsUpdate()) {
-                throw VMError.shouldNotReachHere("ImageHeapMap modified after static analysis:%n%s%n%s",
-                                hostedImageHeapMap, hostedImageHeapMap.getCurrentLayerMap());
-            }
-        }
-        for (var hostedImageHeapList : allLists) {
-            if (hostedImageHeapList.needsUpdate()) {
-                throw VMError.shouldNotReachHere("ImageHeapList modified after static analysis:%n%s%n%s",
-                                hostedImageHeapList, hostedImageHeapList.getRuntimeList());
-
-            }
-        }
+        ImageHeapCollectionSupport.singleton().verifyCollectionsAreStableAfterAnalysis();
     }
 }

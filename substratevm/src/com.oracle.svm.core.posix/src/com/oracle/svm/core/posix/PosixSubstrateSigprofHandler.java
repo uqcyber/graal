@@ -25,9 +25,6 @@
 
 package com.oracle.svm.core.posix;
 
-import static com.oracle.svm.core.posix.PosixSubstrateSigprofHandler.Options.SignalHandlerBasedExecutionSampler;
-
-import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
 import org.graalvm.nativeimage.c.function.CodePointer;
@@ -36,17 +33,12 @@ import org.graalvm.word.Pointer;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.RegisterDumper;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.posix.headers.Signal;
 import com.oracle.svm.core.sampler.SubstrateSigprofHandler;
-import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.shared.option.SubstrateOptionsParser;
-
-import jdk.graal.compiler.options.Option;
+import com.oracle.svm.shared.Uninterruptible;
 
 /**
  * <p>
@@ -72,6 +64,12 @@ public abstract class PosixSubstrateSigprofHandler extends SubstrateSigprofHandl
     private static final CEntryPointLiteral<Signal.AdvancedSignalDispatcher> advancedSignalDispatcher = CEntryPointLiteral.create(PosixSubstrateSigprofHandler.class,
                     "dispatch", int.class, Signal.siginfo_t.class, Signal.ucontext_t.class);
 
+    @Override
+    protected void installSignalHandler() {
+        PosixSignalHandlerSupport.installNativeSignalHandler(Signal.SignalEnum.SIGPROF, advancedSignalDispatcher.getFunctionPointer(), Signal.SA_RESTART(),
+                        SubstrateOptions.isSignalHandlingAllowed());
+    }
+
     @SuppressWarnings("unused")
     @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class, publishAs = CEntryPoint.Publish.NotPublished)
     @CEntryPointOptions(prologue = CEntryPointOptions.NoPrologue.class, epilogue = CEntryPointOptions.NoEpilogue.class)
@@ -95,36 +93,5 @@ public abstract class PosixSubstrateSigprofHandler extends SubstrateSigprofHandl
         CodePointer ip = (CodePointer) RegisterDumper.singleton().getIP(uContext);
         Pointer sp = (Pointer) RegisterDumper.singleton().getSP(uContext);
         tryUninterruptibleStackWalk(ip, sp, true);
-    }
-
-    @Override
-    protected void installSignalHandler() {
-        PosixSignalHandlerSupport.installNativeSignalHandler(Signal.SignalEnum.SIGPROF, advancedSignalDispatcher.getFunctionPointer(), Signal.SA_RESTART(),
-                        SubstrateOptions.isSignalHandlingAllowed());
-    }
-
-    static boolean isSignalHandlerBasedExecutionSamplerEnabled() {
-        if (SignalHandlerBasedExecutionSampler.hasBeenSet()) {
-            return SignalHandlerBasedExecutionSampler.getValue();
-        } else {
-            return isPlatformSupported();
-        }
-    }
-
-    private static boolean isPlatformSupported() {
-        return (Platform.includedIn(Platform.LINUX.class) || Platform.includedIn(Platform.DARWIN.class)) && SubstrateOptions.isSignalHandlingAllowed();
-    }
-
-    private static void validateSamplerOption(HostedOptionKey<Boolean> isSamplerEnabled) {
-        if (isSamplerEnabled.hasBeenSet() && isSamplerEnabled.getValue()) {
-            UserError.guarantee(isPlatformSupported(),
-                            "The %s cannot be used to profile on this platform.",
-                            SubstrateOptionsParser.commandArgument(isSamplerEnabled, "+"));
-        }
-    }
-
-    static class Options {
-        @Option(help = "Determines if JFR uses a signal handler for execution sampling.")//
-        public static final HostedOptionKey<Boolean> SignalHandlerBasedExecutionSampler = new HostedOptionKey<>(null, PosixSubstrateSigprofHandler::validateSamplerOption);
     }
 }

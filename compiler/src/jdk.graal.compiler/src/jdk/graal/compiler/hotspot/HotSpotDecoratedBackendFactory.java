@@ -25,7 +25,7 @@
 package jdk.graal.compiler.hotspot;
 
 import jdk.graal.compiler.bytecode.BytecodeProvider;
-import jdk.graal.compiler.hotspot.meta.HotSpotGraalConstantFieldProvider;
+import jdk.graal.compiler.core.common.spi.ConstantFieldProvider;
 import jdk.graal.compiler.hotspot.meta.HotSpotHostForeignCallsProvider;
 import jdk.graal.compiler.hotspot.meta.HotSpotLoweringProvider;
 import jdk.graal.compiler.hotspot.meta.HotSpotMetaAccessExtensionProvider;
@@ -83,7 +83,7 @@ public class HotSpotDecoratedBackendFactory extends HotSpotBackendFactory {
     }
 
     @Override
-    protected HotSpotGraalConstantFieldProvider createConstantFieldProvider(GraalHotSpotVMConfig config, MetaAccessProvider metaAccess) {
+    protected ConstantFieldProvider createConstantFieldProvider(GraalHotSpotVMConfig config, MetaAccessProvider metaAccess) {
         return delegate.createConstantFieldProvider(config, metaAccess);
     }
 

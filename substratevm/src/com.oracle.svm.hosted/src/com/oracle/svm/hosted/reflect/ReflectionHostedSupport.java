@@ -87,6 +87,10 @@ public interface ReflectionHostedSupport {
 
     Map<Class<?>, Throwable> getRecordComponentLookupErrors();
 
+    Set<String> getKnownClassNames();
+
+    int getReflectionClassesCount();
+
     int getReflectionMethodsCount();
 
     int getReflectionFieldsCount();

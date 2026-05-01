@@ -37,8 +37,10 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
+import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.hosted.RuntimeClassInitialization;
+import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.hosted.fieldfolding.IsStaticFinalFieldInitializedNode;
@@ -584,6 +586,10 @@ class BoxingMustBeSimulated {
     }
 }
 
+class NullPointerFieldMustBeSimulated {
+    static final VoidPointer value = WordFactory.nullPointer();
+}
+
 class SingleByteFieldMustBeSimulated {
     static SingleByteFieldMustBeSimulated instance1 = new SingleByteFieldMustBeSimulated((byte) 42);
     static SingleByteFieldMustBeSimulated instance2 = new SingleByteFieldMustBeSimulated((byte) -42);
@@ -868,6 +874,7 @@ public class TestClassInitialization {
                     StaticFinalFieldFoldingMustBeSimulated.class,
                     LambdaMustBeSimulated.class,
                     BoxingMustBeSimulated.class,
+                    NullPointerFieldMustBeSimulated.class,
                     SingleByteFieldMustBeSimulated.class,
                     SynchronizedMustBeSimulated.class, SynchronizedMustBeDelayed.class,
     };
@@ -988,6 +995,7 @@ public class TestClassInitialization {
         assertTrue(Arrays.equals((short[]) BoxingMustBeSimulated.S1, new short[]{0, 0, 43, 44, 45, 44, 45, 46, 47, 0, 0, 0}));
         assertTrue(Arrays.equals((Object[]) BoxingMustBeSimulated.O1, new Object[]{"42", null, "44"}));
         assertTrue(Arrays.equals((Object[]) BoxingMustBeSimulated.O2, new String[]{"45", null, "47"}));
+        assertTrue(NullPointerFieldMustBeSimulated.value.isNull());
 
         /*
          * The unsafe field offset lookup is constant folded at image build time, which also

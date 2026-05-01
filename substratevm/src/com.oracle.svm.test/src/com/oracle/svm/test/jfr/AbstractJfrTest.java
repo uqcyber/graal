@@ -30,6 +30,7 @@ import static org.junit.Assume.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -150,6 +151,26 @@ public abstract class AbstractJfrTest {
             }
             Thread.sleep(10);
         }
+    }
+
+    protected static byte[] toUTF8Bytes(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    protected static boolean containsByteSequence(byte[] fileBytes, byte[] sequence) {
+        if (sequence.length == 0) {
+            return true;
+        }
+
+        outer: for (int i = 0; i <= fileBytes.length - sequence.length; i++) {
+            for (int j = 0; j < sequence.length; j++) {
+                if (fileBytes[i + j] != sequence[j]) {
+                    continue outer;
+                }
+            }
+            return true;
+        }
+        return false;
     }
 
     private static boolean isDebuggingEnabled() {

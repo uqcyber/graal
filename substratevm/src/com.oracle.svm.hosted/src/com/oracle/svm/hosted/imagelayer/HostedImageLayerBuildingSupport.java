@@ -55,6 +55,7 @@ import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.util.ArchiveSupport;
 import com.oracle.svm.core.util.ConcurrentUtils;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.hosted.GuestTypes;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.NativeImageClassLoaderSupport;
 import com.oracle.svm.hosted.c.NativeLibraries;
@@ -73,6 +74,7 @@ import com.oracle.svm.shared.option.LocatableMultiOptionValue.ValueWithOrigin;
 import com.oracle.svm.shared.option.OptionUtils;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 import com.oracle.svm.shared.singletons.ImageSingletonsSupportImpl;
+import com.oracle.svm.shared.singletons.ImageSingletonsSupportImpl.HostedManagement.SingletonRegistration;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.DisallowedSingletonTrait;
@@ -85,6 +87,7 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraitKind;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.TypeResult;
 
 import jdk.graal.compiler.core.common.SuppressFBWarnings;
@@ -93,6 +96,7 @@ import jdk.graal.compiler.options.OptionDescriptors;
 import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.options.OptionsContainer;
+import jdk.graal.compiler.vmaccess.ResolvedJavaModule;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
@@ -215,7 +219,7 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
     }
 
     public ResolvedJavaType lookupType(boolean optional, String className) {
-        TypeResult<ResolvedJavaType> typeResult = imageClassLoader.findType(className);
+        TypeResult<ResolvedJavaType> typeResult = imageClassLoader.guestTypes.findType(className);
         if (!typeResult.isPresent()) {
             if (optional) {
                 return null;
@@ -262,9 +266,11 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
         forbiddenInstallationKinds.add(kind);
     }
 
-    public BiConsumer<Object, ImageSingletonsSupportImpl.SingletonTraitMap> createSingletonValidationCallback() {
-        if (buildingImageLayer) {
-            return (value, traitMap) -> {
+    public BiConsumer<SingletonRegistration, ImageSingletonsSupportImpl.SingletonTraitMap> createSingletonValidationCallback() {
+        return (singletonRegistration, traitMap) -> {
+            Class<?> key = singletonRegistration.key();
+            Object value = singletonRegistration.value();
+            if (buildingImageLayer) {
                 var installationTrait = traitMap.getTrait(LayeredInstallationKindSingletonTrait.class);
                 installationTrait.ifPresent(t -> {
                     if (forbiddenInstallationKinds.contains(t.metadata())) {
@@ -276,9 +282,15 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
                 traitMap.getTrait(DisallowedSingletonTrait.class).ifPresent(_ -> {
                     throw VMError.shouldNotReachHere("Singleton with %s trait should never be added to a layered build", SingletonTraitKind.DISALLOWED);
                 });
-            };
-        }
-        return null;
+            }
+            GuestAccess guestAccess = GuestAccess.get();
+            ResolvedJavaType singletonType = guestAccess.lookupType(value.getClass());
+            ResolvedJavaModule singletonModule = guestAccess.getModule(singletonType);
+            if (traitMap.isEmpty() && imageClassLoader.getBuilderModules().contains(singletonModule)) {
+                throw VMError.shouldNotReachHere("All singletons should be annotated with @%s. Singleton of value %s with key of %s is not annotated",
+                                guestAccess.lookupType(SingletonTraits.class).toJavaName(), value.getClass(), key);
+            }
+        };
     }
 
     public Function<Class<?>, SingletonTrait<?>[]> getSingletonTraitInjector() {
@@ -412,18 +424,18 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
     }
 
     public static HostedImageLayerBuildingSupport initialize(HostedOptionValues values, ImageClassLoader imageClassLoader, Path builderTempDir) {
-        boolean buildingSharedLayer = isLayerCreateOptionEnabled(values);
-        boolean buildingExtensionLayer = isLayerUseOptionEnabled(values);
+        boolean buildingSharedLayer = isLayerCreateOptionEnabled(values.get());
+        boolean buildingExtensionLayer = isLayerUseOptionEnabled(values.get());
 
         if (buildingSharedLayer) {
             Platform platform = imageClassLoader.platform;
             if (!supportedPlatform(platform)) {
-                ValueWithOrigin<String> valueWithOrigin = getLayerCreateValueWithOrigin(values);
+                ValueWithOrigin<String> valueWithOrigin = getLayerCreateValueWithOrigin(values.get());
                 String layerCreateValue = getLayerCreateValue(valueWithOrigin);
                 String layerCreateArg = SubstrateOptionsParser.commandArgument(LayeredImageOptions.LayerCreate, layerCreateValue);
                 String message = String.format("Layer creation option '%s' from %s is not supported when building for platform %s/%s.",
                                 layerCreateArg, valueWithOrigin.origin(), platform.getOS(), platform.getArchitecture());
-                if (LayeredImageOptions.LayeredImageDiagnosticOptions.LayerOptionVerification.getValue(values)) {
+                if (LayeredImageOptions.LayeredImageDiagnosticOptions.LayerOptionVerification.getValue(values.get())) {
                     throw UserError.abort("%s", message);
                 }
                 LogUtils.warning(message);
@@ -440,20 +452,20 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
 
         WriteLayerArchiveSupport writeLayerArchiveSupport = null;
         ArchiveSupport archiveSupport = new ArchiveSupport(false);
-        String layerName = SubstrateOptions.Name.getValue(values);
+        String layerName = SubstrateOptions.Name.getValue(values.get());
         if (buildingSharedLayer) {
-            boolean enableLogging = LayeredImageOptions.LayeredImageDiagnosticOptions.LogLayeredArchiving.getValue(values);
+            boolean enableLogging = LayeredImageOptions.LayeredImageDiagnosticOptions.LogLayeredArchiving.getValue(values.get());
             writeLayerArchiveSupport = new WriteLayerArchiveSupport(layerName, imageClassLoader.classLoaderSupport, builderTempDir, archiveSupport, enableLogging);
         }
         LoadLayerArchiveSupport loadLayerArchiveSupport = null;
         SharedLayerSnapshot.Reader snapshot = null;
         List<FileChannel> graphs = List.of();
         if (buildingExtensionLayer) {
-            Path layerFileName = getLayerUseValue(values);
-            boolean enableLogging = LayeredImageOptions.LayeredImageDiagnosticOptions.LogLayeredArchiving.getValue(values);
+            Path layerFileName = getLayerUseValue(values.get());
+            boolean enableLogging = LayeredImageOptions.LayeredImageDiagnosticOptions.LogLayeredArchiving.getValue(values.get());
             loadLayerArchiveSupport = new LoadLayerArchiveSupport(layerName, layerFileName, builderTempDir, archiveSupport, imageClassLoader.platform, enableLogging);
-            boolean strict = LayeredImageOptions.LayeredImageDiagnosticOptions.LayerOptionVerification.getValue(values);
-            boolean verbose = LayeredImageOptions.LayeredImageDiagnosticOptions.LayerOptionVerificationVerbose.getValue(values);
+            boolean strict = LayeredImageOptions.LayeredImageDiagnosticOptions.LayerOptionVerification.getValue(values.get());
+            boolean verbose = LayeredImageOptions.LayeredImageDiagnosticOptions.LayerOptionVerificationVerbose.getValue(values.get());
             loadLayerArchiveSupport.verifyCompatibility(imageClassLoader.classLoaderSupport, collectLayerVerifications(imageClassLoader), strict, verbose);
             try {
                 graphs = List.of(FileChannel.open(loadLayerArchiveSupport.getSnapshotGraphsPath()));
@@ -473,7 +485,7 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
 
         Function<Class<?>, SingletonTrait<?>[]> singletonTraitInjector = null;
         if (buildingImageLayer) {
-            var applicationLayerOnlySingletons = LayeredImageOptions.ApplicationLayerOnlySingletons.getValue(values);
+            var applicationLayerOnlySingletons = LayeredImageOptions.ApplicationLayerOnlySingletons.getValue(values.get());
             LayeredInstallationKindSingletonTrait[] appLayerOnly = new LayeredInstallationKindSingletonTrait[]{APP_LAYER_ONLY_TRAIT};
             singletonTraitInjector = (key) -> {
                 if (applicationLayerOnlySingletons.contains(key.getName())) {
@@ -523,8 +535,8 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
         nativeLibs.addDynamicNonJniLibrary(libName);
     }
 
-    public static void registerBaseLayerTypes(BigBang bb, NativeImageClassLoaderSupport classLoaderSupport) {
-        classLoaderSupport.getClassesToIncludeUnconditionally().forEach(bb::tryRegisterTypeForBaseImage);
+    public static void registerBaseLayerTypes(BigBang bb, GuestTypes guestTypes) {
+        guestTypes.getTypesToIncludeUnconditionally().forEach(bb::tryRegisterTypeForBaseImage);
     }
 
     /**
@@ -535,7 +547,7 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
      * native library need to be in the same layer. This method iterate through all native methods
      * and try to include them in the current layer.
      */
-    public static void registerNativeMethodsForBaseImage(BigBang bb, ImageClassLoader loader) {
+    public static void registerNativeMethodsForBaseImage(BigBang bb, GuestTypes loader) {
         loader.getApplicationTypes().forEach(bb::tryRegisterNativeMethodsForBaseImage);
     }
 }

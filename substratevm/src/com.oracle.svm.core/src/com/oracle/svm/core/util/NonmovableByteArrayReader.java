@@ -24,15 +24,15 @@
  */
 package com.oracle.svm.core.util;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.shared.util.VMError;
 import jdk.graal.compiler.api.replacements.Fold;
 import org.graalvm.word.Pointer;
 
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
-import com.oracle.svm.core.config.ConfigurationValues;
 
 import jdk.vm.ci.meta.JavaKind;
 
@@ -103,6 +103,6 @@ public class NonmovableByteArrayReader {
 
     @Fold
     protected static int getByteArrayBaseOffset() {
-        return ConfigurationValues.getObjectLayout().getArrayBaseOffset(JavaKind.Byte);
+        return ObjectLayout.singleton().getArrayBaseOffset(JavaKind.Byte);
     }
 }

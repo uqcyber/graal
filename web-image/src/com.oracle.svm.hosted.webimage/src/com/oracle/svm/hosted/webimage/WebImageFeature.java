@@ -26,16 +26,12 @@ package com.oracle.svm.hosted.webimage;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
-import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.impl.RuntimeJNIAccessSupport;
 import org.graalvm.nativeimage.impl.RuntimeSystemPropertiesSupport;
 import org.graalvm.webimage.api.JS;
@@ -54,9 +50,8 @@ import com.oracle.svm.configure.ConfigurationFile;
 import com.oracle.svm.configure.ReflectionConfigurationParser;
 import com.oracle.svm.configure.config.conditional.AccessConditionResolver;
 import com.oracle.svm.core.c.ProjectHeaderFile;
-import com.oracle.svm.core.c.ProjectHeaderFileHeaderResolversRegistryFeature;
 import com.oracle.svm.core.code.ImageCodeInfo;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
@@ -117,10 +112,6 @@ import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.util.Providers;
-import jdk.graal.compiler.vmaccess.VMAccess;
-import jdk.vm.ci.meta.JavaConstant;
-import jdk.vm.ci.meta.MetaAccessProvider;
-import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
@@ -129,13 +120,6 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 @Platforms(WebImagePlatform.class)
 public class WebImageFeature implements InternalFeature {
     private final JSEntryPointRegistry entryPointsData = new JSEntryPointRegistry();
-
-    @Override
-    public List<Class<? extends Feature>> getRequiredFeatures() {
-        List<Class<? extends Feature>> result = new ArrayList<>(1);
-        result.add(ProjectHeaderFileHeaderResolversRegistryFeature.class);
-        return result;
-    }
 
     @Override
     public void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {
@@ -156,8 +140,6 @@ public class WebImageFeature implements InternalFeature {
     public void beforeAnalysis(BeforeAnalysisAccess access) {
         FeatureImpl.BeforeAnalysisAccessImpl a = (FeatureImpl.BeforeAnalysisAccessImpl) access;
         AnalysisMetaAccess metaAccess = a.getMetaAccess();
-        MetaAccessProvider originalMetaAccess = metaAccess.getWrapped();
-        ImageClassLoader imageClassLoader = a.getImageClassLoader();
         BigBang bigbang = a.getBigBang();
 
         // For DynamicNewArrayLowerer
@@ -192,51 +174,13 @@ public class WebImageFeature implements InternalFeature {
         }
 
         LowerableResources.processResources(a, WebImageHostedConfiguration.get());
-
-        /*
-         * Clear caches for Locale and BaseLocale.
-         *
-         * These caches can contribute ~1MB to the image size, clearing them avoids this overhead at
-         * the cost of having to recreate the Locale and BaseLocale objects once when they're
-         * requested.
-         *
-         * On JDK21, ReferencedKeySet and ReferencedKeyMap don't exist. We have to go through
-         * reflection to access them because analysis tools like spotbugs still run on JDK21
-         */
-        ResolvedJavaType baseLocaleInterningCacheType = imageClassLoader.findType("sun.util.locale.BaseLocale$1InterningCache").getOrFail();
-        ResolvedJavaField baseLocaleCacheField = JVMCIReflectionUtil.getUniqueDeclaredField(baseLocaleInterningCacheType, "CACHE");
-        ResolvedJavaType localeCacheType = imageClassLoader.findType("java.util.Locale$LocaleCache").getOrFail();
-        ResolvedJavaField localeCacheField = JVMCIReflectionUtil.getUniqueDeclaredField(localeCacheType, "LOCALE_CACHE");
-        VMAccess vmAccess = GuestAccess.get();
-
-        a.registerFieldValueTransformer(baseLocaleCacheField, (receiver, originalValue) -> {
-            /*
-             * Executes `ReferencedKeySet.create(true,
-             * ReferencedKeySet.concurrentHashMapSupplier())` with reflection.
-             */
-            ResolvedJavaType referencedKeySetClazz = imageClassLoader.findType("jdk.internal.util.ReferencedKeySet").getOrFail();
-            ResolvedJavaMethod createMethod = JVMCIReflectionUtil.getUniqueDeclaredMethod(originalMetaAccess, referencedKeySetClazz, "create", boolean.class, Supplier.class);
-            ResolvedJavaMethod concurrentHashMapSupplierMethod = JVMCIReflectionUtil.getUniqueDeclaredMethod(originalMetaAccess, referencedKeySetClazz, "concurrentHashMapSupplier");
-            return vmAccess.invoke(createMethod, null, JavaConstant.TRUE, vmAccess.invoke(concurrentHashMapSupplierMethod, null));
-        });
-
-        a.registerFieldValueTransformer(localeCacheField, (receiver, originalValue) -> {
-            /*
-             * Executes `ReferencedKeyMap.create(true,
-             * ReferencedKeyMap.concurrentHashMapSupplier())` with reflection.
-             */
-            ResolvedJavaType referencedKeyMapClazz = imageClassLoader.findType("jdk.internal.util.ReferencedKeyMap").getOrFail();
-            ResolvedJavaMethod createMethod = JVMCIReflectionUtil.getUniqueDeclaredMethod(originalMetaAccess, referencedKeyMapClazz, "create", boolean.class, Supplier.class);
-            ResolvedJavaMethod concurrentHashMapSupplierMethod = JVMCIReflectionUtil.getUniqueDeclaredMethod(originalMetaAccess, referencedKeyMapClazz, "concurrentHashMapSupplier");
-            return vmAccess.invoke(createMethod, null, JavaConstant.TRUE, vmAccess.invoke(concurrentHashMapSupplierMethod, null));
-        });
     }
 
     @Override
     public void duringSetup(DuringSetupAccess a) {
         FeatureImpl.DuringSetupAccessImpl access = (FeatureImpl.DuringSetupAccessImpl) a;
 
-        String entryPointConfig = WebImageOptions.EntryPointsConfig.getValue(ImageSingletons.lookup(HostedOptionValues.class));
+        String entryPointConfig = WebImageOptions.EntryPointsConfig.getValue(HostedOptionValues.singleton().get());
         if (entryPointConfig != null) {
             AccessConditionResolver<AccessCondition> conditionResolver = new NativeImageConditionResolver(access.getImageClassLoader(),
                             ClassInitializationSupport.singleton());
@@ -280,7 +224,7 @@ public class WebImageFeature implements InternalFeature {
         if (WebImageOptions.supportRuntime(WebImageOptions.VMType.Browser)) {
             ImageSingletons.add(WebImageHttpHandlerSubstitutions.class, new WebImageHttpHandlerSubstitutions());
         }
-        if (WebImageOptions.UseRandomForTempFiles.getValue(HostedOptionValues.singleton())) {
+        if (WebImageOptions.UseRandomForTempFiles.getValue(HostedOptionValues.singleton().get())) {
             ImageSingletons.add(WebImageTempFileHelperSupport.class, new WebImageTempFileHelperSupportWithoutSecureRandom());
         } else {
             ImageSingletons.add(WebImageTempFileHelperSupport.class, new WebImageTempFileHelperSupport());
@@ -313,7 +257,8 @@ public class WebImageFeature implements InternalFeature {
         rci.initializeAtRunTime("java.nio.file.FileSystems$DefaultFileSystemHolder", "Parts of static initializer is substituted to inject custom FileSystemProvider");
         rci.initializeAtRunTime("java.util.zip.ZipFile$Source", "avoid initializing wrong file system");
 
-        for (ResolvedJavaType jsObjectSubclass : imageClassLoader.findSubtypes(JSObject.class, false)) {
+        ResolvedJavaType jsObject = GuestAccess.get().lookupType(JSObject.class);
+        for (ResolvedJavaType jsObjectSubclass : imageClassLoader.guestTypes.findSubtypes(jsObject, false)) {
             rci.initializeAtRunTime(jsObjectSubclass,
                             "Initialize JSObject subclasses at runtime, since their custom constructors create mirrors and set up fields for the mirrors.");
         }

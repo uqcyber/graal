@@ -1160,6 +1160,13 @@ public class InstrumentationTest extends AbstractInstructionTest {
             }
         }
 
+        @Instrumentation
+        static final class Instrumentation32 {
+            @Specialization
+            public static void doDefault() {
+            }
+        }
+
     }
 
 }

@@ -64,12 +64,9 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.c.function.CEntryPointErrors;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.code.DynamicMethodAddressResolutionHeapSupport;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
@@ -82,15 +79,20 @@ import com.oracle.svm.core.posix.PosixUtils;
 import com.oracle.svm.core.posix.headers.Errno;
 import com.oracle.svm.core.posix.headers.Fcntl;
 import com.oracle.svm.core.posix.headers.Unistd;
+import com.oracle.svm.core.util.PointerUtils;
+import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
+import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
+import com.oracle.svm.hosted.imagelayer.ImageLayerSectionFeature;
+import com.oracle.svm.hosted.imagelayer.LayeredDispatchTableFeature;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-import com.oracle.svm.core.util.PointerUtils;
-import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.util.NumUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.hosted.imagelayer.ImageLayerSectionFeature;
-import com.oracle.svm.hosted.imagelayer.LayeredDispatchTableFeature;
 
 import jdk.graal.compiler.nodes.NamedLocationIdentity;
 import jdk.graal.compiler.nodes.PauseNode;
@@ -211,7 +213,7 @@ public class LinuxImageHeapProvider extends AbstractImageHeapProvider {
         Pointer initialLayerImageHeap = layerSection.readWord(ImageLayerSection.getEntryOffset(HEAP_BEGIN));
         Pointer codeBase = layerSection.readWord(ImageLayerSection.getEntryOffset(CODE_START));
 
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
         while (layerSection.isNonNull()) {
             Pointer data = layerSection.add(ImageLayerSection.getEntryOffset(VARIABLY_SIZED_DATA));
             int offset = 0;
@@ -253,11 +255,11 @@ public class LinuxImageHeapProvider extends AbstractImageHeapProvider {
 
     @Uninterruptible(reason = "Thread state not yet set up.")
     private static int applyLayerCodePointerPatches(Pointer data, int startOffset, Pointer layerHeapRelocs, Word addend) {
-        int wordSize = ConfigurationValues.getWordSize();
+        int wordSize = SubstrateTarget.getWordSize();
 
         int offset = startOffset;
         long bitmapWordCountAsLong = data.readLong(offset);
-        int bitmapWordCount = UninterruptibleUtils.NumUtil.safeToInt(bitmapWordCountAsLong);
+        int bitmapWordCount = NumUtil.safeToInt(bitmapWordCountAsLong);
         offset += Long.BYTES;
         if (addend.equal(0)) {
             /* Nothing to do. */
@@ -295,10 +297,10 @@ public class LinuxImageHeapProvider extends AbstractImageHeapProvider {
      */
     @Uninterruptible(reason = "Thread state not yet set up.")
     private static int applyLayerImageHeapRefPatches(Pointer patches, int startOffset, Pointer layerImageHeap) {
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
         int offset = startOffset;
         long countAsLong = patches.readLong(offset);
-        int count = UninterruptibleUtils.NumUtil.safeToInt(countAsLong);
+        int count = NumUtil.safeToInt(countAsLong);
         offset += Long.BYTES;
         int endOffset = offset + count * Integer.BYTES;
         while (offset < endOffset) {
@@ -752,7 +754,7 @@ public class LinuxImageHeapProvider extends AbstractImageHeapProvider {
 
         // Find the offset of the magic word in the image file. We cannot reliably compute it
         // from the image heap offset below because it might be in a different file segment.
-        int wordSize = ConfigurationValues.getWordSize();
+        int wordSize = SubstrateTarget.getWordSize();
         WordPointer magicMappingStart = StackValue.get(WordPointer.class);
         WordPointer magicMappingFileOffset = StackValue.get(WordPointer.class);
         boolean found = findMapping(mapfd, buffer, bufferSize, magicAddress, magicAddress.add(wordSize), magicMappingStart, magicMappingFileOffset, false);

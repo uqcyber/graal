@@ -30,7 +30,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
 import java.util.Arrays;
 
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -58,7 +58,7 @@ import com.oracle.svm.core.hub.RuntimeClassLoading.NoRuntimeClassLoading;
  * and the copyWith and copyWithExtend* methods (copy constructors).
  */
 @TargetClass(className = "java.lang.invoke.BoundMethodHandle")
-final class Target_java_lang_invoke_BoundMethodHandle {
+public final class Target_java_lang_invoke_BoundMethodHandle {
     @Alias @RecomputeFieldValue(isFinal = true, kind = RecomputeFieldValue.Kind.None) //
     static Target_java_lang_invoke_BoundMethodHandle_Specializer SPECIALIZER;
 
@@ -68,6 +68,12 @@ final class Target_java_lang_invoke_BoundMethodHandle {
 
     @Alias
     static native Target_java_lang_invoke_BoundMethodHandle_SpeciesData speciesDataFor(Target_java_lang_invoke_LambdaForm form);
+
+    @Alias
+    public native int fieldCount();
+
+    @Alias
+    public native Object arg(int i);
 }
 
 /*

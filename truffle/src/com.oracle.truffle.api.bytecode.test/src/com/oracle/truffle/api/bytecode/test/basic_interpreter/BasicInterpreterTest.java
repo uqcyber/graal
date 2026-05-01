@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,7 +44,9 @@ import static com.oracle.truffle.api.bytecode.test.basic_interpreter.AbstractBas
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -2575,8 +2577,8 @@ public class BasicInterpreterTest extends AbstractBasicInterpreterTest {
 
         node.getBytecodeNode().setUncachedThreshold(10);
         assertEquals(BytecodeTier.UNCACHED, node.getBytecodeNode().getTier());
-        // 1 call + 9 backedges causes on-stack transition to cached.
-        assertEquals(9L, node.getCallTarget().call());
+        // 1 call + 10 backedges causes on-stack transition to cached.
+        assertEquals(10L, node.getCallTarget().call());
         assertEquals(BytecodeTier.CACHED, node.getBytecodeNode().getTier());
     }
 
@@ -3347,6 +3349,94 @@ public class BasicInterpreterTest extends AbstractBasicInterpreterTest {
 
         BasicInterpreter cloned = node.doCloneUninitialized();
         assertEquals("User field was not copied to the uninitialized clone.", node.name, cloned.name);
+    }
+
+    @Test
+    public void testCloneUninitializedYield() {
+        // return (yield 1) + (yield 2);
+        BasicInterpreter node = parseNode("cloneUninitializedYield", b -> {
+            b.beginRoot();
+
+            b.beginReturn();
+            b.beginAdd();
+
+            b.beginYield();
+            b.emitLoadConstant(1L);
+            b.endYield();
+
+            b.beginYield();
+            b.emitLoadConstant(2L);
+            b.endYield();
+
+            b.endAdd();
+            b.endReturn();
+
+            b.endRoot();
+        });
+
+        BasicInterpreter cloned = node.doCloneUninitialized();
+        assertNotEquals(node.getCallTarget(), cloned.getCallTarget());
+
+        ContinuationResult originalCont1 = (ContinuationResult) node.getCallTarget().call();
+        ContinuationResult clonedCont1 = (ContinuationResult) cloned.getCallTarget().call();
+
+        assertEquals(1L, originalCont1.getResult());
+        assertEquals(1L, clonedCont1.getResult());
+        assertSame(node, originalCont1.getContinuationRootNode().getSourceRootNode());
+        assertSame(cloned, clonedCont1.getContinuationRootNode().getSourceRootNode());
+
+        ContinuationResult originalCont2 = (ContinuationResult) originalCont1.continueWith(3L);
+        ContinuationResult clonedCont2 = (ContinuationResult) clonedCont1.continueWith(3L);
+
+        assertEquals(2L, originalCont2.getResult());
+        assertEquals(2L, clonedCont2.getResult());
+        assertSame(node, originalCont2.getContinuationRootNode().getSourceRootNode());
+        assertSame(cloned, clonedCont2.getContinuationRootNode().getSourceRootNode());
+
+        assertEquals(7L, originalCont2.continueWith(4L));
+        assertEquals(7L, clonedCont2.continueWith(4L));
+    }
+
+    @Test
+    public void testCloneUninitializedYieldUpdate() {
+        // result = yield incrementValue(arg0); return incrementValue(result);
+        BasicInterpreter node = parseNode("cloneUninitializedYieldUpdate", b -> {
+            b.beginRoot();
+
+            BytecodeLocal result = b.createLocal();
+            b.beginStoreLocal(result);
+            b.beginYield();
+            b.beginIncrementValue();
+            b.emitLoadArgument(0);
+            b.endIncrementValue();
+            b.endYield();
+            b.endStoreLocal();
+
+            b.beginReturn();
+            b.beginIncrementValue();
+            b.emitLoadLocal(result);
+            b.endIncrementValue();
+            b.endReturn();
+
+            b.endRoot();
+        });
+
+        BasicInterpreter cloned = node.doCloneUninitialized();
+        assertNotEquals(node.getCallTarget(), cloned.getCallTarget());
+
+        node.getRootNodes().update(createBytecodeConfigBuilder().addInstrumentation(BasicInterpreter.IncrementValue.class).build());
+
+        ContinuationResult originalCont = (ContinuationResult) node.getCallTarget().call(123L);
+        ContinuationResult clonedCont = (ContinuationResult) cloned.getCallTarget().call(123L);
+
+        assertEquals(124L, originalCont.getResult());
+        assertEquals(124L, clonedCont.getResult());
+        assertNotSame(originalCont.getContinuationRootNode(), clonedCont.getContinuationRootNode());
+        assertSame(node, originalCont.getContinuationRootNode().getSourceRootNode());
+        assertSame(cloned, clonedCont.getContinuationRootNode().getSourceRootNode());
+
+        assertEquals(43L, originalCont.continueWith(42L));
+        assertEquals(43L, clonedCont.continueWith(42L));
     }
 
     @Test

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -90,7 +90,6 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
 
 import com.oracle.truffle.dsl.processor.ProcessorContext;
-import com.oracle.truffle.dsl.processor.SuppressFBWarnings;
 import com.oracle.truffle.dsl.processor.TruffleTypes;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.LoadIllegalLocalStrategy;
@@ -138,18 +137,12 @@ public final class BytecodeRootNodeElement extends AbstractElement {
 
     static final String USER_LOCALS_START_INDEX = "USER_LOCALS_START_INDEX";
     static final String BCI_INDEX = "BCI_INDEX";
-    static final String COROUTINE_FRAME_INDEX = "COROUTINE_FRAME_INDEX";
+    static final String CONTINUATION_FRAME_INDEX = "CONTINUATION_FRAME_INDEX";
     static final String EMPTY_INT_ARRAY = "EMPTY_INT_ARRAY";
-
-    // Bytecode version encoding: [tags][instrumentations][source bit]
-    private static final int MAX_TAGS = 32;
-    static final int TAG_OFFSET = 32;
-    private static final int MAX_INSTRUMENTATIONS = 31;
-    static final int INSTRUMENTATION_OFFSET = 1;
 
     // !Important: Keep these in sync with InstructionBytecodeSizeTest!
     // Estimated number of Java bytecodes per instruction.
-    private static final int ESTIMATED_CUSTOM_INSTRUCTION_SIZE = 26;
+    private static final int ESTIMATED_CUSTOM_INSTRUCTION_SIZE = 24;
     private static final int ESTIMATED_EXTRACTED_INSTRUCTION_SIZE = 20;
     // Estimated number of bytecodes needed if they are just part of the switch table.
     private static final int GROUP_DISPATCH_SIZE = 40;
@@ -203,7 +196,8 @@ public final class BytecodeRootNodeElement extends AbstractElement {
     final VirtualStateElement virtualState;
     final CounterStateElement counterState = new CounterStateElement(this);
 
-    CodeTypeElement configEncoder;
+    final BranchBackwardThrowExceptionElement branchBackwardThrowException;
+    BytecodeConfigEncoderImplElement configEncoder;
     OldBytecodesBoxElement oldBytecodesBoxElement;
     AbstractBytecodeNodeElement abstractBytecodeNode;
 
@@ -213,6 +207,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
     InstructionDescriptorImplElement instructionDescriptorImpl;
     InstructionDescriptorListElement instructionDescriptorList;
     InstructionImplElement instructionImpl;
+    final BytecodeTransitionImplElement bytecodeTransitionImplElement;
 
     private Map<TypeMirror, CodeExecutableElement> expectMethods = new HashMap<>();
 
@@ -224,6 +219,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
 
         this.model = model;
         this.virtualState = new VirtualStateElement(this);
+        this.configEncoder = this.add(new BytecodeConfigEncoderImplElement(this));
         this.builder = new BuilderElement(this);
         this.abstractBuilderType = abstractBuilderType == null ? types.BytecodeBuilder : abstractBuilderType;
         this.bytecodeBuilderType = builder.asType();
@@ -281,7 +277,10 @@ public final class BytecodeRootNodeElement extends AbstractElement {
             this.oldBytecodesBoxElement = this.add(new OldBytecodesBoxElement(this));
         }
 
+        this.branchBackwardThrowException = add(new BranchBackwardThrowExceptionElement(parent));
+
         this.abstractBytecodeNode = this.add(new AbstractBytecodeNodeElement(this));
+        this.bytecodeTransitionImplElement = new BytecodeTransitionImplElement(this);
 
         if (model.enableTagInstrumentation) {
             tagNode.lazyInit();
@@ -290,7 +289,8 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         CodeVariableElement bytecodeNode = new CodeVariableElement(Set.of(PRIVATE, VOLATILE), abstractBytecodeNode.asType(), "bytecode");
         this.add(child(bytecodeNode));
         this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), bytecodeRootNodesImpl.asType(), "nodes"));
-        addJavadoc(this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(int.class), "maxLocals")), "The number of frame slots required for locals.");
+        addJavadoc(this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(int.class), "stackBase")),
+                        "The number of frame slots required for locals. Live stack operands occupy [stackBase, sp), where sp points to the next free slot.");
         if (model.usesBoxingElimination()) {
             addJavadoc(this.add(new CodeVariableElement(Set.of(PRIVATE, FINAL), type(int.class), "numLocals")), "The total number of locals created.");
         }
@@ -321,6 +321,8 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         // Define the interpreter implementations.
         BytecodeNodeElement cachedBytecodeNode = this.add(new BytecodeNodeElement(this, InterpreterTier.CACHED));
         abstractBytecodeNode.getPermittedSubclasses().add(cachedBytecodeNode.asType());
+
+        this.add(bytecodeTransitionImplElement);
 
         CodeTypeElement initialBytecodeNode;
         if (model.enableUncachedInterpreter) {
@@ -358,8 +360,6 @@ public final class BytecodeRootNodeElement extends AbstractElement {
 
         instructionDescriptorImpl.lazyInit();
         instructionImpl.lazyInit();
-
-        configEncoder = this.add(createBytecodeConfigEncoderClass());
 
         this.add(createNewConfigBuilder());
 
@@ -438,7 +438,6 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         this.addOptional(createPrepareForInstrumentation());
         this.addOptional(createPrepareForCompilation());
 
-        this.add(createEncodeTags());
         if (model.enableTagInstrumentation) {
             this.add(createFindInstrumentableCallNode());
         }
@@ -500,6 +499,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         this.add(createInvalidate());
 
         this.add(createGetRootNodes());
+        this.addOptional(createGetSource());
         this.add(createGetSourceSection());
         CodeExecutableElement translateStackTraceElement = this.addOptional(createTranslateStackTraceElement());
         if (translateStackTraceElement != null) {
@@ -518,7 +518,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
 
         }
 
-        if (cloneUninitializedNeedsUnquickenedBytecode()) {
+        if (clonesNeedUnquickenedBytecode()) {
             this.add(createUnquickenBytecode());
         }
 
@@ -574,7 +574,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         ctor.addParameter(new CodeVariableElement(model.languageClass, "language"));
         ctor.addParameter(new CodeVariableElement(types.FrameDescriptor_Builder, "builder"));
         ctor.addParameter(new CodeVariableElement(bytecodeRootNodesImpl.asType(), "nodes"));
-        ctor.addParameter(new CodeVariableElement(type(int.class), "maxLocals"));
+        ctor.addParameter(new CodeVariableElement(type(int.class), "stackBase"));
         if (model.usesBoxingElimination()) {
             ctor.addParameter(new CodeVariableElement(type(int.class), "numLocals"));
         }
@@ -597,7 +597,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.end(2);
 
         b.statement("this.nodes = nodes");
-        b.statement("this.maxLocals = maxLocals");
+        b.statement("this.stackBase = stackBase");
         if (model.usesBoxingElimination()) {
             b.statement("this.numLocals = numLocals");
         }
@@ -625,11 +625,10 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.startReturn().startCall("continueAt");
         b.string("bytecode");
         b.string("0"); // bci
-        b.string("maxLocals"); // sp
+        b.string("stackBase"); // sp
         b.startGroup().cast(types.FrameWithoutBoxing).string("frame").end();
         if (model.hasYieldOperation()) {
-            b.startGroup().cast(types.FrameWithoutBoxing).string("frame").end();
-            b.string("null");
+            b.string("null"); // continuation root
         }
 
         b.end(2);
@@ -739,30 +738,13 @@ public final class BytecodeRootNodeElement extends AbstractElement {
      * transition, and on continuation resumption (if enabled). The encoding is as follows:
      *
      * <pre>
-     * 00000000 0000000C SSSSSSSS SSSSSSSS BBBBBBBBB BBBBBBBBB BBBBBBBBB BBBBBBBBB
+     * 00000000 00000000 SSSSSSSS SSSSSSSS BBBBBBBBB BBBBBBBBB BBBBBBBBB BBBBBBBBB
      * </pre>
      *
-     * Where {@code B} represents the bci and {@code S} represents the sp. If continuations are
-     * enabled, the {@code C} bit is used by OSR to indicate that the OSR compilation should use a
-     * materialized continuation frame for locals (this flag should not be used outside of OSR).
+     * Where {@code B} represents the bci and {@code S} represents the sp.
      */
-    String encodeState(String bci, String sp, String useContinuationFrame) {
-        String result = "";
-        if (useContinuationFrame != null) {
-            if (!model.hasYieldOperation()) {
-                throw new AssertionError();
-            }
-            result += String.format("((%s ? 1L : 0L) << 48) | ", useContinuationFrame);
-        }
-        if (sp != null) {
-            result += String.format("((%s & 0xFFFFL) << 32) | ", sp);
-        }
-        result += String.format("(%s & 0xFFFFFFFFL)", bci);
-        return result;
-    }
-
-    String encodeState(String bci, String sp) {
-        return encodeState(bci, sp, null);
+    static String encodeState(String bci, String sp) {
+        return String.format("((%s & 0xFFFFL) << 32) | (%s & 0xFFFFFFFFL)", sp, bci);
     }
 
     static final String RETURN_BCI = "0xFFFFFFFF";
@@ -781,13 +763,6 @@ public final class BytecodeRootNodeElement extends AbstractElement {
 
     static String decodeSp(String state) {
         return String.format("(short) (%s >>> 32)", state);
-    }
-
-    String decodeUseContinuationFrame(String state) {
-        if (!model.hasYieldOperation()) {
-            throw new AssertionError();
-        }
-        return String.format("(%s & (1L << 48)) != 0", state);
     }
 
     CodeTreeBuilder emitCastBytecodeIndexToInt(CodeTreeBuilder b) {
@@ -828,13 +803,6 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         return model.enableTailCallHandlers ? type(long.class) : type(int.class);
     }
 
-    String clearUseContinuationFrame(String target) {
-        if (!model.hasYieldOperation()) {
-            throw new AssertionError();
-        }
-        return String.format("(%s & ~(1L << 48))", target);
-    }
-
     void emitWriteBytecodeIndexToFrame(CodeTreeBuilder b, String frame, String value) {
         b.startStatement();
         BytecodeRootNodeElement.startSetFrame(b, getBytecodeIndexType()).string(frame).string(BytecodeRootNodeElement.BCI_INDEX).string(value).end();
@@ -855,19 +823,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         ex.addParameter(new CodeVariableElement(getStackPointerType(), "sp"));
         ex.addParameter(new CodeVariableElement(types.FrameWithoutBoxing, "frame"));
         if (model.hasYieldOperation()) {
-            /**
-             * When an {@link BytecodeRootNode} is suspended, its frame gets materialized. Resuming
-             * execution with this materialized frame would provide unsatisfactory performance.
-             *
-             * Instead, on entry, we copy stack state from the materialized frame into the new frame
-             * so that stack accesses can be virtualized. We do not copy local state since there can
-             * be many temporary locals and they may not be used.
-             *
-             * In regular calls, localFrame is the same as frame, but when a node is suspended and
-             * resumed, it will be the materialized frame used for local accesses.
-             */
-            ex.addParameter(new CodeVariableElement(types.FrameWithoutBoxing, "localFrame"));
-            /**
+            /*
              * When we resume, this parameter is non-null and is included so that the root node can
              * be patched when the interpreter transitions to cached.
              */
@@ -884,6 +840,8 @@ public final class BytecodeRootNodeElement extends AbstractElement {
             b.end();
         }
 
+        b.statement("boolean wasCompiled = CompilerDirectives.inCompiledCode()");
+
         b.statement("long state = ", encodeState("bci", "sp"));
 
         b.startWhile().string("true").end().startBlock();
@@ -892,9 +850,6 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.startCall("bc", "continueAt");
         b.string("this");
         b.string("frame");
-        if (model.hasYieldOperation()) {
-            b.string("localFrame");
-        }
         b.string("state");
         b.end();
         b.end();
@@ -905,30 +860,24 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.lineComment("Bytecode or tier changed");
         b.tree(GeneratorUtils.createTransferToInterpreterAndInvalidate());
 
-        if (model.needsTransition()) {
-            b.declaration(abstractBytecodeNode.asType(), "oldBytecode", "bc");
-            b.statement("bc = this.bytecode");
-
-            if (model.isBytecodeUpdatable()) {
-                b.startAssign("state");
-            } else {
-                b.startStatement();
-            }
-            b.startCall("oldBytecode.transition");
-            b.string("bc");
-            if (model.isBytecodeUpdatable() || model.needsCachedTagsTransition()) {
-                b.string("state");
-            }
-            if (model.needsCachedTagsTransition()) {
-                b.string(localFrame());
-            }
-            if (model.hasYieldOperation()) {
-                b.string("continuationRootNode");
-            }
-            b.end(2);
-        } else {
-            b.statement("bc = this.bytecode");
+        if (model.hasYieldOperation()) {
+            b.startIf().string("wasCompiled && continuationRootNode != null").end().startBlock();
+            b.statement("frame = continuationRootNode.syncToMaterializedFrame(frame, " + decodeSp("state") + ")");
+            b.end();
         }
+
+        b.declaration(abstractBytecodeNode.asType(), "oldBytecode", "bc");
+        b.statement("bc = this.bytecode");
+        if (model.isBytecodeUpdatable()) {
+            b.startAssign("state");
+        } else {
+            b.startStatement();
+        }
+        b.string("oldBytecode.");
+        emitCallDefault(b, abstractBytecodeNode.transition);
+        b.end();
+
+        b.statement("wasCompiled = false");
 
         b.end();
         b.end();
@@ -1135,7 +1084,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.startStatement().type(generic(ArrayList.class, tagClass)).string(" tags = ").startNew("ArrayList<>").end().end();
         int index = 0;
         for (TypeMirror tag : model.getProvidedTags()) {
-            b.startIf().string("(tagMask & ").string(1 << index).string(") != 0").end().startBlock();
+            b.startIf().string(configEncoder.checkTagEnabled("tagMask", index)).end().startBlock();
             b.startStatement().startCall("tags", "add").typeLiteral(tag).end().end();
             b.end();
             index++;
@@ -1153,7 +1102,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         }
 
         if (model.hasYieldOperation()) {
-            result.add(createInitializedVariable(Set.of(PRIVATE, STATIC, FINAL), int.class, COROUTINE_FRAME_INDEX, reserved++ + ""));
+            result.add(createInitializedVariable(Set.of(PRIVATE, STATIC, FINAL), int.class, CONTINUATION_FRAME_INDEX, reserved++ + ""));
         }
 
         result.add(createInitializedVariable(Set.of(PRIVATE, STATIC, FINAL), int.class, USER_LOCALS_START_INDEX, reserved + ""));
@@ -1202,7 +1151,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.statement("clone.clones = null");
         // The base copy method performs a shallow copy of all fields.
         // Some fields should be manually reinitialized to default values.
-        b.statement("clone.bytecode = insert(this.bytecode.cloneUninitialized())");
+        b.statement("clone.bytecode = insert(this.bytecode.cloneUninitialized(clone))");
         b.declaration(generic(types.BytecodeSupport_CloneReferenceList, this.asType()), "localClones", "this.clones");
         b.startIf().string("localClones == null").end().startBlock();
         b.startStatement().string("this.clones = localClones = ").startNew(generic(types.BytecodeSupport_CloneReferenceList, this.asType())).end().end();
@@ -1242,6 +1191,39 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.string("stackTraceElement");
         b.end();
         b.end();
+        return ex;
+    }
+
+    private CodeExecutableElement createGetSource() {
+        ExecutableElement executable = ElementUtils.findOverride(ElementUtils.findMethod(types.BytecodeRootNode, "getSource"), model.templateType);
+        if (executable != null) {
+            return null;
+        }
+        CodeExecutableElement ex = GeneratorUtils.override(types.BytecodeRootNode, "getSource");
+        ex.getModifiers().remove(Modifier.DEFAULT);
+        ex.getModifiers().add(Modifier.FINAL);
+        ex.getAnnotationMirrors().add(new CodeAnnotationMirror(types.CompilerDirectives_TruffleBoundary));
+        CodeTreeBuilder b = ex.createBuilder();
+
+        b.declaration(arrayOf(type(int.class)), "info", "bytecode.sourceInfo");
+        b.startIf().string("info == null || info.length == 0").end().startBlock();
+        b.startReturn().string("null").end();
+        b.end();
+
+        b.startDeclaration(type(int.class), "lastEntry");
+        b.string("info.length - ").variable(sourceInfoTable.entryLengthVariable);
+        b.end();
+        b.startIf();
+        b.tree(sourceInfoTable.loadStartBci("info", "lastEntry")).string(" == 0 &&").startIndention().newLine();
+        b.tree(sourceInfoTable.loadEndBci("info", "lastEntry")).string(" == bytecode.bytecodes.length").end();
+        b.end().startBlock();
+        b.startDeclaration(type(int.class), "sourceIndex");
+        b.tree(sourceInfoTable.loadSource("info", "lastEntry"));
+        b.end();
+        b.startReturn().string("bytecode.sources.get(sourceIndex)").end();
+        b.end(); // if
+
+        b.startReturn().string("null").end();
         return ex;
     }
 
@@ -1367,7 +1349,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         return method;
     }
 
-    private void createFailInvalidTag(CodeTreeBuilder b, String tagLocal) {
+    void createFailInvalidTag(CodeTreeBuilder b, String tagLocal) {
         b.startThrow().startNew(type(IllegalArgumentException.class)).startCall("String.format").doubleQuote(
                         "Invalid tag specified. Tag '%s' not provided by language '" + ElementUtils.getQualifiedName(model.languageClass) + "'.").string(tagLocal, ".getName()").end().end().end();
     }
@@ -1412,7 +1394,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         method.addThrownType(type(IOException.class));
         addJavadoc(method,
                         """
-                                        Deserializes a byte sequence to bytecode nodes. The bytes must have been produced by a previous call to {@link #serialize}.").newLine()
+                                        Deserializes a byte sequence to bytecode nodes. The bytes must have been produced by a previous call to {@link #serialize}.
 
                                         @param language the language instance.
                                         @param config indicates whether to deserialize metadata (e.g., source information).
@@ -1532,6 +1514,11 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.end().startDoWhile().startCall("!BYTECODE_UPDATER", "compareAndSet").string("this").string("oldBytecode").string("newBytecode").end().end();
         b.newLine();
 
+        if (model.hasYieldOperation()) {
+            b.startAssert().string(configEncoder.compareHasYieldsBit("oldBytecode.configEncoding", "newBytecode.configEncoding")).string(" : ").doubleQuote(
+                            "has-yields bit must be preserved across reparsing and bytecode updates").end();
+        }
+
         if (model.isBytecodeUpdatable()) {
             b.startIf().string("bytecodes_ != null").end().startBlock();
             b.lineComment("Ensure new bytecode node is published before invalidating the old bytecode.");
@@ -1543,30 +1530,19 @@ public final class BytecodeRootNodeElement extends AbstractElement {
             b.end();
 
             if (model.hasYieldOperation()) {
-                if (model.enableInstructionTracing) {
-                    b.declaration(type(int.class), "oldConstantOffset", "oldBytecode.isInstructionTracingEnabled() ? 1 : 0");
-                    b.declaration(type(int.class), "newConstantOffset", "newBytecode.isInstructionTracingEnabled() ? 1 : 0");
-                }
-
                 // We need to patch the BytecodeNodes for continuations.
                 b.startFor().string("int i = 0; i < continuationsIndex; i = i + CONTINUATION_LENGTH").end().startBlock();
                 b.declaration(type(int.class), "constantPoolIndex", "continuations[i + CONTINUATION_OFFSET_CPI]");
                 b.declaration(type(int.class), "continuationBci", "continuations[i + CONTINUATION_OFFSET_BCI]");
 
                 if (model.enableInstructionTracing) {
-                    b.lineComment("The constant offset is 1 with instruction tracing enabled. See INSTRUCTION_TRACER_CONSTANT_INDEX.");
-                    b.lineComment("We need to align constant indices for the continuation root node updates.");
-                    b.declaration(type(int.class), "oldConstantPoolIndex", "constantPoolIndex - newConstantOffset + oldConstantOffset");
-                } else {
-                    b.declaration(type(int.class), "oldConstantPoolIndex", "constantPoolIndex");
+                    b.startAssert().string("oldBytecode.constants[continuations[i + CONTINUATION_OFFSET_OLD_CPI]] == newBytecode.constants[constantPoolIndex]").end();
                 }
 
                 b.startDeclaration(continuationRootNodeImpl.asType(), "continuationRootNode");
                 b.cast(continuationRootNodeImpl.asType());
-                b.string("oldBytecode.constants[oldConstantPoolIndex]");
+                b.string("newBytecode.constants[constantPoolIndex]");
                 b.end();
-
-                b.startAssert().string("oldBytecode.constants[oldConstantPoolIndex] == newBytecode.constants[constantPoolIndex]").end();
 
                 b.lineComment("locations may become null if they are no longer reachable.");
                 b.declaration(types.BytecodeLocation, "newLocation", "continuationBci == -1 ? null : newBytecode.getBytecodeLocation(continuationBci)");
@@ -1589,6 +1565,35 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.startStatement();
         b.string("cloneReferences.forEach((clone) -> ").startBlock();
 
+        if (model.hasYieldOperation()) {
+            b.declaration(arrayOf(type(Object.class)), "clonedConstants", "constants_");
+            b.startIf().string("bytecodes_ != null && continuationsIndex != 0").end().startBlock();
+            b.declaration(abstractBytecodeNode.asType(), "clonedBytecode", "clone.bytecode");
+            b.statement("clonedConstants = Arrays.copyOf(clonedConstants, clonedConstants.length)");
+            b.lineComment("Preserve clone-owned continuation roots when installing reparsed constants.");
+            b.startFor().string("int i = 0; i < continuationsIndex; i = i + CONTINUATION_LENGTH").end().startBlock();
+            b.declaration(type(int.class), "constantPoolIndex", "continuations[i + CONTINUATION_OFFSET_CPI]");
+            if (model.enableInstructionTracing) {
+                b.declaration(type(int.class), "oldConstantPoolIndex", "continuations[i + CONTINUATION_OFFSET_OLD_CPI]");
+                b.startDeclaration(continuationRootNodeImpl.asType(), "continuationRootNode");
+                b.cast(continuationRootNodeImpl.asType());
+                b.string("clonedBytecode.constants[oldConstantPoolIndex]");
+                b.end();
+            } else {
+                b.startDeclaration(continuationRootNodeImpl.asType(), "continuationRootNode");
+                b.cast(continuationRootNodeImpl.asType());
+                b.string("clonedBytecode.constants[constantPoolIndex]");
+                b.end();
+            }
+            b.startStatement().startCall("ACCESS.writeObject");
+            b.string("clonedConstants");
+            b.string("constantPoolIndex");
+            b.string("continuationRootNode");
+            b.end(2);
+            b.end();
+            b.end();
+        }
+
         b.startStatement();
 
         b.startCall("clone", "updateBytecode");
@@ -1597,7 +1602,8 @@ public final class BytecodeRootNodeElement extends AbstractElement {
                 case "bytecodes_":
                     b.startGroup();
                     b.string("bytecodes_ != null ? ");
-                    if (model.enableQuickening) {
+                    if (clonesNeedUnquickenedBytecode()) {
+                        // The bytecode was already published, so it may already be quickened.
                         b.startCall("unquickenBytecode");
                         b.variable(var);
                         b.end();
@@ -1614,8 +1620,15 @@ public final class BytecodeRootNodeElement extends AbstractElement {
                     b.string("tagRoot_.deepCopy() : null");
                     b.end();
                     break;
+                case "constants_":
+                    if (model.hasYieldOperation()) {
+                        b.string("clonedConstants");
+                    } else {
+                        b.variable(var);
+                    }
+                    break;
                 default:
-                    b.string(var.getSimpleName().toString());
+                    b.variable(var);
                     break;
             }
         }
@@ -1631,116 +1644,6 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.startReturn().string("newBytecode").end();
 
         return ex;
-    }
-
-    private CodeTypeElement createBytecodeConfigEncoderClass() {
-        CodeTreeBuilder b;
-        CodeTypeElement type = new CodeTypeElement(Set.of(PRIVATE, STATIC, FINAL), ElementKind.CLASS, null, "BytecodeConfigEncoderImpl");
-        type.setSuperClass(types.BytecodeConfigEncoder);
-
-        CodeExecutableElement constructor = type.add(new CodeExecutableElement(Set.of(PRIVATE), null, type.getSimpleName().toString()));
-        b = constructor.createBuilder();
-        b.startStatement().startSuperCall().staticReference(bytecodeRootNodesImpl.asType(), "VISIBLE_TOKEN").end().end();
-
-        type.add(createEncodeInstrumentation());
-        type.add(createDecode1());
-        type.add(createDecode2(type));
-
-        CodeExecutableElement encodeTag = GeneratorUtils.override(types.BytecodeConfigEncoder, "encodeTag", new String[]{"c"});
-        b = encodeTag.createBuilder();
-
-        if (model.getProvidedTags().isEmpty()) {
-            createFailInvalidTag(b, "c");
-        } else {
-            b.startReturn().string("((long) CLASS_TO_TAG_MASK.get(c)) << " + TAG_OFFSET).end().build();
-        }
-
-        type.add(encodeTag);
-
-        CodeVariableElement configEncoderVar = type.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type.asType(), "INSTANCE"));
-        configEncoderVar.createInitBuilder().startNew(type.asType()).end();
-
-        return type;
-    }
-
-    private CodeExecutableElement createDecode1() {
-        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, Modifier.STATIC), type(long.class), "decode");
-        ex.addParameter(new CodeVariableElement(types.BytecodeConfig, "config"));
-        CodeTreeBuilder b = ex.createBuilder();
-        b.startReturn();
-        b.startCall("decode").string("getEncoder(config)").string("getEncoding(config)").end();
-        b.end();
-        return ex;
-    }
-
-    @SuppressFBWarnings(value = "BSHIFT_WRONG_ADD_PRIORITY", justification = "the shift priority is expected. FindBugs false positive.")
-    private CodeExecutableElement createDecode2(CodeTypeElement type) {
-        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, Modifier.STATIC), type(long.class), "decode");
-        ex.addParameter(new CodeVariableElement(types.BytecodeConfigEncoder, "encoder"));
-        ex.addParameter(new CodeVariableElement(type(long.class), "encoding"));
-        CodeTreeBuilder b = ex.createBuilder();
-
-        b.startIf().string("encoder != null && encoder  != ").staticReference(type.asType(), "INSTANCE").end().startBlock();
-        b.tree(GeneratorUtils.createTransferToInterpreterAndInvalidate());
-        b.startThrow().startNew(type(IllegalArgumentException.class)).doubleQuote("Encoded config is not compatible with this bytecode node.").end().end();
-        b.end();
-
-        long mask = 1L;
-        if (model.getInstrumentationsCount() > MAX_INSTRUMENTATIONS) {
-            throw new AssertionError("Unsupported instrumentation size.");
-        }
-        if (model.getProvidedTags().size() > MAX_TAGS) {
-            throw new AssertionError("Unsupported instrumentation size.");
-        }
-
-        if (model.traceInstructionInstrumentationIndex != -1) {
-            mask |= 1L << (INSTRUMENTATION_OFFSET + model.traceInstructionInstrumentationIndex);
-        }
-
-        for (int i = 0; i < model.getInstrumentations().size(); i++) {
-            mask |= 1L << (INSTRUMENTATION_OFFSET + i);
-        }
-
-        for (int i = 0; i < model.getProvidedTags().size(); i++) {
-            mask |= 1L << (TAG_OFFSET + i);
-        }
-
-        b.startReturn().string("(encoding & 0x" + Long.toHexString(mask) + "L)").end();
-        return ex;
-    }
-
-    private CodeExecutableElement createEncodeInstrumentation() {
-        CodeExecutableElement encodeInstrumentation = GeneratorUtils.override(types.BytecodeConfigEncoder, "encodeInstrumentation", new String[]{"c"});
-        CodeTreeBuilder b = encodeInstrumentation.createBuilder();
-
-        if (model.hasInstrumentations()) {
-            b.declaration("long", "encoding", "0L");
-            boolean elseIf = b.startIf(false);
-            b.string("c == ").typeLiteral(types.InstructionTracer);
-            b.end().startBlock();
-            if (model.enableInstructionTracing) {
-                b.statement("encoding |= 0x" + Integer.toHexString(1 << model.traceInstructionInstrumentationIndex));
-            } else {
-                b.lineComment("Instruction tracing disabled");
-            }
-            b.end();
-            for (CustomOperationModel customOperation : model.getInstrumentations()) {
-                elseIf = b.startIf(elseIf);
-                b.string("c == ").typeLiteral(customOperation.operation.instruction.nodeType.asType());
-                b.end().startBlock();
-                b.statement("encoding |= 0x" + Integer.toHexString(1 << customOperation.operation.instrumentationIndex));
-                b.end();
-            }
-            b.startElseBlock();
-        }
-        b.startThrow().startNew(type(IllegalArgumentException.class)).startCall("String.format").doubleQuote(
-                        "Invalid instrumentation specified. Instrumentation '%s' does not exist or is not an instrumentation for '" + ElementUtils.getQualifiedName(model.templateType) + "'. " +
-                                        "Instrumentations can be specified using the @Instrumentation annotation.").string("c.getName()").end().end().end();
-        if (model.hasInstrumentations()) {
-            b.end(); // else
-            b.startReturn().string("encoding << 1").end();
-        }
-        return encodeInstrumentation;
     }
 
     private CodeExecutableElement createIsInstrumentable() {
@@ -1780,7 +1683,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
 
         b.declaration(types.BytecodeConfig_Builder, "b", "newConfigBuilder()");
         b.lineComment("Sources are always needed for instrumentation.");
-        b.statement("b.addSource()");
+        b.statement("b.addSourceContent()");
 
         b.startFor().type(type(Class.class)).string(" tag : materializedTags").end().startBlock();
         b.statement("b.addTag((Class<? extends Tag>) tag)");
@@ -1812,34 +1715,10 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         return ex;
     }
 
-    private CodeExecutableElement createEncodeTags() {
-        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, STATIC), type(int.class), "encodeTags");
-        ex.addParameter(new CodeVariableElement(arrayOf(type(Class.class)), "tags"));
-        ex.setVarArgs(true);
-        CodeTreeBuilder b = ex.createBuilder();
-        b.startIf().string("tags == null").end().startBlock();
-        b.statement("return 0");
-        b.end();
-
-        if (model.getProvidedTags().isEmpty()) {
-            b.startIf().string("tags.length != 0").end().startBlock();
-            createFailInvalidTag(b, "tags[0]");
-            b.end();
-            b.startReturn().string("0").end();
-        } else {
-            b.statement("int tagMask = 0");
-            b.startFor().string("Class<?> tag : tags").end().startBlock();
-            b.statement("tagMask |= CLASS_TO_TAG_MASK.get(tag)");
-            b.end();
-            b.startReturn().string("tagMask").end();
-        }
-
-        return ex;
-    }
-
-    boolean cloneUninitializedNeedsUnquickenedBytecode() {
-        // If the node supports BE/quickening, cloneUninitialized should unquicken the bytecode.
-        // Uncached nodes don't rewrite bytecode, so we only need to unquicken if cached.
+    /**
+     * If the node supports BE/quickening, clones should receive an unquickened copy of bytecode.
+     */
+    boolean clonesNeedUnquickenedBytecode() {
         return (model.usesBoxingElimination() || model.enableQuickening);
     }
 
@@ -2396,10 +2275,6 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         return String.format("safeCastShort(%s)", value);
     }
 
-    String localFrame() {
-        return model.hasYieldOperation() ? "localFrame" : "frame";
-    }
-
     // Helpers to generate common strings
     static CodeTree readInstruction(String bc, String bci) {
         CodeTreeBuilder b = CodeTreeBuilder.createBuilder();
@@ -2806,6 +2681,21 @@ public final class BytecodeRootNodeElement extends AbstractElement {
 
     static String clearFrame(String frame, String index) {
         return String.format("FRAMES.clear(%s, %s)", frame, index);
+    }
+
+    CodeTree hasContinuationFrame(String frameName) {
+        CodeTreeBuilder b = CodeTreeBuilder.createBuilder();
+        if (model.loadIllegalLocalStrategy == LoadIllegalLocalStrategy.DEFAULT_VALUE) {
+            b.startParantheses();
+        }
+        b.startCall(frameName, "isObject").string(BytecodeRootNodeElement.CONTINUATION_FRAME_INDEX).end();
+        if (model.loadIllegalLocalStrategy == LoadIllegalLocalStrategy.DEFAULT_VALUE) {
+            b.string(" && ");
+            b.startCall(frameName, "getObject").string(BytecodeRootNodeElement.CONTINUATION_FRAME_INDEX).end();
+            b.string(" != DEFAULT_LOCAL_VALUE");
+            b.end(); // parentheses
+        }
+        return b.build();
     }
 
     static String copyFrameSlot(String src, String dst) {

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016, 2025, Oracle and/or its affiliates.
+# Copyright (c) 2016, 2026, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -28,7 +28,6 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-from __future__ import print_function
 
 import abc
 import fnmatch
@@ -41,12 +40,11 @@ import mx_unittest
 import mx_subst
 import mx_util
 import os
+import sys
 
 import mx_sulong
 
 import mx_sulong_path_helpers as path_helpers
-
-import sys
 
 if sys.version_info[0] < 3:
     _unicode = unicode # pylint: disable=undefined-variable
@@ -75,7 +73,7 @@ def compileTestSuite(testsuiteproject, extra_build_args):
     mx.command_function('build')(defaultBuildArgs + extra_build_args)
 
 
-class SulongTestSuiteMixin(object, metaclass=abc.ABCMeta):
+class SulongTestSuiteMixin(metaclass=abc.ABCMeta):
 
     def getVariants(self):
         if not hasattr(self, '_variants'):
@@ -95,7 +93,7 @@ class SulongTestSuiteMixin(object, metaclass=abc.ABCMeta):
                     # TODO: [GR-41902] use mx.add_lib_suffix
                     result_file = mx_sulong._lib_suffix(v) if self.buildSharedObject else v + '.bc'
                     self.results.append(os.path.join(t, result_file))
-        return super(SulongTestSuiteMixin, self).getResults(replaceVar=replaceVar)
+        return super().getResults(replaceVar=replaceVar)
 
     def getTestDirExt(self):
         return ".dir"
@@ -126,27 +124,25 @@ def collectExcludes(path):
                 continue
             for f in files:
                 if f.endswith('.exclude'):
-                    for line in open(os.path.join(root, f)):
-                        yield line.strip()
-    # use `yield from` in python 3.3
-    for x in _collect(path, lambda p: p.startswith('os_arch')):
-        yield x
+                    with open(os.path.join(root, f), encoding='utf-8') as exclude_file:
+                        for line in exclude_file:
+                            yield line.strip()
+
+    yield from _collect(path, lambda p: p.startswith('os_arch'))
 
     os_arch_root = os.path.join(path, 'os_arch')
     if os.path.exists(os_arch_root):
         try:
             os_path = next(x for x in (os.path.join(os_arch_root, os_dir) for os_dir in [mx.get_os(), 'others']) if os.path.exists(x))
             os_arch_path = next(x for x in (os.path.join(os_path, arch_dir) for arch_dir in [mx.get_arch(), 'others']) if os.path.exists(x))
-            # use `yield from` in python 3.3
-            for x in _collect(os_arch_path):
-                yield x
+            yield from _collect(os_arch_path)
         except StopIteration:
             pass
 
 
-class ExternalTestSuiteMixin(object):  # pylint: disable=too-many-ancestors
+class ExternalTestSuiteMixin:  # pylint: disable=too-many-ancestors
     def __init__(self, *args, **kwargs):
-        super(ExternalTestSuiteMixin, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         if hasattr(self, 'testDir'):
             self.testDir = self.testDir.replace('/', os.sep)
         else:
@@ -198,7 +194,7 @@ class ExternalTestSuiteMixin(object):  # pylint: disable=too-many-ancestors
 
     def get_test_source(self, resolve=False):
         roots = [d.get_path(resolve=resolve) for d in self.buildDependencies if d.isPackedResourceLibrary()]
-        assert len(roots) == 1, "Roots: {}".format(", ".join(roots))
+        assert len(roots) == 1, f"Roots: {', '.join(roots)}"
         return roots[0]
 
     def getTests(self):
@@ -212,7 +208,7 @@ class ExternalTestSuiteBuildTask(mx.NativeBuildTask):
     def needsBuild(self, newestInput):
         try:
             self.subject._is_needs_rebuild_call = True
-            return super(ExternalTestSuiteBuildTask, self).needsBuild(newestInput)
+            return super().needsBuild(newestInput)
         finally:
             self.subject._is_needs_rebuild_call = False
 
@@ -228,7 +224,7 @@ class ExternalTestSuite(ExternalTestSuiteMixin, SulongTestSuiteMixin, mx.NativeP
         else:
             d_rel = os.path.join(subDir, name)
         d = os.path.join(suite.dir, d_rel.replace('/', os.sep))
-        super(ExternalTestSuite, self).__init__(suite, name, subDir, [], deps, workingSets, results, output, d, **args)
+        super().__init__(suite, name, subDir, [], deps, workingSets, results, output, d, **args)
         if bundledLLVMOnly and mx.get_env('CLANG_CC', None):
             self.ignore = "Environment variable 'CLANG_CC' is set but project specifies 'bundledLLVMOnly'"
         self.vpath = True
@@ -240,11 +236,11 @@ class ExternalTestSuite(ExternalTestSuiteMixin, SulongTestSuiteMixin, mx.NativeP
         return ExternalTestSuiteBuildTask(args, self)
 
     def _get_vpath(self):
-        env = super(ExternalTestSuite, self).getBuildEnv()
+        env = super().getBuildEnv()
         return env.get('VPATH', self.dir)
 
     def getBuildEnv(self, replaceVar=mx_subst.path_substitutions):
-        env = super(ExternalTestSuite, self).getBuildEnv(replaceVar=replaceVar)
+        env = super().getBuildEnv(replaceVar=replaceVar)
         roots = [d.get_path(resolve=True) for d in self.buildDependencies if d.isPackedResourceLibrary()]
         env['PROJECT'] = self.name
         env['VPATH'] = ':'.join(roots)
@@ -268,17 +264,17 @@ class ExternalTestSuite(ExternalTestSuiteMixin, SulongTestSuiteMixin, mx.NativeP
     def getTestFile(self):
         if not hasattr(self, '_testfile'):
             self._testfile = os.path.join(self.getOutput(), 'test.include')
-            with open(self._testfile, 'w') as f:
+            with open(self._testfile, 'w', encoding='utf-8') as f:
                 mx.logv("Writing test file: " + self._testfile)
                 # call getResults() ensure self.results is populated
                 _ = self.getResults()
-                f.write("\n".join(("default: " + r for r in self.results)))
+                f.write("\n".join("default: " + r for r in self.results))
         return self._testfile
 
 
 class BootstrapToolchainLauncherProject(mx.Project):  # pylint: disable=too-many-ancestors
     def __init__(self, suite, name, deps, workingSets, theLicense, **kwArgs):
-        super(BootstrapToolchainLauncherProject, self).__init__(suite, name, srcDirs=[], deps=deps, workingSets=workingSets, d=suite.dir, theLicense=theLicense, **kwArgs)
+        super().__init__(suite, name, srcDirs=[], deps=deps, workingSets=workingSets, d=suite.dir, theLicense=theLicense, **kwArgs)
         self.buildDependencies += ['mx:GCC_NINJA_TOOLCHAIN']
 
     def launchers(self):
@@ -319,7 +315,7 @@ class BootstrapToolchainLauncherProject(mx.Project):  # pylint: disable=too-many
 
 
 def _quote_windows(arg):
-    return '"{}"'.format(arg)
+    return f'"{arg}"'
 
 
 def _ninja_escape_string(val):
@@ -333,14 +329,14 @@ class BootstrapToolchainLauncherBuildTask(mx.BuildTask):
         return mx.TimeStampFile.newest([result for result, _, _ in self.subject.launchers()])
 
     def needsBuild(self, newestInput):
-        sup = super(BootstrapToolchainLauncherBuildTask, self).needsBuild(newestInput)
+        sup = super().needsBuild(newestInput)
         if sup[0]:
             return sup
 
         for result, tool, exe in self.subject.launchers():
             if not os.path.exists(result):
                 return True, result + ' does not exist'
-            with open(result, "r") as f:
+            with open(result, encoding='utf-8') as f:
                 on_disk = f.read()
             if on_disk != self.contents(tool, exe):
                 return True, 'command line changed for ' + os.path.basename(result)
@@ -350,10 +346,10 @@ class BootstrapToolchainLauncherBuildTask(mx.BuildTask):
     def build(self):
         mx_util.ensure_dir_exists(self.subject.get_output_root())
         for result, tool, exe in self.subject.launchers():
-            with open(result, "w") as f:
+            with open(result, "w", encoding='utf-8') as f:
                 f.write(self.contents(tool, exe))
             os.chmod(result, 0o755)
-        with open(self.subject.ninja_toolchain_path(), "w") as f:
+        with open(self.subject.ninja_toolchain_path(), "w", encoding='utf-8') as f:
             f.write(self.ninja_toolchain_contents())
 
     def clean(self, forBuild=False):
@@ -367,7 +363,7 @@ class BootstrapToolchainLauncherBuildTask(mx.BuildTask):
         # build command line
         java = mx.get_jdk().java
         classpath_deps = [dep for dep in self.subject.buildDependencies if isinstance(dep, mx.ClasspathDependency)]
-        extra_props = ['-Dorg.graalvm.launcher.executablename="{}"'.format(exe)]
+        extra_props = [f'-Dorg.graalvm.launcher.executablename="{exe}"']
         main_class = self.subject.suite.toolchain._tool_to_main(tool)
         # add jvm args from dependencies
         jvm_args = [_quote(arg) for arg in mx.get_runtime_jvm_args(classpath_deps)]
@@ -385,16 +381,17 @@ class BootstrapToolchainLauncherBuildTask(mx.BuildTask):
     def ninja_toolchain_contents(self):
         gcc_ninja_toolchain = mx.distribution('mx:GCC_NINJA_TOOLCHAIN')
         assert isinstance(gcc_ninja_toolchain, mx.AbstractDistribution) and gcc_ninja_toolchain.get_output()
-        return """# Ninja rules for the LLVM toolchain
+        gcc_toolchain = _ninja_escape_string(os.path.join(gcc_ninja_toolchain.get_output(), 'toolchain.ninja'))
+        cc = _ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('CC', allow_bootstrap=True))
+        cxx = _ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('CXX', allow_bootstrap=True))
+        ar = _ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('AR', allow_bootstrap=True))
+        return f"""# Ninja rules for the LLVM toolchain
 include {gcc_toolchain}
-CC = {CC}
-CXX = {CXX}
-AR = {AR}
+CC = {cc}
+CXX = {cxx}
+AR = {ar}
 
-""".format(gcc_toolchain=_ninja_escape_string(os.path.join(gcc_ninja_toolchain.get_output(), 'toolchain.ninja')),
-           CC=_ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('CC', allow_bootstrap=True)),
-           CXX=_ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('CXX', allow_bootstrap=True)),
-           AR=_ninja_escape_string(self.subject.suite.toolchain.get_toolchain_tool('AR', allow_bootstrap=True)))
+"""
 
 
 class AbstractSulongNativeProject(mx.NativeProject):  # pylint: disable=too-many-ancestors
@@ -411,7 +408,7 @@ class AbstractSulongNativeProject(mx.NativeProject):  # pylint: disable=too-many
         if not srcDir:
             mx.abort("Exactly one 'sourceDir' is required")
         srcDir = mx_subst.path_substitutions.substitute(srcDir)
-        super(AbstractSulongNativeProject, self).__init__(suite, name, subDir, [srcDir], deps, workingSets, results, output, d, **args)
+        super().__init__(suite, name, subDir, [srcDir], deps, workingSets, results, output, d, **args)
 
     def isJDKDependent(self):
         return False
@@ -421,18 +418,18 @@ class VariantCMakeNinjaBuildTask(mx_cmake.CMakeNinjaBuildTask):
     def __init__(self, args, project, target_arch=mx.get_arch(), ninja_targets=None, variant=None):
         self.variant = variant
         # abuse target_arch to inject variant
-        super(VariantCMakeNinjaBuildTask, self).__init__(args, project, target_arch=os.path.join("build", variant), ninja_targets=ninja_targets)
+        super().__init__(args, project, target_arch=os.path.join("build", variant), ninja_targets=ninja_targets)
         # set correct target_arch
         self.target_arch = target_arch
 
     @property
     def name(self):
-        return '{} ({})'.format(self.subject.name, self.variant)
+        return f'{self.subject.name} ({self.variant})'
 
     def build(self):
         try:
             self.subject.current_variant = self.variant
-            super(VariantCMakeNinjaBuildTask, self).build()
+            super().build()
         finally:
             self.subject.current_variant = None
 
@@ -507,7 +504,7 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
         self.buildSharedObject = buildSharedObject
         self.current_variant = None
         self.cmake_config_variant = cmakeConfigVariant or {}
-        super(SulongCMakeTestSuite, self).__init__(suite, name, deps, workingSets, subDir,
+        super().__init__(suite, name, deps, workingSets, subDir,
                                                    ninja_install_targets=ninja_install_targets or ["install"], max_jobs=max_jobs, **args)
         self._install_dir = os.path.join(self.out_dir, "result")
         # self._ninja_targets = self.getResults()
@@ -522,14 +519,14 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
     def getTestFile(self):
         if not hasattr(self, '_testfile'):
             self._testfile = os.path.join(self.out_dir, 'tests.cache')
-            with mx_util.SafeFileCreation(self._testfile) as sfc, open(sfc.tmpPath, "w") as f:
+            with mx_util.SafeFileCreation(self._testfile) as sfc, open(sfc.tmpPath, "w", encoding='utf-8') as f:
                 mx.logv("Writing test file: " + self._testfile)
                 tests = ';'.join([x.replace('\\', '\\\\') for x in self.getTests()])
-                f.write('set(SULONG_TESTS {} CACHE FILEPATH "test files")'.format(tests))
+                f.write(f'set(SULONG_TESTS {tests} CACHE FILEPATH "test files")')
         return self._testfile
 
     def _default_cmake_vars(self):
-        _config = dict()
+        _config = {}
         _config['CMAKE_INSTALL_PREFIX'] = self._install_dir
         _config['SULONG_PROJECT_NAME'] = self.name
         _config['SULONG_ENABLED_LANGUAGES'] = ';'.join(self._get_languages())
@@ -549,7 +546,7 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
             self._init_cmake = True
             self._cmake_config_raw.update({k: v for k, v in self._default_cmake_vars().items()
                                            if k not in self._cmake_config_raw})
-        return ['-C', self.getTestFile()] + super(SulongCMakeTestSuite, self).cmake_config()
+        return ['-C', self.getTestFile()] + super().cmake_config()
 
     def _get_languages(self):
         lang_ext_map = {
@@ -565,20 +562,19 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
                     return lang
             self.abort('Cannot determine language of file ' + test)
 
-        return set(_get_language(test) for test in self.getTests())
+        return {_get_language(test) for test in self.getTests()}
 
     def getBuildTask(self, args):
         def _variant():
             if self.buildRef:
                 yield 'ref.out'
-            for variant in self.getVariants():
-                yield variant
+            yield from self.getVariants()
 
         class MultiVariantBuildTask(mx.Buildable, mx.TaskSequence):
             subtasks = [VariantCMakeNinjaBuildTask(args, self, target_arch=mx.get_arch(), ninja_targets=self._ninja_targets, variant=variant) for variant in _variant()]
 
             def execute(self):
-                super(MultiVariantBuildTask, self).execute()
+                super().execute()
                 self.built = any(t.built for t in self.subtasks)
 
             def newestOutput(self):
@@ -601,7 +597,7 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
         except StopIteration:
             # no variant specific config
             pass
-        super(SulongCMakeTestSuite, self).generate_manifest(output_dir, filename, extra_cmake_config=_extra_cmake_config)
+        super().generate_manifest(output_dir, filename, extra_cmake_config=_extra_cmake_config)
 
     def _get_vpath(self):
         return self.source_dirs()[0]
@@ -623,7 +619,7 @@ class SulongCMakeTestSuite(SulongTestSuiteMixin, mx_cmake.CMakeNinjaProject):  #
 class ExternalCMakeTestSuite(ExternalTestSuiteMixin, SulongCMakeTestSuite):  # pylint: disable=too-many-ancestors
 
     def original_source_dirs(self):
-        return super(ExternalCMakeTestSuite, self).source_dirs()
+        return super().source_dirs()
 
     def source_dirs(self):
         if hasattr(self, '_source_dirs'):
@@ -631,7 +627,7 @@ class ExternalCMakeTestSuite(ExternalTestSuiteMixin, SulongCMakeTestSuite):  # p
         return self.original_source_dirs()
 
     def _default_cmake_vars(self):
-        cmake_vars = super(ExternalCMakeTestSuite, self)._default_cmake_vars()
+        cmake_vars = super()._default_cmake_vars()
         cmake_vars['SULONG_TEST_SOURCE_DIR'] = 'src'
         return cmake_vars
 
@@ -643,7 +639,7 @@ class ExternalCMakeTestSuite(ExternalTestSuiteMixin, SulongCMakeTestSuite):  # p
                  # to play safe, we are ignoring all resources from mx since they are very likely
                  # not external benchmark suites
                  and d.suite is not mx._mx_suite]
-        assert len(roots) == 1, "Roots: {}".format(", ".join(roots))
+        assert len(roots) == 1, f"Roots: {', '.join(roots)}"
         return roots[0]
 
     def get_project_dir(self):
@@ -663,12 +659,12 @@ class ExternalCMakeTestSuite(ExternalTestSuiteMixin, SulongCMakeTestSuite):  # p
 
     def generate_manifest(self, output_dir, filename, extra_cmake_config=None):
         self._source_dirs = [self.get_project_dir()]
-        return super(ExternalCMakeTestSuite, self).generate_manifest(output_dir, filename, extra_cmake_config)
+        return super().generate_manifest(output_dir, filename, extra_cmake_config)
 
 
 class DocumentationBuildTask(mx.AbstractNativeBuildTask):
     def __str__(self):
-        return 'Building {} with Documentation Build Task'.format(self.subject.name)
+        return f'Building {self.subject.name} with Documentation Build Task'
 
     def build(self):
         pass
@@ -682,7 +678,7 @@ class DocumentationBuildTask(mx.AbstractNativeBuildTask):
 
 class DocumentationProject(AbstractSulongNativeProject):  # pylint: disable=too-many-ancestors
     def __init__(self, suite, name, deps, workingSets, subDir, results=None, output=None, **args):
-        super(DocumentationProject, self).__init__(suite, name, deps, workingSets, subDir, results, output, **args)
+        super().__init__(suite, name, deps, workingSets, subDir, results, output, **args)
         self.dir = self.source_dirs()[0]
 
     def getBuildTask(self, args):
@@ -691,7 +687,7 @@ class DocumentationProject(AbstractSulongNativeProject):  # pylint: disable=too-
 
 class HeaderBuildTask(mx.NativeBuildTask):
     def __str__(self):
-        return 'Building {} with Header Build Task'.format(self.subject.name)
+        return f'Building {self.subject.name} with Header Build Task'
 
     def build(self):
         self._newestOutput = None
@@ -705,7 +701,7 @@ class HeaderBuildTask(mx.NativeBuildTask):
 
 class HeaderProject(AbstractSulongNativeProject):  # pylint: disable=too-many-ancestors
     def __init__(self, suite, name, deps, workingSets, subDir, results=None, output=None, **args):
-        super(HeaderProject, self).__init__(suite, name, deps, workingSets, subDir, results, output, **args)
+        super().__init__(suite, name, deps, workingSets, subDir, results, output, **args)
         self.dir = self.source_dirs()[0]
 
     def getBuildTask(self, args):
@@ -720,4 +716,4 @@ class CopiedNativeProject(mx_native.DefaultNativeProject):
         srcFrom = mx.project(kwargs["srcFrom"])
         srcDirs = []
         kwargs["deliverable"] = srcFrom.deliverable
-        super(CopiedNativeProject, self).__init__(suite, name, subDir, srcDirs, deps, workingSets, srcFrom.dir, "shared_lib", **kwargs)
+        super().__init__(suite, name, subDir, srcDirs, deps, workingSets, srcFrom.dir, "shared_lib", **kwargs)

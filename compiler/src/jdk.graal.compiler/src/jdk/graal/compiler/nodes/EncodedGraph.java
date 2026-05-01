@@ -30,6 +30,7 @@ import java.util.Objects;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
+import jdk.graal.compiler.util.ObjectCopier;
 import jdk.vm.ci.meta.Assumptions;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -93,7 +94,19 @@ public class EncodedGraph {
      * The "table of contents" of the encoded graph, i.e., the mapping from orderId numbers to the
      * offset in the encoded byte[] array. Used as a cache during decoding.
      */
+    @ObjectCopier.Transformed(transformer = NodeStartOffsetsTransformer.class) //
     protected int[] nodeStartOffsets;
+
+    public static final class NodeStartOffsetsTransformer implements ObjectCopier.Transformer {
+        @Override
+        public Object encodeValue(ObjectCopier.Encoder encoder, Object receiver, Object value) {
+            /*
+             * The nodeStartOffsets is only used as a cache for decoding, so it is not copied to
+             * ensure not having inconsistent caching information in the new EncodedGraph.
+             */
+            return null;
+        }
+    }
 
     public EncodedGraph(byte[] encoding, int startOffset, Object[] objects, NodeClassMap nodeClasses, StructuredGraph sourceGraph) {
         this(encoding,
@@ -104,22 +117,6 @@ public class EncodedGraph {
                         sourceGraph.isRecordingInlinedMethods() ? sourceGraph.getMethods() : null,
                         sourceGraph.hasUnsafeAccess(),
                         sourceGraph.trackNodeSourcePosition());
-    }
-
-    public EncodedGraph(EncodedGraph original) {
-        this(original.encoding,
-                        original.startOffset,
-                        original.objects,
-                        original.nodeClasses,
-                        original.assumptions,
-                        original.inlinedMethods,
-                        original.hasUnsafeAccess,
-                        original.trackNodeSourcePosition);
-        /*
-         * The nodeStartOffsets is only used as a cache for decoding, so it is not copied to ensure
-         * not having inconsistent caching information in the new EncodedGraph.
-         */
-        this.nodeStartOffsets = null;
     }
 
     public EncodedGraph(byte[] encoding, int startOffset, Object[] objects, NodeClassMap nodeClasses, Assumptions assumptions, List<ResolvedJavaMethod> inlinedMethods,

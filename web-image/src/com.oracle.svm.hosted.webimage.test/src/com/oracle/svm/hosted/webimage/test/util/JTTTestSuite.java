@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,17 +29,18 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 import java.util.zip.Deflater;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -57,6 +58,7 @@ import com.oracle.svm.hosted.webimage.options.WebImageOptions;
 import com.oracle.svm.shared.option.CommonOptionParser;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 import com.oracle.svm.shared.util.ClassUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 import jdk.graal.compiler.debug.DebugOptions;
 import jdk.graal.compiler.debug.GraalError;
@@ -67,7 +69,6 @@ import jdk.graal.compiler.test.AddExports;
 import jdk.vm.ci.common.JVMCIError;
 
 @AddExports({
-                "jdk.graal.compiler/jdk.graal.compiler.options",
                 "jdk.graal.compiler/jdk.graal.compiler.debug",
 })
 public abstract class JTTTestSuite {
@@ -288,6 +289,8 @@ public abstract class JTTTestSuite {
         hostedOptions.add(Map.entry(SubstrateOptions.GenerateDebugInfo, 2));
 
         List<String> opts = new ArrayList<>();
+        // Arguments that are filtered out by the driver and can't be passed using @argfile
+        List<String> vmArgs = new ArrayList<>();
 
         for (Map.Entry<OptionKey<?>, Object> entry : hostedOptions) {
             opts.add(oH(entry.getKey(), entry.getValue()));
@@ -296,8 +299,8 @@ public abstract class JTTTestSuite {
         opts.addAll(WebImageTestOptions.LAUNCHER_FLAGS);
 
         // Enables assertions in the driver
-        opts.add("--vm.ea");
-        opts.add("--vm.esa");
+        vmArgs.add("--vm.ea");
+        vmArgs.add("--vm.esa");
 
         // Enables assertions in the JVM running the builder
         opts.add("-J-ea");
@@ -313,21 +316,42 @@ public abstract class JTTTestSuite {
 
         opts.addAll(WebImageTestOptions.ADDITIONAL_OPTIONS);
 
-        runWebImage(opts.toArray(new String[0]));
+        runWebImage(opts, vmArgs);
     }
 
-    private static void runWebImage(String[] args) {
-        List<String> cmd = new ArrayList<>(args.length + 1);
-        cmd.add(WebImageTestOptions.getLauncher());
-        cmd.addAll(Arrays.asList(args));
+    private static void runWebImage(List<String> args, List<String> vmArgs) {
+        String launcher = WebImageTestOptions.getLauncher();
+        System.out.printf("Running %s with %s%n", launcher, Stream.concat(vmArgs.stream(), args.stream()).toList());
 
-        System.out.println(cmd);
+        Path argFile = writeArgFile(args);
+        List<String> cmd = new ArrayList<>(vmArgs.size() + 2);
+        cmd.add(launcher);
+        cmd.addAll(vmArgs);
+        cmd.add("@" + argFile);
 
         try {
             int exitCode = new ProcessBuilder(cmd).inheritIO().start().waitFor();
             Assert.assertEquals("Compiling the test image failed", 0, exitCode);
         } catch (IOException | InterruptedException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    private static Path writeArgFile(List<String> args) {
+        try {
+            Path argFile = Files.createTempFile(getTestDir(), "web-image-", ".args");
+            StringBuilder builder = new StringBuilder();
+            for (String arg : args) {
+                String quoted = SubstrateUtil.quoteShellArg(arg);
+                if (quoted.startsWith("'")) {
+                    quoted = quoted.replace("\\", "\\\\");
+                }
+                builder.append(quoted).append(System.lineSeparator());
+            }
+            Files.writeString(argFile, builder.toString(), StandardCharsets.UTF_8);
+            return argFile;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 

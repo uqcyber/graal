@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,18 +26,20 @@ package com.oracle.svm.hosted.code.amd64;
 
 import java.util.function.Consumer;
 
+import com.oracle.svm.core.graal.code.CGlobalDataDirectReference;
+import com.oracle.svm.core.graal.code.CGlobalDataIndirectReference;
+import com.oracle.svm.hosted.code.HostedCGlobalDataIndirectReferencePatcher;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.objectfile.ObjectFile.RelocationKind;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.graal.code.CGlobalDataReference;
 import com.oracle.svm.core.graal.code.PatchConsumerFactory;
 import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.meta.SubstrateMethodPointerConstant;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.hosted.code.HostedImageHeapConstantPatch;
 import com.oracle.svm.hosted.code.HostedPatcher;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
@@ -76,10 +78,17 @@ class AMD64HostedPatcherFeature implements InternalFeature {
                 public void accept(CodeAnnotation annotation) {
                     if (annotation instanceof OperandDataAnnotation) {
                         compilationResult.addAnnotation(new AMD64HostedPatcher((OperandDataAnnotation) annotation));
-
-                    } else if (annotation instanceof AddressDisplacementAnnotation) {
-                        AddressDisplacementAnnotation dispAnnotation = (AddressDisplacementAnnotation) annotation;
-                        compilationResult.addAnnotation(new HostedImageHeapConstantPatch(dispAnnotation.operandPosition, (JavaConstant) dispAnnotation.annotation));
+                    } else if (annotation instanceof AddressDisplacementAnnotation dispAnnotation) {
+                        CompilationResult.CodeAnnotation patch;
+                        switch (dispAnnotation.annotation) {
+                            case CGlobalDataIndirectReference addressAnnotation -> {
+                                compilationResult.recordDataPatch(dispAnnotation.operandPosition, addressAnnotation);
+                                patch = new HostedCGlobalDataIndirectReferencePatcher(dispAnnotation.operandPosition, addressAnnotation);
+                            }
+                            case JavaConstant javaConstant -> patch = new HostedImageHeapConstantPatch(dispAnnotation.operandPosition, javaConstant);
+                            default -> throw new IllegalStateException("Unexpected value: " + dispAnnotation.annotation);
+                        }
+                        compilationResult.addAnnotation(patch);
                     }
                 }
             };
@@ -122,7 +131,7 @@ class AMD64HostedPatcher extends CompilationResult.CodeAnnotation implements Hos
          * method. We add the method start to get the section-relative offset.
          */
         long siteOffset = compStart + annotation.operandPosition;
-        if (ref instanceof DataSectionReference || ref instanceof CGlobalDataReference) {
+        if (ref instanceof DataSectionReference || ref instanceof CGlobalDataDirectReference) {
             /*
              * Do we have an addend? Yes; it's constStart. BUT x86/x86-64 PC-relative references are
              * relative to the *next* instruction. So, if the next instruction starts n bytes from

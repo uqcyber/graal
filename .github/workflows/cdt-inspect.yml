@@ -51,6 +51,9 @@ env:
   MX_PATH: ${{ github.workspace }}/mx
   SE_SKIP_DRIVER_IN_PATH: "true"
 
+permissions:
+  contents: read
+
 jobs:
   build:
 

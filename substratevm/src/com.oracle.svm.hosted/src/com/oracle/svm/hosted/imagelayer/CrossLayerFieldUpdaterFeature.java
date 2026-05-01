@@ -35,13 +35,13 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ToIntFunction;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.meta.AnalysisField;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.image.ImageHeapLayoutInfo;
@@ -201,7 +201,7 @@ public class CrossLayerFieldUpdaterFeature implements InternalFeature {
      */
     int computeUpdatePatchesLength() {
         assert sealed;
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
         VMError.guarantee(updatePatchesLength == INVALID && updatePatchesHeaderSize == INVALID, "called multiple times");
 
         /*
@@ -294,7 +294,7 @@ public class CrossLayerFieldUpdaterFeature implements InternalFeature {
      * array size as a long and the header size as an int value.
      */
     private void generateUpdatePatchArray(NativeImageHeap heap) {
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
         int shift = ImageSingletons.lookup(CompressEncoding.class).getShift();
         int heapBeginOffset = Heap.getHeap().getImageHeapOffsetInAddressSpace();
 

@@ -90,6 +90,10 @@ public class VectorAPIMaskReductionCoercedNode extends VectorAPISinkNode impleme
         return new VectorAPIMaskReductionCoercedNode(macroParams, op, null);
     }
 
+    public boolean isFirstTrueOp() {
+        return op == Op.FIRST_TRUE;
+    }
+
     @Override
     public Iterable<ValueNode> vectorInputs() {
         return List.of(inputMask());

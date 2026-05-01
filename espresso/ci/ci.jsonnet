@@ -8,7 +8,7 @@
   nativeimage_guard_includes: [],
   vm_guard_includes: [],
 
-  local espresso_compiler_stub_gate = common.eclipse + common.jdt + common.predicates(true, true, false) +
+  local espresso_compiler_stub_gate = common.jdt + common.predicates(true, true, false) +
    common.espresso_gate(allow_warnings=false, tags='style,fullbuild', timelimit='35:00', name='gate-espresso-compiler-stub-style-jdkLatest-linux-amd64', imports='/substratevm', mx_args=['--native-images=false']) + {
     setup+: [
       ['cd', "../espresso-compiler-stub"],
@@ -20,7 +20,7 @@
     },
   },
 
-  local espresso_shared_gate = common.eclipse + common.jdt + common.predicates(false, false, false, false) +
+  local espresso_shared_gate = common.jdt + common.predicates(false, false, false, false) +
    common.espresso_gate(allow_warnings=false, tags='style,fullbuild', timelimit='35:00', name='gate-espresso-shared-style-jdkLatest-linux-amd64') + {
     setup+: [
       ['cd', "../espresso-shared"],

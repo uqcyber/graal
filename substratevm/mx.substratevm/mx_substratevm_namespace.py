@@ -110,11 +110,11 @@ def add_namespace_to_file(file, add_cpp_guard, namespaceName):
     namespaceBegin = f"\nnamespace {namespaceName} {{\n\n"
     namespaceEnd = f"\n}} // namespace {namespaceName}\n\n"
 
-    with open(file, 'r') as f:
+    with open(file, encoding='utf-8') as f:
         lines = f.readlines()
         insertion_indices = calc_insert_indices(lines)
 
-    with open(file, 'w') as sf:
+    with open(file, 'w', encoding='utf-8') as sf:
         i = 0
         for (start, end) in insertion_indices:
             print(f"  start {start}, end {end}")
@@ -240,40 +240,39 @@ def calc_insert_indices(lines):
                     indices.append((idx_namespace_begin, idx_namespace_end))
                     namespace_open = False
 
+        # Namespace is not open
+        elif is_empty(line) or is_line_comment(line):
+            pass
+        elif is_preprocessor_directive(line):
+
+            if is_if_statement(line):
+                cur_n_open_ifs += 1
+
+            elif is_endif_statement(line):
+                cur_n_open_ifs -= 1
+                assert cur_n_open_ifs >= 0
+
+            strippedLine = line.strip()
+            while strippedLine.endswith("\\"):
+                # Preprocessor statement continues in the next line.
+                i += 1
+                strippedLine = lines[i].strip()
+
         else:
-            # Namespace is not open
-            if is_empty(line) or is_line_comment(line):
-                pass
-            elif is_preprocessor_directive(line):
 
-                if is_if_statement(line):
-                    cur_n_open_ifs += 1
+            if is_extern(line) and cur_n_open_ifs > 0:
+                # Extern is called inside an if, check if lines before and after are matching #if #endif
+                j = 0
+                while is_if_statement(lines[i - j - 1]) and is_endif_statement(lines[i + j + 1]):
+                    j += 1
 
-                elif is_endif_statement(line):
-                    cur_n_open_ifs -= 1
-                    assert cur_n_open_ifs >= 0
-
-                strippedLine = line.strip()
-                while strippedLine.endswith("\\"):
-                    # Preprocessor statement continues in the next line.
-                    i += 1
-                    strippedLine = lines[i].strip()
-
+                idx_namespace_begin = i - j
+                namespace_n_open_ifs = cur_n_open_ifs - j
             else:
+                idx_namespace_begin = i
+                namespace_n_open_ifs = cur_n_open_ifs
 
-                if is_extern(line) and cur_n_open_ifs > 0:
-                    # Extern is called inside an if, check if lines before and after are matching #if #endif
-                    j = 0
-                    while is_if_statement(lines[i - j - 1]) and is_endif_statement(lines[i + j + 1]):
-                        j += 1
-
-                    idx_namespace_begin = i - j
-                    namespace_n_open_ifs = cur_n_open_ifs - j
-                else:
-                    idx_namespace_begin = i
-                    namespace_n_open_ifs = cur_n_open_ifs
-
-                namespace_open = True
+            namespace_open = True
 
         i += 1
 
@@ -388,7 +387,7 @@ def remove_namespace(svmRootDirectory, namespaceName):
 
 
 def remove_namespace_from_file(file, add_cpp_guard, namespaceName):
-    with open(file, 'r') as f:
+    with open(file, encoding='utf-8') as f:
         lines = f.readlines()
 
     namespace_open = False
@@ -443,7 +442,7 @@ def remove_namespace_from_file(file, add_cpp_guard, namespaceName):
             lines[i] = lines[i][:match.start()] + lines[i][match.start() + len(namespaceName):]
             match = pattern.search(lines[i])
 
-    with open(file, 'w') as sf:
+    with open(file, 'w', encoding='utf-8') as sf:
         for line in lines:
             sf.write(line)
 

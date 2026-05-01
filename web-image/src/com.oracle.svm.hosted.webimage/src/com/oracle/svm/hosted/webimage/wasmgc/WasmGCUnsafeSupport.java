@@ -35,7 +35,7 @@ import com.oracle.graal.pointsto.ObjectScanner;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.StaticFieldsSupport;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.shared.option.HostedOptionKey;
@@ -44,6 +44,10 @@ import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.webimage.wasm.debug.WasmDebug;
 import com.oracle.svm.hosted.webimage.wasm.nodes.WasmTrapNode;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.webimage.platform.WebImageWasmGCPlatform;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -113,6 +117,7 @@ public class WasmGCUnsafeSupport {
 
 @AutomaticallyRegisteredFeature
 @Platforms(WebImageWasmGCPlatform.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 class WasmGCUnsafeFeature implements InternalFeature {
 
     @Override

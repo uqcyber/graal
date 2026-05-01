@@ -31,11 +31,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
-import com.oracle.svm.core.c.CGlobalDataImpl;
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.guest.staging.c.CGlobalDataImpl;
 import com.oracle.svm.hosted.imagelayer.CodeLocation;
 import com.oracle.svm.hosted.imagelayer.SharedLayerSnapshotCapnProtoSchemaHolder;
+import com.oracle.svm.shared.util.VMError;
 
 /**
  * Tracks CGlobals installed in the initial layer. This information is used to ensure CGlobals refer

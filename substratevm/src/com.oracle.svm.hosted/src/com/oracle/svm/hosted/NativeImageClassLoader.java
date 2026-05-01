@@ -76,7 +76,7 @@ import jdk.internal.module.Resources;
  * in {@code jdk.internal.loader.Loader} and {@code URLClassLoader}. More documentation is available
  * in the original classes.
  */
-public final class NativeImageClassLoader extends SecureClassLoader {
+final class NativeImageClassLoader extends SecureClassLoader {
 
     static {
         ClassLoader.registerAsParallelCapable();

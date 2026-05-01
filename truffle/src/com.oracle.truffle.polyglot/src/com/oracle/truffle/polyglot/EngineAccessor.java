@@ -72,11 +72,14 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
+import java.util.stream.Collectors;
 
 import com.oracle.truffle.api.interop.HeapIsolationException;
 import org.graalvm.collections.Pair;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.options.OptionKey;
+import org.graalvm.options.OptionMap;
+import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionValues;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.SandboxPolicy;
@@ -133,6 +136,7 @@ import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.polyglot.FileSystems.ResetablePath;
 import com.oracle.truffle.polyglot.PolyglotContextConfig.FileSystemConfig;
 import com.oracle.truffle.polyglot.PolyglotEngineImpl.FinalizationResult;
+import com.oracle.truffle.polyglot.PolyglotEngineImpl.LogConfig;
 import com.oracle.truffle.polyglot.PolyglotImpl.EmbedderFileSystemContext;
 import com.oracle.truffle.polyglot.PolyglotImpl.VMObject;
 import com.oracle.truffle.polyglot.PolyglotLocals.InstrumentContextLocal;
@@ -161,6 +165,8 @@ final class EngineAccessor extends Accessor {
     static final LanguageProviderSupport LANGUAGE_PROVIDER = ACCESSOR.languageProviderSupport();
     static final InstrumentProviderSupport INSTRUMENT_PROVIDER = ACCESSOR.instrumentProviderSupport();
     static final ExceptionSupport EXCEPTION = ACCESSOR.exceptionSupport();
+    static final PolyglotIsolateSupport ISOLATE = ACCESSOR.polyglotIsolateSupport();
+    static final SandboxSupport SANDBOX = ACCESSOR.sandboxSupport();
 
     private static List<AbstractClassLoaderSupplier> locatorLoaders() {
         if (ImageInfo.inImageRuntimeCode()) {
@@ -1386,16 +1392,8 @@ final class EngineAccessor extends Accessor {
         }
 
         @Override
-        public boolean isInternal(Object engineObject, FileSystem fs) {
-            AbstractPolyglotImpl polyglot;
-            if (engineObject instanceof VMObject vmObject) {
-                polyglot = vmObject.getImpl();
-            } else if (engineObject instanceof EmbedderFileSystemContext embedderContext) {
-                polyglot = embedderContext.getImpl();
-            } else {
-                throw new AssertionError("Unsupported engine object " + engineObject);
-            }
-            return polyglot.isInternalFileSystem(fs);
+        public boolean isInternal(FileSystem fs) {
+            return FileSystems.isInternalDelegatingToHost(fs);
         }
 
         @Override
@@ -1662,7 +1660,17 @@ final class EngineAccessor extends Accessor {
         @Override
         public boolean hasDefaultProcessHandler(Object polyglotLanguageContext) {
             PolyglotLanguageContext context = (PolyglotLanguageContext) polyglotLanguageContext;
-            return context.getImpl().getRootImpl().isDefaultProcessHandler(context.context.config.processHandler);
+            if (EngineAccessor.ISOLATE.isIsolateGuest()) {
+                // In polyglot isolate ask the host
+                return EngineAccessor.ISOLATE.isDefaultProcessHandler(context.context.config.processHandler);
+            } else {
+                return ProcessHandlers.isDefault(context.context.config.processHandler);
+            }
+        }
+
+        @Override
+        public boolean isDefaultProcessHandler(ProcessHandler handler) {
+            return ProcessHandlers.isDefault(handler);
         }
 
         @Override
@@ -1673,14 +1681,6 @@ final class EngineAccessor extends Accessor {
         @Override
         public boolean isCreateProcessSupported() {
             return PolyglotEngineImpl.ALLOW_CREATE_PROCESS;
-        }
-
-        @Override
-        public String getUnparsedOptionValue(OptionValues optionValues, OptionKey<?> optionKey) {
-            if (!(optionValues instanceof OptionValuesImpl)) {
-                throw new IllegalArgumentException(String.format("Only %s is supported.", OptionValuesImpl.class.getName()));
-            }
-            return ((OptionValuesImpl) optionValues).getUnparsedOptionValue(optionKey);
         }
 
         @Override
@@ -2154,12 +2154,7 @@ final class EngineAccessor extends Accessor {
 
         @Override
         public AutoCloseable createPolyglotThreadScope() {
-            AbstractPolyglotImpl impl = PolyglotImpl.findIsolatePolyglot();
-            if (impl != null) {
-                return impl.createThreadScope();
-            } else {
-                return null;
-            }
+            return PolyglotImpl.findInstance().createThreadScope();
         }
 
         @Override
@@ -2288,16 +2283,6 @@ final class EngineAccessor extends Accessor {
         }
 
         @Override
-        public void setIsolatePolyglot(AbstractPolyglotImpl instance) {
-            PolyglotImpl.setIsolatePolyglot(instance);
-        }
-
-        @Override
-        public Object getEngineData(Object polyglotEngine) {
-            return ((PolyglotEngineImpl) polyglotEngine).runtimeData;
-        }
-
-        @Override
         public long getEngineId(Object polyglotEngine) {
             return ((PolyglotEngineImpl) polyglotEngine).engineId;
         }
@@ -2305,6 +2290,11 @@ final class EngineAccessor extends Accessor {
         @Override
         public ModulesAccessor getModulesAccessor() {
             return JDKSupport.getModulesAccessor();
+        }
+
+        @Override
+        public String getModuleAccessorInitializationError() {
+            return JDKSupport.getInitializationErrorMessage();
         }
 
         @Override
@@ -2406,14 +2396,93 @@ final class EngineAccessor extends Accessor {
         }
 
         @Override
-        public <T extends Throwable> T updateHostException(Throwable forException, T hostException) {
-            return PolyglotImpl.findInstance().getRootImpl().mergeHostStackTrace(forException, hostException);
-        }
-
-        @Override
         public void materializePolyglotException(RuntimeException polyglotException) {
             PolyglotExceptionImpl impl = (PolyglotExceptionImpl) PolyglotImpl.findInstance().getAPIAccess().getPolyglotExceptionReceiver(polyglotException);
             impl.materialize();
+        }
+
+        @Override
+        public IllegalArgumentException sandboxPolicyException(SandboxPolicy sandboxPolicy, String reason, String fix) {
+            return PolyglotImpl.sandboxPolicyException(sandboxPolicy, reason, fix);
+        }
+
+        @Override
+        public AbstractPolyglotImpl findPolyglot() {
+            return PolyglotImpl.findInstance();
+        }
+
+        @Override
+        public ProcessHandler newDefaultProcessHandler() {
+            return PolyglotEngineImpl.newDefaultProcessHandler();
+        }
+
+        @Override
+        public boolean isInCurrentEngineHostCallback(Object polyglotEngine) {
+            return PolyglotContextImpl.isInCurrentEngineHostCallback(polyglotEngine);
+        }
+
+        @Override
+        public boolean isInternalFileSystem(FileSystem fileSystem) {
+            return FileSystems.isInternal(fileSystem);
+        }
+
+        @Override
+        public Map<String, String> filterHostOptions(Object polyglotEngineImpl, Map<String, String> polyglotOptions) {
+            return PolyglotEngineOptions.filterHostOptions(((PolyglotEngineImpl) polyglotEngineImpl).getImpl().createEngineOptionDescriptors(), polyglotOptions);
+        }
+
+        @Override
+        public OptionKey<Long> getMaxIsolateMemoryOption() {
+            return PolyglotEngineOptions.MaxIsolateMemory;
+        }
+
+        @Override
+        public OptionKey<? extends Enum<?>> getUntrustedCodeMitigationOption() {
+            return PolyglotEngineOptions.UntrustedCodeMitigation;
+        }
+
+        @Override
+        public OptionKey<OptionMap<String>> getIsolateOptionOption() {
+            return PolyglotEngineOptions.IsolateOption;
+        }
+
+        @Override
+        public boolean isIsolateMemoryProtection(OptionValues optionValues) {
+            return PolyglotEngineOptions.isIsolateMemoryProtection(optionValues);
+        }
+
+        @Override
+        public boolean isUntrustedCodeMitigationPolicySoftware(Enum<?> policy) {
+            return policy == PolyglotEngineOptions.UntrustedCodeMitigationPolicy.SOFTWARE;
+        }
+
+        @Override
+        public void collectNativeImagePresetOptions() {
+            if (!ImageInfo.inImageBuildtimeCode()) {
+                throw new AssertionError("CollectNativeImagePresetOptions can be called only in image build time");
+            }
+            PolyglotImpl polyglot = PolyglotImpl.findInstance();
+            Map<String, String> newDefaults = polyglot.getAPIAccess().readOptionsFromSystemProperties();
+            if (!newDefaults.isEmpty()) {
+                // Validate preset options
+                Map<String, String> toValidate = new HashMap<>(newDefaults);
+                // Parse engine options to validate them
+                PolyglotImpl.createEngineOptions(PolyglotImpl.findInstance(), Map.of(), toValidate, true, new LogConfig(), SandboxPolicy.TRUSTED, true);
+                Set<String> componentIds = toValidate.keySet().stream().map(PolyglotEngineImpl::parseOptionGroup).collect(Collectors.toSet());
+                List<OptionDescriptors> descriptors = new ArrayList<>();
+                LanguageCache.languages().entrySet().stream().//
+                                filter((e) -> componentIds.contains(e.getKey())).//
+                                map((e) -> LANGUAGE.describeOptions(e.getValue().loadLanguage(), e.getKey())).//
+                                forEach(descriptors::add);
+                InstrumentCache.load().entrySet().stream().//
+                                filter((e) -> componentIds.contains(e.getKey())).//
+                                map((e) -> INSTRUMENT.describeOptions(e.getValue().loadInstrument(), e.getKey())).//
+                                forEach(descriptors::add);
+                // Parse languages/instrument options to validate them
+                OptionValuesImpl values = new OptionValuesImpl(LANGUAGE.createOptionDescriptorsUnion(descriptors.toArray(new OptionDescriptors[0])), SandboxPolicy.TRUSTED, false);
+                values.putAll(toValidate, true, null);
+                polyglot.presetOptions = Collections.unmodifiableMap(newDefaults);
+            }
         }
     }
 

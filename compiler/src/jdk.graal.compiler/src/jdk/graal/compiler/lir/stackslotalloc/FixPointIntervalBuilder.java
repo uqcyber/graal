@@ -204,6 +204,8 @@ final class FixPointIntervalBuilder {
             DebugContext debug = lir.getDebug();
             try (Indent indent = debug.logAndIndent("handle op %d, %s", op.id(), op)) {
                 // kills
+                // The fixpoint liveness walk models @UseKill as a kill at this op.
+                op.visitEachUseKill(defConsumer);
                 op.visitEachTemp(defConsumer);
                 op.visitEachOutput(defConsumer);
 
@@ -213,6 +215,9 @@ final class FixPointIntervalBuilder {
                 // mark locations
                 // gen
                 op.visitEachInput(useConsumer);
+                // The same walk also models @UseKill as a use because the value is still live when
+                // the instruction starts.
+                op.visitEachUseKill(useConsumer);
             }
         }
 

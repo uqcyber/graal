@@ -74,7 +74,7 @@ import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisGraphDecoder;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisPolicy;
 import com.oracle.graal.pointsto.util.AnalysisError;
-import com.oracle.svm.core.AlwaysInline;
+import com.oracle.svm.common.meta.MethodVariant;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.MissingRegistrationSupport;
 import com.oracle.svm.core.NeverInline;
@@ -83,7 +83,6 @@ import com.oracle.svm.core.NeverStrengthenGraphWithConstants;
 import com.oracle.svm.core.RuntimeAssertionsSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateOptions.OptimizationLevel;
-import com.oracle.svm.core.TrackDynamicAccessEnabled;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.TargetClass;
@@ -140,8 +139,9 @@ import com.oracle.svm.hosted.phases.InlineBeforeAnalysisPolicyImpl;
 import com.oracle.svm.hosted.phases.InlineBeforeAnalysisPolicyUtils;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 import com.oracle.svm.hosted.substitute.AutomaticUnsafeTransformationSupport;
+import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.shared.meta.GuaranteeFolded;
-import com.oracle.svm.shared.meta.MethodVariant;
+import com.oracle.svm.shared.meta.GuestFold;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 import com.oracle.svm.shared.util.LogUtils;
@@ -275,7 +275,7 @@ public class SVMHost extends HostVM {
     private final ConstantExpressionRegistry constantExpressionRegistry;
 
     private final boolean trackDynamicAccess;
-    private DynamicAccessDetectionSupport dynamicAccessDetectionSupport = null;
+    private DynamicAccessMethodLookupSupport dynamicAccessMethodLookupSupport = null;
 
     @SuppressWarnings("this-escape")
     public SVMHost(OptionValues options, ImageClassLoader loader, ClassInitializationSupport classInitializationSupport, AnnotationSubstitutionProcessor annotationSubstitutions,
@@ -320,7 +320,7 @@ public class SVMHost extends HostVM {
 
         constantExpressionRegistry = StrictDynamicAccessInferenceFeature.isActive() ? ConstantExpressionRegistry.singleton() : null;
 
-        trackDynamicAccess = TrackDynamicAccessEnabled.isTrackDynamicAccessEnabled();
+        trackDynamicAccess = DynamicAccessDetectionSupport.isDynamicAccessTrackingEnabled();
     }
 
     /**
@@ -330,7 +330,7 @@ public class SVMHost extends HostVM {
      */
     @Override
     public boolean isCoreType(ResolvedJavaType type) {
-        return loader.getBuilderModules().contains(GuestAccess.get().getModule(OriginalClassProvider.getOriginalType(type)));
+        return loader.getCoreModules().contains(GuestAccess.get().getModule(OriginalClassProvider.getOriginalType(type)));
     }
 
     @Override
@@ -448,7 +448,8 @@ public class SVMHost extends HostVM {
     }
 
     @Override
-    public void validateReachableObject(Object obj) {
+    public void validateReachableObject(BigBang bb, JavaConstant constant) {
+        Object obj = bb.getSnippetReflectionProvider().asObject(Object.class, constant);
         ImageSingletons.lookup(ClassInitializationFeature.class).checkImageHeapInstance(obj);
     }
 
@@ -811,10 +812,10 @@ public class SVMHost extends HostVM {
             }
 
             if (trackDynamicAccess) {
-                if (dynamicAccessDetectionSupport == null) {
-                    dynamicAccessDetectionSupport = DynamicAccessDetectionSupport.instance();
+                if (dynamicAccessMethodLookupSupport == null) {
+                    dynamicAccessMethodLookupSupport = DynamicAccessMethodLookupSupport.instance();
                 }
-                if (dynamicAccessDetectionSupport.lookupDynamicAccessMethod(graph.method()) != null) {
+                if (dynamicAccessMethodLookupSupport.lookupDynamicAccessMethod(graph.method()) != null) {
                     new DynamicAccessMarkingPhase().apply(graph, bb.getProviders(method));
                 }
             }
@@ -1083,6 +1084,10 @@ public class SVMHost extends HostVM {
             return false;
         }
 
+        if (annotationSubstitutions.isDeleted(type)) {
+            return false;
+        }
+
         /* Substitution types should never be reachable directly. */
         if (AnnotationUtil.isAnnotationPresent(type, TargetClass.class)) {
             return false;
@@ -1139,11 +1144,11 @@ public class SVMHost extends HostVM {
 
     private boolean isSupportedMethod(BigBang bb, ResolvedJavaMethod method) {
         /*
-         * Methods annotated with @Fold should not be included in the base image as they are
-         * replaced by the invocation plugin with a constant. If reachable in an extension image,
-         * the plugin will replace it again.
+         * Methods annotated with @Fold or @GuestFold should not be included in the base image as
+         * they are replaced by the invocation plugin with a constant. If reachable in an extension
+         * image, the plugin will replace it again.
          */
-        if (AnnotationUtil.isAnnotationPresent(method, Fold.class)) {
+        if (AnnotationUtil.isAnnotationPresent(method, Fold.class) && AnnotationUtil.isAnnotationPresent(method, GuestFold.class)) {
             return false;
         }
 
@@ -1167,7 +1172,7 @@ public class SVMHost extends HostVM {
         }
 
         /* Methods that are not provided in the current Libc should not be included. */
-        if (OriginalMethodProvider.getJavaMethod(method) instanceof Method m && !HostedLibCBase.isMethodProvidedInCurrentLibc(m)) {
+        if (!method.isConstructor() && !HostedLibCBase.isMethodProvidedInCurrentLibc(method)) {
             return false;
         }
 

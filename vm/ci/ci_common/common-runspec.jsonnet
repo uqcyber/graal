@@ -72,7 +72,6 @@ local evaluate_late(key, object) = task_spec(run_spec.evaluate_late({key:object}
     local common_vm = graal_common.build_base + vm.vm_setup + vm.custom_vm + {
       python_version: "3",
       logs+: [
-        '*/mxbuild/dists/stripped/*.map',
         '**/install.packages.R.log',
       ],
     },
@@ -84,9 +83,8 @@ local evaluate_late(key, object) = task_spec(run_spec.evaluate_late({key:object}
     local common_vm_darwin = common_vm + {
       environment+: {
         LANG: 'en_US.UTF-8',
-        MACOSX_DEPLOYMENT_TARGET: '11.0',  # for compatibility with macOS BigSur
+        MACOSX_DEPLOYMENT_TARGET: '14.0',  # for compatibility with macOS Sonoma
       },
-      capabilities+: ['ram16gb'],
     },
 
     local common_vm_windows = common_vm + graal_common.windows_server_2016_amd64,
@@ -229,7 +227,7 @@ local evaluate_late(key, object) = task_spec(run_spec.evaluate_late({key:object}
     "vm-base": mx_env + deploy_graalvm_base + check_base_graalvm_image + default_os_arch_jdk_mixin + platform_spec(no_jobs) + platform_spec({
       "linux:amd64:jdk-latest": post_merge,
       "linux:aarch64:jdk-latest": daily + capabilities('!xgene3') + timelimit('1:30:00'),
-      "darwin:aarch64:jdk-latest": daily + capabilities('darwin_ventura') + timelimit('1:45:00') + notify_emails('bernhard.urban-forster@oracle.com'),
+      "darwin:aarch64:jdk-latest": daily + capabilities('darwin_sonoma') + timelimit('1:45:00') + notify_emails('bernhard.urban-forster@oracle.com'),
       "windows:amd64:jdk-latest": daily + timelimit('1:30:00'),
     }),
   },

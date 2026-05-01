@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -67,12 +67,12 @@ abstract class AbstractBridgeParser {
     final NativeBridgeProcessor processor;
     final Elements elements;
     final Types types;
-    private final AbstractTypeCache typeCache;
+    private final BaseTypeCache typeCache;
     final DeclaredType handledAnnotationType;
 
     private boolean hasLocalErrors;
 
-    AbstractBridgeParser(NativeBridgeProcessor processor, AbstractTypeCache typeCache, DeclaredType handledAnnotationType) {
+    AbstractBridgeParser(NativeBridgeProcessor processor, BaseTypeCache typeCache, DeclaredType handledAnnotationType) {
         this.processor = processor;
         this.types = processor.typeUtils();
         this.elements = processor.env().getElementUtils();
@@ -103,7 +103,7 @@ abstract class AbstractBridgeParser {
         return hasLocalErrors;
     }
 
-    AbstractTypeCache getTypeCache() {
+    BaseTypeCache getTypeCache() {
         return typeCache;
     }
 
@@ -148,15 +148,17 @@ abstract class AbstractBridgeParser {
     static class DefinitionData {
 
         final DeclaredType annotatedType;
+        final TypeElement annotatedElement;
         final MarshallerData throwableMarshaller;
 
         DefinitionData(DeclaredType annotatedType, MarshallerData throwableMarshaller) {
             this.annotatedType = Objects.requireNonNull(annotatedType, "AnnotatedType must be non-null");
+            this.annotatedElement = (TypeElement) annotatedType.asElement();
             this.throwableMarshaller = Objects.requireNonNull(throwableMarshaller, "ThrowableMarshaller must be non-null");
         }
 
         Iterable<? extends Element> getVerifiedElements() {
-            return List.of(annotatedType.asElement());
+            return List.of(annotatedElement);
         }
     }
 
@@ -256,109 +258,50 @@ abstract class AbstractBridgeParser {
         }
     }
 
-    abstract static class AbstractTypeCache {
-        final DeclaredType alwaysByLocalReference;
-        final DeclaredType alwaysByLocalReferenceRepeated;
-        final DeclaredType alwaysByRemoteReference;
-        final DeclaredType alwaysByRemoteReferenceRepeated;
+    static class BaseTypeCache {
+
         final DeclaredType assertionError;
-        final DeclaredType binaryMarshaller;
-        final DeclaredType binaryInput;
-        final DeclaredType binaryOutput;
         final DeclaredType boxedLong;
-        final DeclaredType byLocalReference;
-        final DeclaredType byRemoteReference;
-        final DeclaredType byteArrayBinaryOutput;
         final DeclaredType clazz;
         final DeclaredType collections;
-        final DeclaredType customDispatchAccessor;
-        final DeclaredType customDispatchFactory;
-        final DeclaredType customReceiverAccessor;
         final DeclaredType error;
         final DeclaredType expectError;
-        final DeclaredType foreignException;
-        final DeclaredType foreignObject;
-        final DeclaredType idempotent;
         final DeclaredType illegalArgumentException;
         final DeclaredType illegalStateException;
-        final DeclaredType in;
-        final DeclaredType isolate;
-        final DeclaredType isolateCreateException;
-        final DeclaredType isolateDeathException;
-        final DeclaredType isolateDeathHandler;
         final DeclaredType list;
         final DeclaredType map;
         final DeclaredType math;
-        final DeclaredType marshallerAnnotation;
-        final DeclaredType marshallerConfig;
-        final DeclaredType mutablePeer;
-        final DeclaredType noImplementation;
         final DeclaredType object;
         final DeclaredType objects;
-        final DeclaredType out;
         final DeclaredType override;
-        final DeclaredType peer;
-        final DeclaredType receiverMethod;
-        final DeclaredType referenceHandles;
         final DeclaredType runtimeException;
         final DeclaredType string;
         final DeclaredType suppressWarnings;
         final DeclaredType throwable;
-        final DeclaredType typeLiteral;
         final DeclaredType unsupportedOperationException;
         final DeclaredType weakHashMap;
 
-        AbstractTypeCache(AbstractProcessor processor) {
-            this.alwaysByLocalReference = processor.getDeclaredType("org.graalvm.nativebridge.AlwaysByLocalReference");
-            this.alwaysByLocalReferenceRepeated = processor.getDeclaredType("org.graalvm.nativebridge.AlwaysByLocalReferenceRepeated");
-            this.alwaysByRemoteReference = processor.getDeclaredType("org.graalvm.nativebridge.AlwaysByRemoteReference");
-            this.alwaysByRemoteReferenceRepeated = processor.getDeclaredType("org.graalvm.nativebridge.AlwaysByRemoteReferenceRepeated");
+        BaseTypeCache(AbstractProcessor processor) {
             this.assertionError = processor.getDeclaredType("java.lang.AssertionError");
-            this.binaryMarshaller = processor.getDeclaredType("org.graalvm.nativebridge.BinaryMarshaller");
-            this.binaryInput = processor.getDeclaredType("org.graalvm.nativebridge.BinaryInput");
-            this.binaryOutput = processor.getDeclaredType("org.graalvm.nativebridge.BinaryOutput");
             this.boxedLong = processor.getDeclaredType("java.lang.Long");
-            this.byLocalReference = processor.getDeclaredType("org.graalvm.nativebridge.ByLocalReference");
-            this.byRemoteReference = processor.getDeclaredType("org.graalvm.nativebridge.ByRemoteReference");
-            this.byteArrayBinaryOutput = processor.getDeclaredType("org.graalvm.nativebridge.BinaryOutput.ByteArrayBinaryOutput");
             TypeElement classTypeElement = processor.getTypeElement("java.lang.Class");
             WildcardType wildcardType = processor.typeUtils().getWildcardType(null, null);
             this.clazz = processor.typeUtils().getDeclaredType(classTypeElement, wildcardType);
             this.collections = processor.getDeclaredType("java.util.Collections");
-            this.customDispatchAccessor = processor.getDeclaredType("org.graalvm.nativebridge.CustomDispatchAccessor");
-            this.customReceiverAccessor = processor.getDeclaredType("org.graalvm.nativebridge.CustomReceiverAccessor");
-            this.customDispatchFactory = processor.getDeclaredType("org.graalvm.nativebridge.CustomDispatchFactory");
             this.error = processor.getDeclaredType("java.lang.Error");
             this.expectError = processor.getDeclaredTypeOrNull("org.graalvm.nativebridge.processor.test.ExpectError");
-            this.foreignException = processor.getDeclaredType("org.graalvm.nativebridge.ForeignException");
-            this.foreignObject = processor.getDeclaredType("org.graalvm.nativebridge.ForeignObject");
-            this.idempotent = processor.getDeclaredType("org.graalvm.nativebridge.Idempotent");
             this.illegalArgumentException = processor.getDeclaredType("java.lang.IllegalArgumentException");
             this.illegalStateException = processor.getDeclaredType("java.lang.IllegalStateException");
-            this.in = processor.getDeclaredType("org.graalvm.nativebridge.In");
-            this.isolate = processor.getDeclaredType("org.graalvm.nativebridge.Isolate");
-            this.isolateCreateException = processor.getDeclaredType("org.graalvm.nativebridge.IsolateCreateException");
-            this.isolateDeathException = processor.getDeclaredType("org.graalvm.nativebridge.IsolateDeathException");
-            this.isolateDeathHandler = processor.getDeclaredType("org.graalvm.nativebridge.IsolateDeathHandler");
             this.list = processor.getDeclaredType("java.util.List");
             this.map = processor.getDeclaredType("java.util.Map");
-            this.marshallerAnnotation = processor.getDeclaredType("org.graalvm.nativebridge.MarshallerAnnotation");
-            this.marshallerConfig = processor.getDeclaredType("org.graalvm.nativebridge.MarshallerConfig");
             this.math = processor.getDeclaredType("java.lang.Math");
-            this.mutablePeer = processor.getDeclaredType("org.graalvm.nativebridge.MutablePeer");
-            this.noImplementation = processor.getDeclaredType("org.graalvm.nativebridge.NoImplementation");
             this.object = processor.getDeclaredType("java.lang.Object");
             this.objects = processor.getDeclaredType("java.util.Objects");
-            this.out = processor.getDeclaredType("org.graalvm.nativebridge.Out");
             this.override = processor.getDeclaredType("java.lang.Override");
-            this.peer = processor.getDeclaredType("org.graalvm.nativebridge.Peer");
-            this.receiverMethod = processor.getDeclaredType("org.graalvm.nativebridge.ReceiverMethod");
-            this.referenceHandles = processor.getDeclaredType("org.graalvm.nativebridge.ReferenceHandles");
             this.runtimeException = processor.getDeclaredType("java.lang.RuntimeException");
             this.string = processor.getDeclaredType("java.lang.String");
             this.suppressWarnings = processor.getDeclaredType("java.lang.SuppressWarnings");
             this.throwable = processor.getDeclaredType("java.lang.Throwable");
-            this.typeLiteral = processor.getDeclaredType("org.graalvm.nativebridge.TypeLiteral");
             this.unsupportedOperationException = processor.getDeclaredType("java.lang.UnsupportedOperationException");
             this.weakHashMap = processor.getDeclaredType("java.util.WeakHashMap");
         }
@@ -449,7 +392,7 @@ abstract class AbstractBridgeParser {
         }
     }
 
-    private void checkAnnotatedType(Element annotatedElement) {
+    protected void checkAnnotatedType(Element annotatedElement) {
         if (!annotatedElement.getKind().isClass()) {
             AnnotationMirror annotation = processor.getAnnotation(annotatedElement, handledAnnotationType);
             emitError(annotatedElement, annotation, "The annotation is supported only on type declarations.");

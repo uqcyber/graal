@@ -24,8 +24,9 @@
  */
 package com.oracle.svm.core.genscavenge;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -33,9 +34,8 @@ import org.graalvm.nativeimage.Platforms;
 import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.SubstrateGCOptions;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionValidationSupport;
@@ -81,7 +81,7 @@ public class TlabOptionCache {
     static long getAbsoluteMinTlabSize() {
         int additionalHeaderBytes = SubstrateOptions.AdditionalHeaderBytes.getValue();
         long absoluteMinTlabSize = 2 * 1024L + additionalHeaderBytes;
-        return ConfigurationValues.getObjectLayout().alignUp(absoluteMinTlabSize);
+        return ObjectLayout.singleton().alignUp(absoluteMinTlabSize);
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
@@ -91,13 +91,13 @@ public class TlabOptionCache {
         }
 
         var minTlabSize = singleton().minTlabSize;
-        assert minTlabSize >= getAbsoluteMinTlabSize() && ConfigurationValues.getObjectLayout().isAligned(minTlabSize) && minTlabSize <= TlabSupport.maxSize().rawValue();
+        assert minTlabSize >= getAbsoluteMinTlabSize() && ObjectLayout.singleton().isAligned(minTlabSize) && minTlabSize <= TlabSupport.maxSize().rawValue();
         return minTlabSize;
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public long getTlabSize() {
-        assert tlabSize >= minTlabSize && ConfigurationValues.getObjectLayout().isAligned(tlabSize) && tlabSize <= TlabSupport.maxSize().rawValue();
+        assert tlabSize >= minTlabSize && ObjectLayout.singleton().isAligned(tlabSize) && tlabSize <= TlabSupport.maxSize().rawValue();
         return tlabSize;
     }
 
@@ -108,7 +108,7 @@ public class TlabOptionCache {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void cacheOptionValues() {
         long maxTlabSize = TlabSupport.maxSize().rawValue();
-        assert ConfigurationValues.getObjectLayout().isAligned(maxTlabSize) : "rounded values must not exceed max size";
+        assert ObjectLayout.singleton().isAligned(maxTlabSize) : "rounded values must not exceed max size";
 
         cacheMinTlabSize(maxTlabSize);
         cacheTlabSize(maxTlabSize);
@@ -119,7 +119,7 @@ public class TlabOptionCache {
         int optionIndex = IsolateArgumentParser.getOptionIndex(SubstrateGCOptions.ConcealedOptions.MinTLABSize);
         long optionValue = IsolateArgumentParser.singleton().getLongOptionValue(optionIndex);
         optionValue = UninterruptibleUtils.Math.clamp(optionValue, getAbsoluteMinTlabSize(), maxTlabSize);
-        minTlabSize = ConfigurationValues.getObjectLayout().alignUp(optionValue);
+        minTlabSize = ObjectLayout.singleton().alignUp(optionValue);
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
@@ -131,7 +131,7 @@ public class TlabOptionCache {
         } else {
             optionValue = UninterruptibleUtils.Math.clamp(optionValue, minTlabSize, maxTlabSize);
         }
-        tlabSize = ConfigurationValues.getObjectLayout().alignUp(optionValue);
+        tlabSize = ObjectLayout.singleton().alignUp(optionValue);
     }
 
     public static void registerOptionValidations() {

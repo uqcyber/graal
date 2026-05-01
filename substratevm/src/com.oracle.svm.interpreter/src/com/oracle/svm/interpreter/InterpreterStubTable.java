@@ -24,21 +24,22 @@
  */
 package com.oracle.svm.interpreter;
 
+import java.nio.ByteBuffer;
+import java.util.Collection;
+
+import org.graalvm.word.Pointer;
+
 import com.oracle.objectfile.BasicProgbitsSectionImpl;
 import com.oracle.objectfile.ObjectFile;
 import com.oracle.objectfile.SectionName;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.hosted.image.AbstractImage;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
-import org.graalvm.word.Pointer;
-
-import java.nio.ByteBuffer;
-import java.util.Collection;
+import com.oracle.svm.shared.util.VMError;
 
 public class InterpreterStubTable {
     final SectionName section;
@@ -55,7 +56,7 @@ public class InterpreterStubTable {
     protected void installAdditionalInfoIntoImageObjectFile(AbstractImage image, Collection<InterpreterResolvedJavaMethod> methods) {
         ObjectFile objectFile = image.getObjectFile();
 
-        int wordSize = ConfigurationValues.getWordSize();
+        int wordSize = SubstrateTarget.getWordSize();
         int hashSize = 4 /* size */ + 6 /* "crc32:" */ + 8 /* actual hash */;
         assert hashSize == 18;
         int size = methods.size() * wordSize + hashSize;

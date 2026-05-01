@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -444,6 +444,20 @@ public abstract class BytecodeDescriptor<R extends RootNode & BytecodeRootNode, 
             b.append(v);
         }
         return b.toString();
+    }
+
+    /**
+     * Internal method called by generated code to notify the engine of a transition. This method
+     * unconditionally routes the transition to the engine-level logger and cannot be overridden by
+     * bytecode interpreter implementations.
+     *
+     * @since 25.1
+     */
+    @TruffleBoundary
+    protected final void onTransition(TruffleLanguage<?> language, R rootNode, BytecodeTransition transition) {
+        if (isDescriptorLookupEnabled(language)) {
+            BytecodeEngineData.get(language).traceTransition(rootNode, transition);
+        }
     }
 
     /**

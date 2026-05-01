@@ -25,8 +25,6 @@
 
 package com.oracle.svm.hosted.webimage.wasm;
 
-import org.graalvm.collections.UnmodifiableEconomicMap;
-
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.util.UserError;
@@ -36,7 +34,6 @@ import com.oracle.svm.shared.option.SubstrateOptionsParser;
 
 import jdk.graal.compiler.options.EnumOptionKey;
 import jdk.graal.compiler.options.Option;
-import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionType;
 import jdk.graal.compiler.options.OptionValues;
 
@@ -53,17 +50,11 @@ public class WebImageWasmOptions {
 
         @Override
         public Boolean getValue(OptionValues values) {
-            assert checkDescriptorExists();
-            return getValueOrDefault(values.getMap());
-        }
-
-        @Override
-        public Boolean getValueOrDefault(UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
-            if (values.containsKey(this)) {
-                return (Boolean) values.get(this);
+            if (hasBeenSet(values)) {
+                return super.getValue(values);
             }
 
-            return SubstrateOptions.GenerateDebugInfo.getValueOrDefault(values) > 0;
+            return SubstrateOptions.GenerateDebugInfo.getValue(values) > 0;
         }
     };
 
@@ -76,17 +67,12 @@ public class WebImageWasmOptions {
 
         @Override
         public Boolean getValue(OptionValues values) {
-            assert checkDescriptorExists();
-            return getValueOrDefault(values.getMap());
-        }
 
-        @Override
-        public Boolean getValueOrDefault(UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
-            if (values.containsKey(this)) {
-                return (Boolean) values.get(this);
+            if (hasBeenSet(values)) {
+                return super.getValue(values);
             }
 
-            return SubstrateOptions.GenerateDebugInfo.getValueOrDefault(values) > 0;
+            return SubstrateOptions.GenerateDebugInfo.getValue(values) > 0;
         }
     };
 
@@ -109,7 +95,7 @@ public class WebImageWasmOptions {
      * Returns true if wasm comments should be emitted.
      */
     public static boolean genComments(CommentVerbosity verbosity) {
-        return WasmComments.getValue(HostedOptionValues.singleton()).isEnabled(verbosity);
+        return WasmComments.getValue(HostedOptionValues.singleton().get()).isEnabled(verbosity);
     }
 
     public static boolean genComments() {

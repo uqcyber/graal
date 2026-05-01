@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.api.impl;
 
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -47,6 +48,7 @@ import java.util.function.Supplier;
 
 import org.graalvm.options.OptionDescriptors;
 import org.graalvm.options.OptionValues;
+import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.SandboxPolicy;
 
 import com.oracle.truffle.api.Assumption;
@@ -262,6 +264,11 @@ final class DefaultRuntimeAccessor extends Accessor {
         }
 
         @Override
+        public ByteBuffer persistCache(Object runtimeData, Engine.CancellationCallback callback) {
+            throw new UnsupportedOperationException("Persisting an engine is not supported with the the Truffle fallback runtime. It is only supported on native-image hosts.");
+        }
+
+        @Override
         public boolean isOSRRootNode(RootNode rootNode) {
             return false;
         }
@@ -302,13 +309,29 @@ final class DefaultRuntimeAccessor extends Accessor {
 
         @Override
         public <T> ThreadLocal<T> createTerminatingThreadLocal(Supplier<T> initialValue, Consumer<T> onThreadTermination) {
-            return ThreadLocal.withInitial(initialValue);
+            return DefaultTruffleRuntime.createTerminatingThreadLocal(initialValue, onThreadTermination);
         }
 
         @Override
         public void setInitializedTimestamp(CallTarget target, long timestamp) {
 
         }
+
+        @Override
+        public void initializeInterpreterCallStackHeadRoom(Object engineData, long interpreterCallStackHeadRoom) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean supportsHeapMemoryLimits() {
+            return false;
+        }
+
+        @Override
+        public long getStackOverflowLimit() {
+            return DefaultTruffleRuntime.getStackOverflowLimit();
+        }
+
     }
 
 }

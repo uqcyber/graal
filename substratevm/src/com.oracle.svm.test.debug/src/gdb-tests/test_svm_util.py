@@ -130,7 +130,7 @@ class TestObjUtils(unittest.TestCase):
 
     def test_adr_str(self):
         null = gdb.Value(0)
-        val = gdb.Value(int(0xCAFE))
+        val = gdb.Value(0xCAFE)
         self.assertEqual(self.svm_util.adr_str(null.cast(self.compressed_type.pointer())), ' @z(0x0)')
         self.assertEqual(self.svm_util.adr_str(val.cast(self.compressed_type.pointer())), ' @z(0xcafe)')
         self.assertEqual(self.svm_util.adr_str(null.cast(self.uncompressed_type.pointer())), ' @(0x0)')

@@ -30,7 +30,7 @@ import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
 import com.oracle.svm.core.graal.isolated.ClientHandle;
 import com.oracle.svm.core.graal.isolated.ClientIsolateThread;
 import com.oracle.svm.core.graal.isolated.IsolatedCompileClient;

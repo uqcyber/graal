@@ -2332,7 +2332,7 @@ public final class TruffleFile {
     }
 
     static <T extends Throwable> RuntimeException wrapHostException(T t, FileSystemContext fsContext) {
-        if (LanguageAccessor.engineAccess().isInternal(fsContext.engineObject, fsContext.fileSystem)) {
+        if (LanguageAccessor.engineAccess().isInternal(fsContext.fileSystem)) {
             throw Env.engineToLanguageException(t);
         }
         throw LanguageAccessor.engineAccess().wrapHostException(null, LanguageAccessor.engineAccess().getCurrentHostContext(), t);

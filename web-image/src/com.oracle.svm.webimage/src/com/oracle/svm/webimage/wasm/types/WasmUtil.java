@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,13 +26,16 @@
 package com.oracle.svm.webimage.wasm.types;
 
 import java.nio.ByteOrder;
+import java.util.Optional;
 
 import org.graalvm.word.WordBase;
 
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.meta.SubstrateMethodRefStamp;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.core.common.type.AbstractObjectStamp;
+import jdk.graal.compiler.core.common.type.AbstractPointerStamp;
 import jdk.graal.compiler.core.common.type.FloatStamp;
 import jdk.graal.compiler.core.common.type.IntegerStamp;
 import jdk.graal.compiler.core.common.type.PrimitiveStamp;
@@ -124,6 +127,14 @@ public abstract class WasmUtil {
         this.providers = providers;
         this.stubGraphBuilderTools = new StubGraphBuilderTools(providers);
         this.graphBuilderPlugins = graphBuilderPlugins;
+    }
+
+    public JavaKind getMethodPointerKind() {
+        return providers.getWordTypes().getWordKind();
+    }
+
+    public Class<?> getMethodPointerCanonicalClass() {
+        return getMethodPointerKind().toJavaClass();
     }
 
     /**
@@ -244,8 +255,9 @@ public abstract class WasmUtil {
     /**
      * Converts the given {@link JavaType} to its representation in the Wasm type system.
      *
-     * @return A non-null {@link WasmStorageType}. How the given type would be represented as a
-     *         struct field or array element in Wasm.
+     * @return Returns {@code null} for the void type. Otherwise a {@link WasmStorageType}
+     *         describing the given type would be represented as a struct field or array element in
+     *         Wasm.
      */
     public abstract WasmStorageType storageTypeForJavaType(JavaType type);
 
@@ -268,28 +280,60 @@ public abstract class WasmUtil {
      *         given stamp.
      */
     public WasmStorageType storageTypeForStamp(Stamp stamp) {
-        return switch (stamp) {
-            case AbstractObjectStamp objectStamp -> storageTypeForObjectStamp(objectStamp);
-            case PrimitiveStamp primitiveStamp -> storageTypeForPrimitiveStamp(primitiveStamp);
-            case VoidStamp ignored -> null;
-            default -> throw GraalError.shouldNotReachHereUnexpectedValue(stamp.getClass() + " " + stamp);
+        ResolvedJavaType type = javaTypeForStamp(stamp);
+
+        if (type.getJavaKind() == JavaKind.Void) {
+            return null;
+        }
+
+        return storageTypeForJavaType(type);
+    }
+
+    /**
+     * Same as {@link #optionalTypeForStamp(Stamp)} but throws an exception for unmappable types.
+     */
+    public ResolvedJavaType javaTypeForStamp(Stamp stamp) {
+        return optionalTypeForStamp(stamp).orElseThrow(() -> GraalError.shouldNotReachHereUnexpectedValue(stamp.getClass() + " " + stamp));
+    }
+
+    /**
+     * Canonical Java type (see {@link #canonicalizeJavaType(ResolvedJavaType)}) represented by the
+     * given stamp.
+     */
+    public Optional<ResolvedJavaType> optionalTypeForStamp(Stamp stamp) {
+        ResolvedJavaType type = switch (stamp) {
+            case AbstractObjectStamp objectStamp -> javaTypeForObjectStamp(objectStamp);
+            case PrimitiveStamp primitiveStamp -> javaTypeForPrimitiveStamp(primitiveStamp);
+            case SubstrateMethodRefStamp methodRefStamp ->
+                providers.getMetaAccess().lookupJavaType(getMethodPointerCanonicalClass());
+            case AbstractPointerStamp pointerStamp -> javaTypeForNonObjectPointerStamp(pointerStamp);
+            case VoidStamp ignored -> providers.getMetaAccess().lookupJavaType(void.class);
+            default -> null;
         };
+
+        if (type == null) {
+            return Optional.empty();
+        }
+
+        return Optional.of(canonicalizeJavaType(type));
     }
 
-    protected WasmStorageType storageTypeForObjectStamp(AbstractObjectStamp stamp) {
-        return typeForJavaType(stamp.javaType(providers.getMetaAccess()));
+    protected ResolvedJavaType javaTypeForObjectStamp(AbstractObjectStamp stamp) {
+        return stamp.javaType(providers.getMetaAccess());
     }
 
-    protected WasmStorageType storageTypeForPrimitiveStamp(PrimitiveStamp stamp) {
-        return storageTypeForKind(stamp.javaType(providers.getMetaAccess()).getJavaKind());
+    protected ResolvedJavaType javaTypeForPrimitiveStamp(PrimitiveStamp stamp) {
+        return stamp.javaType(providers.getMetaAccess());
     }
+
+    protected abstract ResolvedJavaType javaTypeForNonObjectPointerStamp(AbstractPointerStamp stamp);
 
     /**
      * Maps the given stamp to the appropriate {@link JavaKind}, which ultimately should map to the
      * appropriate {@link WasmValType} using {@link #mapType(JavaKind)}.
      */
     protected JavaKind kindForStamp(Stamp stamp) {
-        JavaKind kind = stamp.getStackKind();
+        JavaKind kind = optionalTypeForStamp(stamp).map(ResolvedJavaType::getJavaKind).orElse(JavaKind.Illegal);
         return switch (kind) {
             case Boolean, Byte, Short, Char, Int -> JavaKind.Int;
             case Float, Long, Double, Object, Void, Illegal -> kind;
@@ -305,6 +349,8 @@ public abstract class WasmUtil {
      * <p>
      * Used when no concrete {@link WasmValType} for a node is needed, or to check for {@code void}
      * "values".
+     * <p>
+     * Returns {@link JavaKind#Illegal} for unmappable types
      */
     public JavaKind kindForNode(ValueNode n) {
         if (n instanceof LogicNode) {

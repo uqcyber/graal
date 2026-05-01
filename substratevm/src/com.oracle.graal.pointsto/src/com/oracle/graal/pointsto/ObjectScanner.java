@@ -47,10 +47,12 @@ import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
+import com.oracle.svm.util.GuestAccess;
 
 import jdk.graal.compiler.graph.NodeSourcePosition;
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.meta.Constant;
+import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -270,17 +272,18 @@ public class ObjectScanner {
                 }
             }
         } else {
-            Object[] arrayObject = (Object[]) constantAsObject(bb, array);
-            for (int idx = 0; idx < arrayObject.length; idx++) {
-                Object e = arrayObject[idx];
-                if (e == null) {
+            ConstantReflectionProvider constantReflection = GuestAccess.get().getProviders().getConstantReflection();
+            int len = constantReflection.readArrayLength(array);
+            for (int idx = 0; idx < len; idx++) {
+                JavaConstant elem = constantReflection.readArrayElement(array, idx);
+                if (elem.isNull()) {
                     scanningObserver.forNullArrayElement(array, arrayType, idx, reason);
                 } else {
                     try {
-                        JavaConstant element = bb.getUniverse().replaceObjectWithConstant(e);
+                        JavaConstant element = bb.getUniverse().replaceConstantWithConstant(elem, (JavaConstant constant) -> constantAsObject(bb, constant));
                         scanArrayElement(array, arrayType, reason, idx, element);
                     } catch (UnsupportedFeatureException | AnalysisError.TypeNotFoundError ex) {
-                        unsupportedFeatureDuringConstantScan(bb, bb.getUniverse().getHostedValuesProvider().forObject(e), ex, reason);
+                        unsupportedFeatureDuringConstantScan(bb, elem, ex, reason);
                     }
                 }
             }

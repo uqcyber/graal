@@ -24,6 +24,8 @@ package com.oracle.truffle.espresso.vmaccess;
 
 import static com.oracle.truffle.espresso.vmaccess.EspressoExternalVMAccess.throwHostException;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import org.graalvm.polyglot.PolyglotException;
@@ -290,7 +292,11 @@ final class EspressoExternalResolvedInstanceType extends AbstractEspressoResolve
 
     @Override
     public List<? extends JavaType> getPermittedSubclasses() {
-        throw JVMCIError.unimplemented();
+        Value permittedSubclasses = access.invokeJVMCIHelper("getPermittedSubclasses", getMetaObject());
+        if (permittedSubclasses.isNull()) {
+            return null;
+        }
+        return Collections.unmodifiableList(Arrays.asList(translateInstanceTypeArray(permittedSubclasses)));
     }
 
     @Override

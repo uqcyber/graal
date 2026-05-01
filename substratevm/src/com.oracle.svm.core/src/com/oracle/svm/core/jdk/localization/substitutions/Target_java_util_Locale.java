@@ -30,6 +30,9 @@ import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
+
+import jdk.internal.util.ReferencedKeyMap;
 
 @TargetClass(java.util.Locale.class)
 final class Target_java_util_Locale {
@@ -61,4 +64,17 @@ final class Target_java_util_Locale {
 
 final class Util_java_util_Locale {
     static Locale injectedDefaultLocale;
+}
+
+@TargetClass(className = "java.util.Locale$LocaleCache")
+@SuppressWarnings("unused")
+final class Target_java_util_Locale_LocaleCache {
+
+    /*
+     * This is only a canonicalization cache for Locale instances. LocaleCache.apply() recreates the
+     * Locale directly from the BaseLocale / LocaleKey input, so retaining build-time entries is
+     * unnecessary and causes avoidable cache mutations during analysis.
+     */
+    @Alias @TargetElement(name = "LOCALE_CACHE") @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.FromAlias, isFinal = true)//
+    private static ReferencedKeyMap<Object, Locale> localeCache = ReferencedKeyMap.create(true, ReferencedKeyMap.concurrentHashMapSupplier());
 }

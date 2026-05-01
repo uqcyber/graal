@@ -207,7 +207,7 @@ public class ReflectUtil {
     public static Set<AnalysisMethod> findBaseMethodsOfJSAnnotated(AnalysisMetaAccess metaAccess, ImageClassLoader imageClassLoader) {
         Set<AnalysisMethod> methods = new HashSet<>();
 
-        for (ResolvedJavaMethod annotatedMethod : imageClassLoader.findAnnotatedResolvedJavaMethods(JS.class)) {
+        for (ResolvedJavaMethod annotatedMethod : imageClassLoader.guestTypes.findAnnotatedMethods(JS.class)) {
             AnalysisMethod aMethod = metaAccess.getUniverse().lookup(annotatedMethod);
             findBaseMethods(aMethod, aMethod.getDeclaringClass(), methods);
         }

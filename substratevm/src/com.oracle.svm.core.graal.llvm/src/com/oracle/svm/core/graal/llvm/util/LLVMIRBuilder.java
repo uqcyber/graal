@@ -36,8 +36,7 @@ import java.util.Arrays;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import com.oracle.svm.core.FrameAccess;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.shadowed.org.bytedeco.javacpp.BytePointer;
 import com.oracle.svm.shadowed.org.bytedeco.javacpp.Pointer;
 import com.oracle.svm.shadowed.org.bytedeco.javacpp.PointerPointer;
@@ -50,6 +49,7 @@ import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMModuleRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMTypeRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMValueRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.global.LLVM;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.calc.Condition;
@@ -355,11 +355,11 @@ public class LLVMIRBuilder implements AutoCloseable {
     }
 
     public LLVMTypeRef wordType() {
-        return integerType(FrameAccess.wordSize() * Byte.SIZE);
+        return integerType(SubstrateTarget.getWordSize() * Byte.SIZE);
     }
 
     public static boolean isWordType(LLVMTypeRef type) {
-        return isIntegerType(type) && integerTypeWidth(type) == FrameAccess.wordSize() * Byte.SIZE;
+        return isIntegerType(type) && integerTypeWidth(type) == SubstrateTarget.getWordSize() * Byte.SIZE;
     }
 
     public LLVMTypeRef floatType() {

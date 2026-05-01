@@ -51,6 +51,9 @@ public class RistrettoProfilingInfo implements ProfilingInfo {
 
     @Override
     public JavaTypeProfile getTypeProfile(int bci) {
+        if (!isMature()) {
+            return null;
+        }
         final var typeProfile = methodProfile.getTypeProfile(bci);
         if (Assertions.assertionsEnabled() && typeProfile != null) {
             for (var entry : typeProfile.getTypes()) {
@@ -69,6 +72,10 @@ public class RistrettoProfilingInfo implements ProfilingInfo {
 
     @Override
     public double getBranchTakenProbability(int bci) {
+        if (!isMature()) {
+            return -1;
+        }
+
         double recordedProbability = methodProfile.getBranchTakenProbability(bci);
         if (recordedProbability == -1D) {
             return -1D;
@@ -98,6 +105,10 @@ public class RistrettoProfilingInfo implements ProfilingInfo {
 
     @Override
     public double[] getSwitchProbabilities(int bci) {
+        if (!isMature()) {
+            return null;
+        }
+
         return null;
     }
 
@@ -113,6 +124,9 @@ public class RistrettoProfilingInfo implements ProfilingInfo {
 
     @Override
     public int getExecutionCount(int bci) {
+        if (!isMature()) {
+            return -1;
+        }
         return -1;
     }
 

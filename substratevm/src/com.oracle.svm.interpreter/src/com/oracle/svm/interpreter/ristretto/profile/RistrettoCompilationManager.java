@@ -38,29 +38,36 @@ import com.oracle.svm.core.log.Log;
 import com.oracle.svm.interpreter.ristretto.RistrettoConstants;
 import com.oracle.svm.interpreter.ristretto.RistrettoOptions;
 
-public class RistrettoCompilationManager {
+public final class RistrettoCompilationManager {
     /**
-     * The global compilation manager - initialized once at startup in a startup hook and teared
-     * down in a teardown hook. Note that this field is NOT volatile and that it could be written
-     * from other places. However, we expect this is not going to happen, it is not exposed and only
-     * a single well-defined place writes to it.
+     * Global compilation manager instance. Created lazily on first access.
      */
     private static volatile RistrettoCompilationManager MANAGER;
 
-    public static RuntimeSupport.Hook getProfileSupportShutdownHook() {
+    /**
+     * Returns the isolate tear-down hook that stops the background Ristretto compiler threads.
+     */
+    public static RuntimeSupport.Hook getProfileSupportTearDownHook() {
         return _ -> {
-            get().shutDown();
-        };
-    }
-
-    public static RuntimeSupport.Hook getProfileSupportStartupHook() {
-        return _ -> {
-            MANAGER = new RistrettoCompilationManager();
+            RistrettoCompilationManager manager = MANAGER;
+            if (manager != null) {
+                manager.shutDown();
+            }
         };
     }
 
     public static RistrettoCompilationManager get() {
-        return MANAGER;
+        RistrettoCompilationManager manager = MANAGER;
+        if (manager == null) {
+            synchronized (RistrettoCompilationManager.class) {
+                manager = MANAGER;
+                if (manager == null) {
+                    manager = new RistrettoCompilationManager();
+                    MANAGER = manager;
+                }
+            }
+        }
+        return manager;
     }
 
     /**
@@ -93,10 +100,14 @@ public class RistrettoCompilationManager {
      */
     private final AtomicLong finishedRequests;
 
-    public RistrettoCompilationManager() {
+    private RistrettoCompilationManager() {
         compilerExceptions = Collections.synchronizedList(new ArrayList<>());
         final int compilerThreadCount = RistrettoOptions.JITCompilerThreadCount.getValue();
-        compilerExecutorService = Executors.newFixedThreadPool(compilerThreadCount);
+        compilerExecutorService = Executors.newFixedThreadPool(compilerThreadCount, runnable -> {
+            Thread t = new Thread(runnable);
+            t.setDaemon(true);
+            return t;
+        });
         compilationQueue = new PriorityBlockingQueue<>();
         performedCompilations = Collections.synchronizedList(new ArrayList<>());
         submittedRequests = new AtomicLong();
@@ -117,6 +128,9 @@ public class RistrettoCompilationManager {
                              * moment
                              */
                             RistrettoProfileSupport.trace(RistrettoOptions.JITTraceCompilation, "[Ristretto Compiler]Compiler saw exception %s %s", Thread.currentThread(), e.getMessage());
+                            if (RistrettoOptions.JITPrintExceptions.getValue()) {
+                                Log.log().exception(e);
+                            }
                             compilerExceptions.add(e);
                         } finally {
                             // even if we fail we want to record the compilation
@@ -168,6 +182,9 @@ public class RistrettoCompilationManager {
             RistrettoProfileSupport.trace(RistrettoOptions.JITTraceCompilationQueuing, "Invalidating and resetting %s compilations%n",
                             m.performedCompilations.size());
 
+            // wait until we finished everything, else resetting state bits might cause problems
+            blockUntilCompileQueueDrained();
+
             for (var task : m.performedCompilations) {
                 RistrettoProfileSupport.trace(RistrettoOptions.JITTraceCompilationQueuing, "Invalidating and resetting %s%n", task.getRMethod());
                 task.getRMethod().compilationState = RistrettoConstants.COMPILE_STATE_INIT_VAL;
@@ -207,6 +224,11 @@ public class RistrettoCompilationManager {
                         RistrettoProfileSupport.trace(RistrettoOptions.JITTraceCompilationQueuing,
                                         "[Ristretto Compile Queue]Still draining compile queue, submitted=%s, started=%s, finished=%s%n",
                                         m.submittedRequests.get(), m.startedRequests.get(), m.finishedRequests.get());
+
+                        for (var q : m.compilationQueue) {
+                            RistrettoProfileSupport.trace(RistrettoOptions.JITTraceCompilationQueuing,
+                                            "\t[Ristretto Compile Queue]Queued entry %s%n", q);
+                        }
                     }
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);

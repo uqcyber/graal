@@ -24,13 +24,13 @@
  */
 package com.oracle.svm.core.genscavenge;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.genscavenge.ThreadLocalAllocation.Descriptor;
 import static com.oracle.svm.core.genscavenge.ThreadLocalAllocation.allocatedAlignedBytes;
 import static com.oracle.svm.core.genscavenge.ThreadLocalAllocation.getTlab;
 import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_END_IDENTITY;
 import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_START_IDENTITY;
 import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_TOP_IDENTITY;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
@@ -39,27 +39,27 @@ import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateDiagnostics;
 import com.oracle.svm.core.SubstrateGCOptions;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets;
-import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.log.Log;
+import com.oracle.svm.core.thread.ThreadsLock;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.threadlocal.FastThreadLocalBytes;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
-import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
+import com.oracle.svm.shared.util.NumUtil;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
-import org.graalvm.word.impl.Word;
 
 /**
  * Provides methods for initializing, calculating the size and retiring TLABs used in
@@ -223,7 +223,7 @@ public class TlabSupport {
     @Uninterruptible(reason = "Accesses TLAB")
     private static void recordRefillWaste() {
         long availableTlabMemory = availableTlabMemory(getTlab()).rawValue();
-        refillWaste.set(refillWaste.get() + UninterruptibleUtils.NumUtil.safeToInt(availableTlabMemory));
+        refillWaste.set(refillWaste.get() + NumUtil.safeToInt(availableTlabMemory));
     }
 
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+25/src/hotspot/share/runtime/thread.cpp#L157-L166")
@@ -283,7 +283,7 @@ public class TlabSupport {
         retireTlab(CurrentIsolate.getCurrentThread(), false);
     }
 
-    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    @Uninterruptible(reason = "Tear-down in progress.")
     static void tearDown() {
         // no other thread is alive, so it is always safe to access the first thread
         IsolateThread thread = VMThreads.firstThreadUnsafe();
@@ -308,7 +308,11 @@ public class TlabSupport {
 
     @Uninterruptible(reason = "Accesses TLAB")
     private static void retireTlabToEden(IsolateThread thread) {
-        VMThreads.guaranteeOwnsThreadMutex("Otherwise, we wouldn't be allowed to access the space.", true);
+        /*
+         * This method is used both during a VM operation and while detaching a thread. So, it
+         * cannot check more than that there is some mutual exclusion.
+         */
+        VMError.guarantee(ThreadsLock.hasWriteAccess(), "Otherwise, we wouldn't be allowed to access the space.");
 
         boolean updateStats = VMOperation.isGCInProgress();
         retireTlab(thread, updateStats);
@@ -349,7 +353,7 @@ public class TlabSupport {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static UnsignedWord getFillerObjectSize() {
         int minSize = FillerObjectUtil.instanceMinSize();
-        int alignment = ConfigurationValues.getObjectLayout().getAlignment();
+        int alignment = ObjectLayout.singleton().getAlignment();
         assert FillerObjectUtil.arrayMinSize() - minSize <= alignment : "all sizes above min instance size must be fillable";
         return (minSize > alignment) ? Word.unsigned(minSize) : Word.zero();
     }
@@ -397,7 +401,7 @@ public class TlabSupport {
 
         long minTlabSize = TlabOptionCache.getMinTlabSize();
         newSize = UnsignedUtils.clamp(newSize, Word.unsigned(minTlabSize), maxSize());
-        UnsignedWord alignedNewSize = Word.unsigned(ConfigurationValues.getObjectLayout().alignUp(newSize.rawValue()));
+        UnsignedWord alignedNewSize = Word.unsigned(ObjectLayout.singleton().alignUp(newSize.rawValue()));
 
         if (SerialAndEpsilonGCOptions.PrintTLAB.getValue()) {
             Log.log().string("TLAB new size: thread ").zhex(thread)
@@ -419,7 +423,7 @@ public class TlabSupport {
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+8/src/hotspot/share/gc/shared/threadLocalAllocBuffer.inline.hpp#L54-L71")
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static UnsignedWord computeDesiredSizeOfNewTlab(UnsignedWord allocationSize) {
-        assert UnsignedUtils.isAMultiple(allocationSize, Word.unsigned(ConfigurationValues.getObjectLayout().getAlignment()));
+        assert UnsignedUtils.isAMultiple(allocationSize, Word.unsigned(ObjectLayout.singleton().getAlignment()));
 
         /*
          * Compute the size of the new TLAB. To minimize fragmentation, the last TLAB that fits into
@@ -434,14 +438,14 @@ public class TlabSupport {
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23-ga/src/hotspot/share/gc/shared/threadLocalAllocBuffer.inline.hpp#L73-L77")
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static UnsignedWord computeMinSizeOfNewTlab(UnsignedWord allocationSize) {
-        assert ConfigurationValues.getObjectLayout().isAligned(allocationSize);
+        assert ObjectLayout.singleton().isAligned(allocationSize);
 
         UnsignedWord sizeWithReserve = allocationSize.add(getFillerObjectSize());
         UnsignedWord minTlabSize = Word.unsigned(TlabOptionCache.getMinTlabSize());
         return UnsignedUtils.max(sizeWithReserve, minTlabSize);
     }
 
-    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    @Uninterruptible(reason = "Accesses TLAB")
     private static boolean shouldRetainTlab(Descriptor tlab) {
         return availableTlabMemory(tlab).aboveThan(refillWasteLimit.get());
     }
@@ -463,7 +467,7 @@ public class TlabSupport {
     }
 
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23-ga/src/hotspot/share/gc/shared/threadLocalAllocBuffer.cpp#L76-L117")
-    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    @Uninterruptible(reason = "Accesses TLAB")
     private static void accumulateAndResetStatistics(IsolateThread thread) {
         assert VMOperation.isGCInProgress();
 

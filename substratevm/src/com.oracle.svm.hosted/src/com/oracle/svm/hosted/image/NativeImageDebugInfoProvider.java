@@ -63,8 +63,8 @@ import com.oracle.objectfile.debugentry.StructureTypeEntry;
 import com.oracle.objectfile.debugentry.TypeEntry;
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.UniqueShortNameProvider;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.debug.BFDNameProvider;
 import com.oracle.svm.core.debug.SharedDebugInfoProvider;
 import com.oracle.svm.core.debug.SubstrateDebugTypeEntrySupport;
@@ -840,16 +840,16 @@ class NativeImageDebugInfoProvider extends SharedDebugInfoProvider {
                  * EnumInfo should not reach here because it is no word base type. Create a pointer
                  * to a generic word type or void.
                  */
-                size = ConfigurationValues.getWordSize();
+                int wordSize = SubstrateTarget.getWordSize();
+                size = wordSize;
                 TypeEntry pointerToEntry = null;
 
                 // create a generic word type as base type or a void* if it is a pointer type
                 if (!nativeLibs.isPointerBase(type)) {
-                    int genericWordSize = ConfigurationValues.getWordSize();
-                    int genericWordBits = genericWordSize * 8;
-                    String genericWordName = "uint" + genericWordBits + "_t";
+                    int wordBits = wordSize * 8;
+                    String genericWordName = "uint" + wordBits + "_t";
                     long genericWordTypeSignature = getTypeSignature(genericWordName);
-                    pointerToEntry = new PrimitiveTypeEntry(genericWordName, genericWordSize, -1, genericWordTypeSignature, genericWordBits, true, false, true);
+                    pointerToEntry = new PrimitiveTypeEntry(genericWordName, wordSize, -1, genericWordTypeSignature, wordBits, true, false, true);
                     SubstrateDebugTypeEntrySupport.singleton().addTypeEntry(pointerToEntry);
                 }
 

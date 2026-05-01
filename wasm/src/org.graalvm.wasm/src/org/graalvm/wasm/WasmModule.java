@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -85,6 +85,7 @@ public final class WasmModule extends SymbolTable implements TruffleObject {
     @CompilationFinal(dimensions = 1) private byte[] customData;
     @CompilationFinal(dimensions = 1) private byte[] codeSection;
     @CompilationFinal(dimensions = 1) private CodeEntry[] codeEntries;
+    private final WasmLanguage language;
     @CompilationFinal private boolean isParsed;
     private volatile boolean hasBeenInstantiated;
 
@@ -102,21 +103,22 @@ public final class WasmModule extends SymbolTable implements TruffleObject {
         }
     }
 
-    private WasmModule(String name, ModuleLimits limits) {
+    private WasmModule(WasmLanguage language, String name, ModuleLimits limits) {
         super();
+        this.language = Objects.requireNonNull(language);
         this.name = name;
-        this.limits = limits == null ? ModuleLimits.DEFAULTS : limits;
+        this.limits = Objects.requireNonNullElse(limits, ModuleLimits.DEFAULTS);
         this.linkActions = new ArrayList<>();
         this.isParsed = false;
         this.debugInfoOffset = -1;
     }
 
-    public static WasmModule create(String name, ModuleLimits limits) {
-        return new WasmModule(name, limits);
+    public static WasmModule create(WasmLanguage language, String name, ModuleLimits limits) {
+        return new WasmModule(language, name, limits);
     }
 
-    public static WasmModule createBuiltin(String name) {
-        return new WasmModule(name, null);
+    public static WasmModule createBuiltin(WasmLanguage language, String name) {
+        return new WasmModule(language, name, null);
     }
 
     @Override
@@ -159,6 +161,10 @@ public final class WasmModule extends SymbolTable implements TruffleObject {
      */
     public ReentrantLock getLock() {
         return lock;
+    }
+
+    public WasmLanguage language() {
+        return language;
     }
 
     public ModuleLimits limits() {
@@ -341,7 +347,7 @@ public final class WasmModule extends SymbolTable implements TruffleObject {
                 case ImportIdentifier.FUNCTION -> requireCallable(member, descriptor, exceptionProvider);
                 case ImportIdentifier.TABLE -> requireWasmTable(member, descriptor, exceptionProvider);
                 case ImportIdentifier.MEMORY -> requireWasmMemory(member, descriptor, exceptionProvider);
-                case ImportIdentifier.GLOBAL -> requireWasmGlobal(member, descriptor, exceptionProvider);
+                case ImportIdentifier.GLOBAL -> requireOrAllocateWasmGlobal(member, descriptor, exceptionProvider);
                 case ImportIdentifier.TAG -> requireWasmTag(member, descriptor, exceptionProvider);
                 default -> throw WasmException.create(Failure.UNSPECIFIED_INTERNAL, "Unknown import descriptor type: " + descriptor.identifier());
             });
@@ -405,11 +411,19 @@ public final class WasmModule extends SymbolTable implements TruffleObject {
         return table;
     }
 
-    private static WasmGlobal requireWasmGlobal(Object member, ImportDescriptor importDescriptor, ExceptionProvider exceptionProvider) {
-        if (!(member instanceof WasmGlobal global)) {
-            throw exceptionProvider.createLinkError(Failure.INCOMPATIBLE_IMPORT_TYPE, "Member " + member + " " + importDescriptor + " is not a valid global.");
+    private WasmGlobal requireOrAllocateWasmGlobal(Object member, ImportDescriptor importDescriptor, ExceptionProvider exceptionProvider) {
+        if (member instanceof WasmGlobal global) {
+            return global;
         }
-        return global;
+        final int globalIndex = importDescriptor.targetIndex();
+        assert globalImported(globalIndex) : importDescriptor;
+        if (isGlobalMutable(globalIndex)) {
+            throw exceptionProvider.createLinkError(Failure.INCOMPATIBLE_IMPORT_TYPE, "Mutable global imports must be provided as global objects.");
+        }
+        if (!closedTypeOf(globalValueType(globalIndex)).matchesValue(member)) {
+            throw exceptionProvider.createLinkError(Failure.INCOMPATIBLE_IMPORT_TYPE, "Imported value does not match the expected global type.");
+        }
+        return new WasmGlobal(globalIndex, this, member);
     }
 
     private static WasmTag requireWasmTag(Object member, ImportDescriptor importDescriptor, ExceptionProvider exceptionProvider) {

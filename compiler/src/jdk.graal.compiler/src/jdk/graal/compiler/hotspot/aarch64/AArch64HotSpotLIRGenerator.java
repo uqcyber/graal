@@ -35,6 +35,7 @@ import static jdk.vm.ci.meta.JavaConstant.INT_0;
 import static jdk.vm.ci.meta.JavaConstant.LONG_0;
 
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -78,6 +79,7 @@ import jdk.graal.compiler.lir.Variable;
 import jdk.graal.compiler.lir.VirtualStackSlot;
 import jdk.graal.compiler.lir.aarch64.AArch64AddressValue;
 import jdk.graal.compiler.lir.aarch64.AArch64Call;
+import jdk.graal.compiler.lir.aarch64.AArch64CRC32UpdateBytesOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ControlFlow.StrategySwitchOp;
 import jdk.graal.compiler.lir.aarch64.AArch64FrameMapBuilder;
 import jdk.graal.compiler.lir.aarch64.AArch64Move;
@@ -90,6 +92,7 @@ import jdk.graal.compiler.lir.aarch64.g1.AArch64G1BarrierSetLIRGenerator;
 import jdk.graal.compiler.lir.gen.BarrierSetLIRGeneratorTool;
 import jdk.graal.compiler.lir.gen.LIRGenerationResult;
 import jdk.graal.compiler.lir.gen.MoveFactory;
+import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.aarch64.AArch64Kind;
 import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.Register;
@@ -139,6 +142,21 @@ public class AArch64HotSpotLIRGenerator extends AArch64LIRGenerator implements H
     @Override
     public HotSpotProviders getProviders() {
         return (HotSpotProviders) super.getProviders();
+    }
+
+    @Override
+    public Variable emitCRC32UpdateBytes(EnumSet<?> runtimeCheckedCPUFeatures, Value crc, Value bufferAddress, Value length) {
+        RegisterValue rResult = AArch64.r0.asValue(crc.getValueKind());
+        RegisterValue rCrc = AArch64.r0.asValue(crc.getValueKind());
+        RegisterValue rBuf = AArch64.r1.asValue(bufferAddress.getValueKind());
+        RegisterValue rLen = AArch64.r2.asValue(length.getValueKind());
+        emitMove(rCrc, crc);
+        emitMove(rBuf, bufferAddress);
+        emitMove(rLen, length);
+        append(new AArch64CRC32UpdateBytesOp(rResult, rCrc, rBuf, rLen));
+        Variable result = newVariable(crc.getValueKind());
+        emitMove(result, rResult);
+        return result;
     }
 
     @Override

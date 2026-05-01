@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.core.jdk.localization.substitutions;
 
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -57,9 +58,16 @@ final class Target_sun_util_resources_ParallelListResourceBundle_SubstituteLoadL
     @Substitute
     private void loadLookupTablesIfNecessary() {
         LocalizationSupport support = ImageSingletons.lookup(LocalizationSupport.class);
+        Map<String, Object> content = support.getBundleContentOf(this);
         synchronized (this) {
             if (lookup == null) {
-                lookup = new ConcurrentHashMap<>(support.getBundleContentOf(this));
+                if (content instanceof ConcurrentMap<?, ?> concurrentContent) {
+                    @SuppressWarnings("unchecked")
+                    ConcurrentMap<String, Object> typedContent = (ConcurrentMap<String, Object>) concurrentContent;
+                    lookup = typedContent;
+                } else {
+                    lookup = new ConcurrentHashMap<>(content);
+                }
             }
         }
     }

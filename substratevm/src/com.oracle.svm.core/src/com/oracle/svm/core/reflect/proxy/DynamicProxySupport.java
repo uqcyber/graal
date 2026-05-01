@@ -239,7 +239,7 @@ public class DynamicProxySupport implements DynamicProxyRegistry {
     }
 
     @Override
-    public Class<?> getProxyClass(ClassLoader loader, Class<?>... interfaces) {
+    public Class<?> getProxyClass(ClassLoader loader, boolean nullIfMissing, Class<?>... interfaces) {
         if (MetadataTracer.enabled()) {
             MetadataTracer.singleton().traceProxyType(interfaces);
         }
@@ -248,6 +248,9 @@ public class DynamicProxySupport implements DynamicProxyRegistry {
         ConditionalRuntimeValue<Object> clazzOrError = proxyCache.get(key);
 
         if (clazzOrError == null || !clazzOrError.getDynamicAccessMetadata().satisfied()) {
+            if (nullIfMissing) {
+                return null;
+            }
             throw MissingReflectionRegistrationUtils.reportProxyAccess(interfaces);
         }
         if (clazzOrError.getValue() instanceof Throwable) {

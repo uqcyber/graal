@@ -30,7 +30,7 @@ import java.nio.ByteBuffer;
 
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 
@@ -53,7 +53,7 @@ public class SubstrateDataBuilder extends DataBuilder {
             return new ObjectData(vmConstant);
         } else if (JavaConstant.isNull(constant)) {
             if (SubstrateObjectConstant.isCompressed((JavaConstant) constant)) {
-                size = ConfigurationValues.getObjectLayout().getReferenceSize();
+                size = ObjectLayout.singleton().getReferenceSize();
             } else {
                 size = FrameAccess.uncompressedReferenceSize();
             }
@@ -70,7 +70,7 @@ public class SubstrateDataBuilder extends DataBuilder {
         private final VMConstant constant;
 
         protected ObjectData(VMConstant constant) {
-            super(ConfigurationValues.getObjectLayout().getReferenceSize(), ConfigurationValues.getObjectLayout().getReferenceSize());
+            super(ObjectLayout.singleton().getReferenceSize(), ObjectLayout.singleton().getReferenceSize());
             assert ((CompressibleConstant) constant).isCompressed() == ReferenceAccess.singleton()
                             .haveCompressedReferences() : "Constant object references in compiled code must be compressed (base-relative)";
             this.constant = constant;

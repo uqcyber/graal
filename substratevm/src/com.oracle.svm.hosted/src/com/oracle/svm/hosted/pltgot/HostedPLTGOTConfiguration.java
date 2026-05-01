@@ -51,12 +51,12 @@ public abstract class HostedPLTGOTConfiguration extends PLTGOTConfiguration {
     protected MethodAddressResolutionSupport methodAddressResolutionSupport;
     private final GOTEntryAllocator gotEntryAllocator = new GOTEntryAllocator();
 
-    private final PLTSectionSupport pltSectionSupport;
-    private HostedMetaAccess hostedMetaAccess;
+    private final PLTSupport pltSupport;
+    private HostedMethod resolverHostedMethod;
 
     @SuppressWarnings("this-escape")
     public HostedPLTGOTConfiguration() {
-        this.pltSectionSupport = new PLTSectionSupport(getArchSpecificPLTStubGenerator());
+        this.pltSupport = new PLTSupport(createArchSpecificPLTStubGenerator());
     }
 
     public static HostedPLTGOTConfiguration singleton() {
@@ -99,11 +99,11 @@ public abstract class HostedPLTGOTConfiguration extends PLTGOTConfiguration {
 
     public abstract Register getGOTPassingRegister(RegisterConfig registerConfig);
 
-    public abstract PLTStubGenerator getArchSpecificPLTStubGenerator();
+    public abstract PLTStubGenerator createArchSpecificPLTStubGenerator();
 
-    public void setHostedMetaAccess(HostedMetaAccess metaAccess) {
-        assert hostedMetaAccess == null : "The field hostedMetaAccess can't be set twice.";
-        this.hostedMetaAccess = metaAccess;
+    public void initializeArchSpecificResolverMethod(HostedMetaAccess metaAccess) {
+        assert resolverHostedMethod == null : "The field archSpecificResolverMethod can't be set twice.";
+        resolverHostedMethod = metaAccess.lookupJavaMethod(getArchSpecificResolverAsMethod());
     }
 
     public MethodAddressResolutionSupport initializeMethodAddressResolutionSupport(MethodAddressResolutionSupport support) {
@@ -121,17 +121,13 @@ public abstract class HostedPLTGOTConfiguration extends PLTGOTConfiguration {
         return methodAddressResolutionSupport;
     }
 
-    public PLTSectionSupport getPLTSectionSupport() {
-        return pltSectionSupport;
-    }
-
-    public void markResolverMethodPatch() {
-        pltSectionSupport.markResolverMethodPatch(getArchSpecificResolverAsHostedMethod());
+    public PLTSupport getPLTSupport() {
+        return pltSupport;
     }
 
     public HostedMethod getArchSpecificResolverAsHostedMethod() {
-        assert hostedMetaAccess != null : "Must set hostedMetaAccess before calling getArchSpecificResolverAsHostedMethod";
-        return hostedMetaAccess.lookupJavaMethod(getArchSpecificResolverAsMethod());
+        assert resolverHostedMethod != null : "Must initialize archSpecificResolverMethod before calling getArchSpecificResolverAsHostedMethod";
+        return resolverHostedMethod;
     }
 
     public GOTEntryAllocator getGOTEntryAllocator() {

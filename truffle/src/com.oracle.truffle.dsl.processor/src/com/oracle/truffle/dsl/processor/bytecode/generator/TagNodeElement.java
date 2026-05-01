@@ -297,8 +297,7 @@ final class TagNodeElement extends AbstractElement {
         for (TypeMirror tag : parent.model.getProvidedTags()) {
             elseIf = b.startIf(elseIf);
             b.string("tag == ").typeLiteral(tag).end().startBlock();
-            int mask = 1 << index;
-            b.startReturn().string("(tags & 0x", Integer.toHexString(mask), ") != 0").end();
+            b.startReturn().string(parent.configEncoder.checkTagEnabled("tags", index)).end();
             b.end();
             index++;
         }

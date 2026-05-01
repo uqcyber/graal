@@ -29,7 +29,7 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdEpoch;
 import com.oracle.svm.core.jfr.utils.JfrVisited;
@@ -70,10 +70,20 @@ public final class JfrThreadRepository implements JfrRepository {
         epochData1.teardown();
     }
 
+    public void reset() {
+        epochData0.clear(false);
+        epochData1.clear(false);
+    }
+
     @Uninterruptible(reason = "Required to get epoch data.")
     public void clearPreviousEpoch() {
-        assert VMOperation.isInProgressAtSafepoint() && SubstrateJVM.getChunkWriter().isLockedByCurrentThread();
-        getEpochData(true).clear(false);
+        assert SubstrateJVM.getChunkWriter().isLockedByCurrentThread();
+        mutex.lockNoTransition();
+        try {
+            getEpochData(true).clear(false);
+        } finally {
+            mutex.unlock();
+        }
     }
 
     @Uninterruptible(reason = "Prevent any JFR events from triggering.")
@@ -232,6 +242,17 @@ public final class JfrThreadRepository implements JfrRepository {
         mutex.lockNoTransition();
         try {
             JfrThreadEpochData epochData = getEpochData(false);
+            return epochData.unflushedThreadCount > 0 || epochData.unflushedThreadGroupCount > 0;
+        } finally {
+            mutex.unlock();
+        }
+    }
+
+    @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
+    public boolean hasUnflushedPreviousEpochData() {
+        mutex.lockNoTransition();
+        try {
+            JfrThreadEpochData epochData = getEpochData(true);
             return epochData.unflushedThreadCount > 0 || epochData.unflushedThreadGroupCount > 0;
         } finally {
             mutex.unlock();

@@ -22,8 +22,6 @@
  */
 package com.oracle.truffle.espresso.impl;
 
-import java.util.function.Function;
-
 import com.oracle.truffle.api.dsl.Idempotent;
 import com.oracle.truffle.espresso.classfile.descriptors.Descriptor;
 import com.oracle.truffle.espresso.classfile.descriptors.Name;
@@ -61,9 +59,9 @@ public abstract class Member<T extends Descriptor> implements MemberAccess<Klass
     }
 
     @Override
-    public final void loadingConstraints(Klass accessingClass, Function<String, RuntimeException> errorHandler) {
-        checkLoadingConstraints(accessingClass.getDefiningClassLoader(), getDeclaringKlass().getDefiningClassLoader(), errorHandler);
+    public final void loadingConstraints(Klass accessingClass) {
+        checkLoadingConstraints(accessingClass.getDefiningClassLoader(), getDeclaringKlass().getDefiningClassLoader());
     }
 
-    public abstract void checkLoadingConstraints(StaticObject loader1, StaticObject loader2, Function<String, RuntimeException> errorHandler);
+    public abstract void checkLoadingConstraints(StaticObject loader1, StaticObject loader2);
 }

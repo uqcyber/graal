@@ -29,7 +29,7 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.impl.InternalPlatform.WINDOWS_BASE;
 
 import com.oracle.svm.core.attach.AttachApiSupport;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;

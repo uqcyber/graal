@@ -65,6 +65,7 @@ import jdk.graal.compiler.truffle.TruffleCompilation;
 import jdk.graal.compiler.truffle.TruffleCompilerImpl;
 import jdk.graal.compiler.truffle.TruffleDebugJavaMethod;
 import jdk.graal.compiler.truffle.TruffleTierContext;
+import jdk.graal.compiler.truffle.nodes.TrufflePreserveFrameStateNode;
 import jdk.graal.compiler.truffle.phases.TruffleTier;
 import jdk.graal.compiler.util.CollectionsUtil;
 import jdk.vm.ci.code.BailoutException;
@@ -471,6 +472,17 @@ public abstract class PartialEvaluationTest extends TruffleCompilerImplTest {
             if (deopt instanceof DynamicDeoptimizeNode) {
                 deopt.replaceFirstInput(((DynamicDeoptimizeNode) deopt).getActionAndReason(),
                                 graph.unique(ConstantNode.defaultForKind(((DynamicDeoptimizeNode) deopt).getActionAndReason().getStackKind())));
+            }
+        }
+
+        /*
+         * Preserve-frame-state markers are intentionally kept in compiled graphs for deoptimization
+         * attribution, but they are orthogonal to the semantic graph-shape checks performed by
+         * assertPartialEvalEquals.
+         */
+        for (TrufflePreserveFrameStateNode marker : graph.getNodes(TrufflePreserveFrameStateNode.TYPE).snapshot()) {
+            if (marker.isAlive()) {
+                graph.removeFixed(marker);
             }
         }
 

@@ -40,6 +40,81 @@ local graal_common = import '../../../ci/ci_common/common.jsonnet';
     name: 'gate-vm-ce-truffle-maven-downloader-labs' + self.jdk_name + '-linux-amd64',
   },
 
+  # Truffle Isolate Unittest Jobs
+  truffleisolate_gate(mode, time_limit): graal_common.deps.svm + {
+    run: [
+      ['mx', '--env', 'ce', '--components=env.COMPONENTS,nju', '--native-images=', 'gate', '--no-warning-as-error', '--tags', 'build,truffle_isolate_' + mode + '_unittest'],
+    ],
+    components+: ["truffle"],
+    notify_groups: ["truffle"],
+    timelimit: time_limit,
+  },
+
+  # Truffle Isolate Maven Tests
+  truffle_unchained_isolate(mode, os, time_limit): graal_common.deps.svm + {
+    local gate_name =
+      if mode == 'internal' then 'Vm: Truffle Unchained Maven Polyglot Internal Isolate'
+      else if mode == 'external' then 'Vm: Truffle Unchained Maven Polyglot External Isolate'
+      else error 'Unsupported gate_mode: ' + mode,
+    local imports = '/tools,/graal-js,/wasm,/sulong,/graalpython',
+    mx_cmd:: ['mx', '--env', 'ce', '--polyglot-isolates=true', '--dynamicimports', imports],
+    components+: ["truffle"],
+    notify_groups: ["truffle"],
+    timelimit: time_limit,
+    run: [
+      ['mx', 'sforceimports'],
+      self.mx_cmd + ['gate', '--no-warning-as-error', '-o', '--tags', 'build'],
+      self.mx_cmd + ['gate', '-o', '-t', 'Vm: Truffle Unchained Maven Deploy Local'],
+      self.mx_cmd + ['gate', '-o', '-t', gate_name],
+    ]
+  } + (
+     if (os == 'windows') then
+       graal_common.deps.sulong + {
+         downloads+: {
+           GRADLE_JAVA_HOME: graal_common.jdks_data['oraclejdk21'],
+         },
+       }
+     else
+       vm_common.maven_download_unix
+  ),
+
+  local truffle_isolate_modes = ['internal', 'external'],
+  local truffle_isolate_platforms = [
+    { os: 'linux', arch: 'amd64', build_type: 'full_vm_build', build_version: false },
+    { os: 'darwin', arch: 'aarch64', build_type: 'full_vm_build', build_version: false },
+    { os: 'windows', arch: 'amd64', build_type: 'svm_common', build_version: true }
+  ],
+  local truffle_isolate_unittest_jobs = [
+    (
+      local explicit_target = if (platform.os == 'windows' || platform.os == 'darwin') then 'daily' else 'gate';
+      local explicit_capabilities = if platform.os == 'windows' && mode == 'external' then { capabilities: ['windows_11'] } else {};
+      local timelimit =
+        # Darwin builders are highly affected by system load; gate times vary from ~13 minutes up to ~124 minutes.
+        if platform.os == 'darwin' then  '3:15:00'
+        else if platform.os == 'windows' then '2:30:00'
+        else '2:00:00';
+      local jdk_hint = if platform.os == 'windows' then 'Latest' else null;
+      vm.vm_java_Latest + vm_common.vm_base(platform.os, platform.arch, explicit_target, jdk_hint=jdk_hint)  + self.truffleisolate_gate(mode, timelimit) + explicit_capabilities + {
+        name: explicit_target + '-vm-truffleisolate-' + mode + '-latest-' + platform.os + '-' + platform.arch,
+      }
+    )
+    for mode in truffle_isolate_modes
+    for platform in truffle_isolate_platforms
+  ],
+  local truffle_isolate_maven_jobs = [
+    (
+      local explicit_target = 'weekly';
+      local explicit_capabilities = if platform.os == 'windows' && mode == 'external' then { capabilities: ['windows_11'] } else {};
+      local timelimit = '4:00:00';
+      local jdk_hint = if platform.os == 'windows' then 'Latest' else null;
+      vm.vm_java_Latest + vm_common.vm_base(platform.os, platform.arch, explicit_target, jdk_hint=jdk_hint)  + self.truffle_unchained_isolate(mode, platform.os, timelimit) + explicit_capabilities + {
+        name: explicit_target + '-vm-ce-truffle-maven-isolate-' + mode + '-latest-' + platform.os + '-' + platform.arch,
+      }
+    )
+    for mode in truffle_isolate_modes
+    for platform in truffle_isolate_platforms
+  ],
+
   local builds = [
     vm.vm_java_Latest + graal_common.deps.svm + graal_common.deps.sulong + graal_common.deps.graalpy + vm.custom_vm + vm_common.vm_base('linux', 'amd64', 'tier3') + {
      run+: [
@@ -52,7 +127,7 @@ local graal_common = import '../../../ci/ci_common/common.jsonnet';
     vm.vm_java_Latest + vm_common.vm_base('linux', 'amd64', 'tier3')  + truffle_native_tck,
     vm.vm_java_Latest + vm_common.vm_base('linux', 'amd64', 'tier3')  + truffle_native_tck_wasm,
     vm.vm_java_Latest + vm_common.vm_base('linux', 'amd64', 'tier3')  + truffle_maven_downloader,
-  ],
+  ] + truffle_isolate_unittest_jobs + truffle_isolate_maven_jobs,
 
   builds: utils.add_defined_in(builds, std.thisFile),
 }

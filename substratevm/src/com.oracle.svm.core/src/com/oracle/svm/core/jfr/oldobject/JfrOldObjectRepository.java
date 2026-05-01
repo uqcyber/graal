@@ -26,15 +26,12 @@
 
 package com.oracle.svm.core.jfr.oldobject;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
-
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jfr.JfrBuffer;
@@ -46,12 +43,14 @@ import com.oracle.svm.core.jfr.JfrNativeEventWriterData;
 import com.oracle.svm.core.jfr.JfrNativeEventWriterDataAccess;
 import com.oracle.svm.core.jfr.JfrRepository;
 import com.oracle.svm.core.jfr.JfrType;
-import com.oracle.svm.core.jfr.SubstrateJVM;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdEpoch;
 import com.oracle.svm.core.locks.VMMutex;
+import com.oracle.svm.shared.Uninterruptible;
 
 public final class JfrOldObjectRepository implements JfrRepository {
     private static final int OBJECT_DESCRIPTION_MAX_LENGTH = 100;
+    private static final String ELLIPSIS = "...";
+    private static final int ELLIPSIS_LENGTH = 3;
 
     private final VMMutex mutex;
     private final JfrOldObjectEpochData epochData0;
@@ -69,7 +68,12 @@ public final class JfrOldObjectRepository implements JfrRepository {
         epochData1.teardown();
     }
 
-    @Uninterruptible(reason = "Locking without transition and result is only valid until epoch changes.", callerMustBe = true)
+    public void reset() {
+        epochData0.clear(false);
+        epochData1.clear(false);
+    }
+
+    @Uninterruptible(reason = "Locking without transition and result is only valid until epoch changes. Accesses a native JFR buffer.", callerMustBe = true)
     public long serializeOldObject(Object obj) {
         mutex.lockNoTransition();
         try {
@@ -84,7 +88,7 @@ public final class JfrOldObjectRepository implements JfrRepository {
             JfrNativeEventWriterDataAccess.initialize(data, epochData.buffer);
             JfrNativeEventWriter.putLong(data, id);
             JfrNativeEventWriter.putLong(data, pointer.rawValue());
-            JfrNativeEventWriter.putLong(data, SubstrateJVM.getTypeRepository().getClassId(obj.getClass()));
+            JfrNativeEventWriter.putClass(data, obj.getClass());
             writeDescription(obj, data);
             JfrNativeEventWriter.putLong(data, 0L); // GC root
             if (!JfrNativeEventWriter.commit(data)) {
@@ -101,7 +105,7 @@ public final class JfrOldObjectRepository implements JfrRepository {
         }
     }
 
-    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    @Uninterruptible(reason = "Accesses a native JFR buffer.", callerMustBe = true)
     private static void writeDescription(Object obj, JfrNativeEventWriterData data) {
         if (obj instanceof ThreadGroup group) {
             writeDescription(data, "Thread Group: ", group.getName());
@@ -115,7 +119,7 @@ public final class JfrOldObjectRepository implements JfrRepository {
         }
     }
 
-    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    @Uninterruptible(reason = "Accesses a native JFR buffer.", callerMustBe = true)
     private static void writeDescription(JfrNativeEventWriterData data, String prefix, String text) {
         if (text == null || text.isEmpty()) {
             JfrNativeEventWriter.putString(data, text);
@@ -125,28 +129,34 @@ public final class JfrOldObjectRepository implements JfrRepository {
         Pointer buffer = UnsafeStackValue.get(OBJECT_DESCRIPTION_MAX_LENGTH);
         Pointer bufferEnd = buffer.add(OBJECT_DESCRIPTION_MAX_LENGTH);
 
-        int prefixLength = UninterruptibleUtils.String.modifiedUTF8Length(prefix, false);
-        int textLength = UninterruptibleUtils.String.modifiedUTF8Length(text, false);
-        assert prefixLength < OBJECT_DESCRIPTION_MAX_LENGTH - 3;
+        int prefixLength = UninterruptibleUtils.String.utf8Length(prefix);
+        assert prefixLength < OBJECT_DESCRIPTION_MAX_LENGTH - ELLIPSIS_LENGTH;
 
-        boolean tooLong = false;
-        int totalLength = prefixLength + textLength;
-        if (totalLength > OBJECT_DESCRIPTION_MAX_LENGTH) {
-            totalLength = OBJECT_DESCRIPTION_MAX_LENGTH;
-            textLength = OBJECT_DESCRIPTION_MAX_LENGTH - prefixLength - 3;
-            tooLong = true;
+        int textLength = UninterruptibleUtils.String.utf8Length(text);
+        int maxTextLength = OBJECT_DESCRIPTION_MAX_LENGTH - prefixLength;
+        boolean tooLong = textLength > maxTextLength;
+        int maxEncodedTextLength = tooLong ? maxTextLength - ELLIPSIS_LENGTH : maxTextLength;
+
+        Pointer pos = UninterruptibleUtils.String.toUTF8(prefix, buffer, bufferEnd);
+        int encodedTextLength = 0;
+        for (int index = 0; index < text.length();) {
+            int codePoint = UninterruptibleUtils.String.codePointAt(text, index);
+            int byteLength = UninterruptibleUtils.String.utf8Length(codePoint);
+            int remaining = maxEncodedTextLength - encodedTextLength;
+            if (remaining < byteLength) {
+                break;
+            }
+            pos = UninterruptibleUtils.String.writeUTF8(pos, codePoint);
+            index += UninterruptibleUtils.String.charCount(codePoint);
+            encodedTextLength += byteLength;
         }
-
-        Pointer pos = UninterruptibleUtils.String.toModifiedUTF8(prefix, buffer, bufferEnd, false);
-        pos = UninterruptibleUtils.String.toModifiedUTF8(text, textLength, pos, bufferEnd, false, null);
 
         if (tooLong) {
-            pos.writeByte(0, (byte) '.');
-            pos.writeByte(1, (byte) '.');
-            pos.writeByte(2, (byte) '.');
+            pos = UninterruptibleUtils.String.toUTF8(ELLIPSIS, pos, bufferEnd);
+            encodedTextLength += ELLIPSIS_LENGTH;
         }
 
-        JfrNativeEventWriter.putString(data, buffer, totalLength);
+        JfrNativeEventWriter.putString(data, buffer, prefixLength + encodedTextLength);
     }
 
     @Override

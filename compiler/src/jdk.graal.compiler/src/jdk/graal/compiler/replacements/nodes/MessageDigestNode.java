@@ -121,7 +121,7 @@ public abstract class MessageDigestNode extends MemoryKillStubIntrinsicNode {
 
         @Override
         public void emitIntrinsic(NodeLIRBuilderTool gen) {
-            gen.getLIRGeneratorTool().emitSha1ImplCompress(gen.operand(buf), gen.operand(state));
+            gen.getLIRGeneratorTool().emitSha1ImplCompress(runtimeCheckedCPUFeatures, gen.operand(buf), gen.operand(state));
         }
 
         @NodeIntrinsic
@@ -173,7 +173,7 @@ public abstract class MessageDigestNode extends MemoryKillStubIntrinsicNode {
 
         @Override
         public void emitIntrinsic(NodeLIRBuilderTool gen) {
-            gen.getLIRGeneratorTool().emitSha256ImplCompress(gen.operand(buf), gen.operand(state));
+            gen.getLIRGeneratorTool().emitSha256ImplCompress(runtimeCheckedCPUFeatures, gen.operand(buf), gen.operand(state));
         }
 
         @NodeIntrinsic

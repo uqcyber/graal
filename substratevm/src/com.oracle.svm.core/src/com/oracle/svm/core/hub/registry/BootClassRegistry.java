@@ -38,7 +38,10 @@ import java.nio.file.ProviderNotFoundException;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.RuntimeClassLoading.ClassDefinitionInfo;
+import com.oracle.svm.core.hub.crema.CremaSupport;
+import com.oracle.svm.core.jdk.BootLoaderClassPathSupport;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
@@ -102,31 +105,43 @@ public final class BootClassRegistry extends AbstractRuntimeClassRegistry {
     // synchronized until parallel class loading is implemented (GR-62338)
     @Override
     public synchronized Class<?> doLoadClass(Symbol<Type> type) {
-        // Only looking into the jimage for now. There could be appended elements.
-        // see GraalServices.getSavedProperty("jdk.boot.class.path.append")
         String pkg = packageFromType(type);
-        if (pkg == null) {
-            return null;
-        }
         try {
-            String moduleName = ClassRegistries.getBootModuleForPackage(pkg);
-            if (moduleName == null) {
+            byte[] bytes = pkg == null ? null : loadFromJImage(type, pkg);
+            if (bytes == null) {
+                /* Preserve boot class path append semantics by looking there after the jimage. */
+                bytes = loadFromAppendedBootClassPathBytes(type);
+            }
+            if (bytes == null) {
                 return null;
             }
-            FileSystem fileSystem = getFileSystem();
-            if (fileSystem == null) {
-                return null;
-            }
-            var jrtTypePath = TypeSymbols.typeToName(type);
-            Path classPath = fileSystem.getPath("/modules/" + moduleName + "/" + jrtTypePath + ".class");
-            if (!Files.exists(classPath)) {
-                return null;
-            }
-            byte[] bytes = Files.readAllBytes(classPath);
-            return defineClass(type, bytes, 0, bytes.length, ClassDefinitionInfo.EMPTY);
+            Class<?> loaded = defineClass(type, bytes, 0, bytes.length, ClassDefinitionInfo.EMPTY);
+            CremaSupport.singleton().recordLoadingConstraint(type, DynamicHub.fromClass(loaded), null);
+            return loaded;
         } catch (IOException e) {
             throw VMError.shouldNotReachHere(e);
         }
+    }
+
+    private byte[] loadFromJImage(Symbol<Type> type, String pkg) throws IOException {
+        String moduleName = ClassRegistries.getBootModuleForPackage(pkg);
+        if (moduleName == null) {
+            return null;
+        }
+        FileSystem fileSystem = getFileSystem();
+        if (fileSystem == null) {
+            return null;
+        }
+        var typeName = TypeSymbols.typeToName(type);
+        Path classPath = fileSystem.getPath("/modules/" + moduleName + "/" + typeName + ".class");
+        if (!Files.exists(classPath)) {
+            return null;
+        }
+        return Files.readAllBytes(classPath);
+    }
+
+    private static byte[] loadFromAppendedBootClassPathBytes(Symbol<Type> type) throws IOException {
+        return BootLoaderClassPathSupport.getResourceBytes(TypeSymbols.typeToName(type) + ".class");
     }
 
     private static String packageFromType(Symbol<Type> type) {

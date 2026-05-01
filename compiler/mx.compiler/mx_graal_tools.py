@@ -23,7 +23,6 @@
 # questions.
 #
 
-from __future__ import print_function
 
 import os
 import re
@@ -109,7 +108,7 @@ def launch_netbeans_app(fullname, distname, mxname, args, launch_message=None):
         return min_version_spec <= version < next_version_spec
 
     jdkhome = None
-    if not '--jdkhome' in args:
+    if '--jdkhome' not in args:
         def _do_not_abort(msg):
             pass
 
@@ -154,7 +153,7 @@ def get_hsdis_lib() -> str:
     hsdis_lib_path = hsdis_lib.get_path(resolve=True)
     hsdis_lib_files = os.listdir(hsdis_lib_path)
     if len(hsdis_lib_files) != 1:
-        mx.abort("hsdis library '{}' does not contain a single file: {}".format(hsdis_lib_name, hsdis_lib_files))
+        mx.abort(f"hsdis library '{hsdis_lib_name}' does not contain a single file: {hsdis_lib_files}")
     hsdis_lib_file = join(hsdis_lib_path, hsdis_lib_files[0])
     return hsdis_lib_file
 
@@ -192,11 +191,10 @@ def hsdis(args):
             copyToDir = join(base, 'lib')
         elif mx.get_os() == 'windows':
             copyToDir = join(base, 'bin')
+        elif jdk.javaCompliance >= '11':
+            copyToDir = join(base, 'lib')
         else:
-            if jdk.javaCompliance >= '11':
-                copyToDir = join(base, 'lib')
-            else:
-                copyToDir = join(base, 'lib', mx.get_arch())
+            copyToDir = join(base, 'lib', mx.get_arch())
 
     if exists(copyToDir):
         dest = join(copyToDir, libname)
@@ -204,13 +202,13 @@ def hsdis(args):
             import filecmp
             # Only issue warning if existing lib is different
             if filecmp.cmp(hsdis_lib_file, dest) is False:
-                mx.warn('Not overwriting existing {} with {}'.format(dest, hsdis_lib_file))
+                mx.warn(f'Not overwriting existing {dest} with {hsdis_lib_file}')
         else:
             try:
                 shutil.copy(hsdis_lib_file, dest)
-                mx.log('Copied {} to {}'.format(hsdis_lib_file, dest))
-            except IOError as e:
-                mx.warn('Could not copy {} to {}: {}'.format(hsdis_lib_file, dest, str(e)))
+                mx.log(f'Copied {hsdis_lib_file} to {dest}')
+            except OSError as e:
+                mx.warn(f'Could not copy {hsdis_lib_file} to {dest}: {e}')
 
 def distool(args):
     """disassemble annotated machine code embedded in text files
@@ -245,9 +243,9 @@ def hcfdis(args, cp=None):
 
     if args.map is not None:
         addressRE = re.compile(r'0[xX]([A-Fa-f0-9]+)')
-        with open(args.map) as fp:
+        with open(args.map, encoding='utf-8') as fp:
             lines = fp.read().splitlines()
-        symbols = dict()
+        symbols = {}
         for l in lines:
             addressAndSymbol = l.split(' ', 1)
             if len(addressAndSymbol) == 2:
@@ -256,7 +254,7 @@ def hcfdis(args, cp=None):
                     address = _long(address, 16)
                     symbols[address] = symbol
         for f in args.files:
-            with open(f) as fp:
+            with open(f, encoding='utf-8') as fp:
                 lines = fp.read().splitlines()
             updated = False
             for i in range(0, len(lines)):
@@ -271,7 +269,7 @@ def hcfdis(args, cp=None):
                         lines[i] = l
             if updated:
                 mx.log('updating ' + f)
-                with open('new_' + f, "w") as fp:
+                with open('new_' + f, "w", encoding='utf-8') as fp:
                     for l in lines:
                         print(l, file=fp)
 

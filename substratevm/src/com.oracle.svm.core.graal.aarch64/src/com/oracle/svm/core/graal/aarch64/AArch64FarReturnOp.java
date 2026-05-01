@@ -31,9 +31,9 @@ import static jdk.vm.ci.aarch64.AArch64.lr;
 import static jdk.vm.ci.code.ValueUtil.asRegister;
 
 import com.oracle.svm.core.CalleeSavedRegisters;
-import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.SubstrateOptions;
 
+import com.oracle.svm.core.SubstrateTarget;
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.aarch64.AArch64Address;
 import jdk.graal.compiler.asm.aarch64.AArch64Assembler;
@@ -66,8 +66,9 @@ public final class AArch64FarReturnOp extends AArch64BlockEndOp {
 
     @Override
     public void emitCode(CompilationResultBuilder crb, AArch64MacroAssembler masm) {
-        assert sp.getPlatformKind().getSizeInBytes() == FrameAccess.wordSize() && FrameAccess.wordSize() == Long.BYTES : Assertions.errorMessage(sp.getPlatformKind().getSizeInBytes(),
-                        FrameAccess.wordSize());
+        int wordSize = SubstrateTarget.getWordSize();
+        assert sp.getPlatformKind().getSizeInBytes() == wordSize && wordSize == Long.BYTES //
+                        : Assertions.errorMessage(sp.getPlatformKind().getSizeInBytes(), wordSize);
 
         if (!SubstrateOptions.PreserveFramePointer.getValue() && !fromMethodWithCalleeSavedRegisters) {
             /* No need to restore anything in the frame of the new stack pointer. */
@@ -97,7 +98,7 @@ public final class AArch64FarReturnOp extends AArch64BlockEndOp {
         /*
          * The callee frame will always reserve space for the return address and frame pointer.
          */
-        int minCalleeFrameSize = FrameAccess.wordSize() * 2;
+        int minCalleeFrameSize = wordSize * 2;
         /*
          * Restoring the callee saved registers may overwrite the register that holds the new
          * instruction pointer (ip). We therefore leverage a scratch register.

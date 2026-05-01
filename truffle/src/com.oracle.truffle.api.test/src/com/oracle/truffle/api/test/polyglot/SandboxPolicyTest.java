@@ -159,9 +159,8 @@ public class SandboxPolicyTest {
 
     private static boolean supportsSandboxInstrument() {
         try (Engine engine = Engine.create()) {
-            // Polyglot sandbox limits can only be used with runtimes that support enterprise
-            // extensions.
-            return engine.getInstruments().containsKey("sandbox") && TruffleTestAssumptions.isEnterpriseRuntime();
+            // Polyglot sandbox limits can only be used with optimized runtime.
+            return engine.getInstruments().containsKey("sandbox") && TruffleTestAssumptions.isOptimizingRuntime();
         }
     }
 
@@ -229,6 +228,30 @@ public class SandboxPolicyTest {
                 throw iae;
             }
         }
+    }
+
+    @Test
+    public void testIsolateSpecificOptionsRequireIsolation() {
+        // Run only for TRUSTED policy, no need to repeat this with other policies
+        Assume.assumeTrue(configuration.sandboxPolicy == SandboxPolicy.TRUSTED);
+        // Ensure isolation is not implicitly enabled
+        TruffleTestAssumptions.assumeNoIsolateEncapsulation();
+
+        assertIsolateSpecificOptionRejectedWithoutSpawnIsolate("engine.HostCallStackHeadRoom", "256KB");
+        assertIsolateSpecificOptionRejectedWithoutSpawnIsolate("engine.IsolateOption.MaxHeapSize", "128MB");
+        assertIsolateSpecificOptionRejectedWithoutSpawnIsolate("engine.IsolateMemoryProtection", "true");
+        assertIsolateSpecificOptionRejectedWithoutSpawnIsolate("engine.UntrustedCodeMitigation", "software");
+        assertIsolateSpecificOptionRejectedWithoutSpawnIsolate("engine.MaxIsolateMemory", "128MB");
+    }
+
+    private static void assertIsolateSpecificOptionRejectedWithoutSpawnIsolate(String optionName, String optionValue) {
+        AbstractPolyglotTest.assertFails(() -> {
+            Engine engine = Engine.newBuilder(TrustedLanguage.ID).allowExperimentalOptions(true).option(optionName, optionValue).build();
+            engine.close();
+        },
+                        IllegalArgumentException.class, (iae) -> {
+                            assertTrue(iae.getMessage().contains("The isolated heap is not enabled, but isolate specific option " + optionName + " is set."));
+                        });
     }
 
     private Engine.Builder newEngineWithIsolateOptions(String... permittedLanguages) {

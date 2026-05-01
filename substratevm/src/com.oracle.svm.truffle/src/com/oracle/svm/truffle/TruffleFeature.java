@@ -107,6 +107,8 @@ import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
+import org.graalvm.word.Pointer;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
@@ -114,7 +116,9 @@ import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.UninterruptibleAnnotationUtils;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
+import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
@@ -122,8 +126,9 @@ import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jdk.VectorAPIEnabled;
-import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.stack.JavaStackWalker;
+import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.graal.RuntimeCompilationSupport;
 import com.oracle.svm.graal.hosted.runtimecompilation.CallTreeInfo;
@@ -137,8 +142,14 @@ import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.substitute.DeletedElementException;
+import com.oracle.svm.shared.AlwaysInline;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.StringUtil;
@@ -194,6 +205,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * Feature that enables compilation of Truffle ASTs to machine code. This feature requires
  * {@link SubstrateTruffleRuntime} to be set as {@link TruffleRuntime}.
  */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public class TruffleFeature implements InternalFeature {
 
     @Override
@@ -1093,16 +1105,8 @@ public class TruffleFeature implements InternalFeature {
          * Please keep this code in sync with the HotSpot configuration in
          * TruffleCommunityCompilerConfiguration.
          */
-        if (hosted && HostInliningPhase.Options.TruffleHostInlining.getValue(HostedOptionValues.singleton()) && suites.getHighTier() instanceof HighTier) {
-            SubstrateHostInliningPhase hostInliningPhase = new SubstrateHostInliningPhase(CanonicalizerPhase.create());
-            var position = suites.getHighTier().findPhase(SubstrateOutlineBytecodeHandlerPhase.class);
-            if (position != null) {
-                // Insert after SubstrateOutlineBytecodeHandlerPhase to allow outlining of the
-                // bytecode handler invocations
-                position.add(hostInliningPhase);
-            } else {
-                suites.getHighTier().prependPhase(hostInliningPhase);
-            }
+        if (hosted && HostInliningPhase.Options.TruffleHostInlining.getValue(HostedOptionValues.singleton().get()) && suites.getHighTier() instanceof HighTier) {
+            suites.getHighTier().prependPhase(new SubstrateHostInliningPhase(CanonicalizerPhase.create()));
         }
         /*
          * On HotSpot, the InsertGuardFencesPhase is inserted into the mid-tier depending on the
@@ -1112,6 +1116,18 @@ public class TruffleFeature implements InternalFeature {
          */
         if (!hosted && suites.getMidTier().findPhase(InsertGuardFencesPhase.class, true) == null) {
             suites.getMidTier().appendPhase(new InsertGuardFencesPhase());
+        }
+    }
+}
+
+final class HasStackSpaceCheck implements Predicate<Class<?>> {
+    @Override
+    public boolean test(Class<?> aClass) {
+        try {
+            aClass.getDeclaredMethod("ensureStackSpace", long.class);
+            return true;
+        } catch (NoSuchMethodException nsm) {
+            return false;
         }
     }
 }
@@ -1152,6 +1168,18 @@ final class Target_com_oracle_truffle_runtime_OptimizedCallTarget {
         @Override
         public Object transform(Object receiver, Object originalValue) {
             return true;
+        }
+    }
+
+    @Substitute
+    @TargetElement(onlyWith = HasStackSpaceCheck.class)
+    @AlwaysInline(value = "Performance critical")
+    private static void ensureStackSpace(long stackSpace) {
+        if (stackSpace > 0) {
+            Pointer topSP = KnownIntrinsics.readStackPointer().subtract(Word.unsigned(stackSpace));
+            if (StackOverflowCheck.singleton().getStackOverflowBoundary().aboveThan(topSP)) {
+                StackOverflowCheck.singleton().throwStackOverflowError();
+            }
         }
     }
 }

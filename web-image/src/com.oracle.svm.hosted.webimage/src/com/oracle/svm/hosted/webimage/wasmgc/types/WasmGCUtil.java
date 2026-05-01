@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@ import java.util.List;
 
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.meta.SubstrateMethodRefStamp;
 import com.oracle.svm.hosted.webimage.wasm.ast.FunctionTypeDescriptor;
 import com.oracle.svm.hosted.webimage.wasm.ast.TypeUse;
 import com.oracle.svm.hosted.webimage.wasm.ast.id.WasmId;
@@ -244,12 +245,8 @@ public class WasmGCUtil extends WasmUtil {
     }
 
     @Override
-    protected JavaKind kindForStamp(Stamp stamp) {
-        if (stamp.isNonObjectPointerStamp()) {
-            throw GraalError.shouldNotReachHere("Pointer stamps are not supported in the WasmGC backend: " + stamp);
-        }
-
-        return super.kindForStamp(stamp);
+    protected ResolvedJavaType javaTypeForNonObjectPointerStamp(AbstractPointerStamp stamp) {
+        throw GraalError.shouldNotReachHere("Pointer stamps are not supported in the WasmGC backend: " + stamp);
     }
 
     @Override
@@ -275,6 +272,8 @@ public class WasmGCUtil extends WasmUtil {
     public JavaKind memoryKind(Stamp accessStamp) {
         if (accessStamp instanceof AbstractObjectStamp) {
             return JavaKind.Object;
+        } else if (accessStamp instanceof SubstrateMethodRefStamp) {
+            return getMethodPointerKind();
         } else if (accessStamp instanceof AbstractPointerStamp) {
             throw GraalError.unimplemented("AbstractPointerStamp: " + accessStamp);
         } else {

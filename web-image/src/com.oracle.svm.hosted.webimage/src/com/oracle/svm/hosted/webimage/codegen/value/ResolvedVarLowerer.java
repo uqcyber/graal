@@ -46,7 +46,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 public class ResolvedVarLowerer {
 
     public static void lower(ResolvedVar var, CodeGenTool codeGenTool) {
-        if (WebImageOptions.GenerateSourceMap.getValue(HostedOptionValues.singleton())) {
+        if (WebImageOptions.GenerateSourceMap.getValue(HostedOptionValues.singleton().get())) {
             ((JSCodeBuffer) codeGenTool.getCodeBuffer()).markSymbol(getVarName(var.getOrig(), ((ValueNode) var.getOrig()).graph().method(), var.getName()));
         }
         codeGenTool.genResolvedVarAccess(var.getName());

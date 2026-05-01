@@ -575,7 +575,14 @@ final class PolyglotExceptionImpl {
     }
 
     static Iterator<Object> createStackFrameIterator(PolyglotExceptionImpl impl) {
-        Object stackTrace = impl.polyglot.getRootImpl().getEmbedderExceptionStackTrace(impl.engine, impl.exception, impl.isInternalError() || impl.isHostException());
+        Object stackTrace;
+        boolean fromHost = impl.isInternalError() || impl.isHostException();
+        if (EngineAccessor.ISOLATE.isIsolateHost()) {
+            // Delegate to isolate to get the exception stack trace
+            stackTrace = EngineAccessor.ISOLATE.getEmbedderExceptionStackTrace(impl.engine, impl.exception, fromHost);
+        } else {
+            stackTrace = EngineAccessor.EXCEPTION.getEmbedderStackTrace(impl.exception, impl.engine, fromHost);
+        }
         return new FrameGuestObjectIterator(impl.polyglot.getAPIAccess(), impl, stackTrace);
     }
 

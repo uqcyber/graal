@@ -167,5 +167,7 @@ public abstract class AbstractImage {
 
     public abstract long getImageHeapSize();
 
+    public abstract long getCodeSize();
+
     public abstract ObjectFile getObjectFile();
 }

@@ -46,16 +46,20 @@ import com.oracle.svm.core.RegisterDumper;
 import com.oracle.svm.core.ReservedRegisters;
 import com.oracle.svm.core.SubstrateControlFlowIntegrity;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateTargetDescription;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.amd64.AMD64CPUFeatureAccess;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.cpufeature.RuntimeCPUFeatureCheckImpl;
 import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.graal.meta.SharedConstantReflectionProvider;
 import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.meta.SharedField;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.Duplicable;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -77,6 +81,7 @@ import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Duplicable.class, other = PartiallyLayerAware.class)
 final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
 
     @Fold
@@ -86,7 +91,7 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public static void createAndRegister() {
-        SubstrateTargetDescription target = ConfigurationValues.getTarget();
+        SubstrateTarget target = SubstrateTarget.singleton();
         SubstrateRegisterConfig registerConfig = new SubstrateAMD64RegisterConfig(SubstrateRegisterConfig.ConfigKind.NORMAL, null, target, SubstrateOptions.PreserveFramePointer.getValue());
 
         Register frameRegister = registerConfig.getFrameRegister();
@@ -157,7 +162,7 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
         int calleeSavedRegistersSizeInBytes = offset;
 
         int saveAreaOffsetInFrame = -(FrameAccess.returnAddressSize() +
-                        FrameAccess.wordSize() + /* Space is always reserved for rbp. */
+                        target.wordSize + /* Space is always reserved for rbp. */
                         calleeSavedRegistersSizeInBytes);
 
         if (rbpCalleeSaved) {
@@ -466,7 +471,7 @@ final class AMD64CalleeSavedRegisters extends CalleeSavedRegisters {
         private AMD64Address getFeatureMapAddress() {
             JavaConstant object = crb.getSnippetReflection().forObject(RuntimeCPUFeatureCheckImpl.currentLayer());
             int fieldOffset = fieldOffset(RuntimeCPUFeatureCheckImpl.getMaskField(crb.getMetaAccess()));
-            GraalError.guarantee(ConfigurationValues.getTarget().inlineObjects, "Dynamic feature check for callee saved registers requires inlined objects");
+            GraalError.guarantee(SubstrateTarget.singleton().inlineObjects, "Dynamic feature check for callee saved registers requires inlined objects");
             Register heapBase = ReservedRegisters.singleton().getHeapBaseRegister();
             GraalError.guarantee(heapBase != null, "Heap base register must not be null");
             return new AMD64Address(heapBase, Register.None, Stride.S1, displacement(object, crb.getConstantReflection()) + fieldOffset,

@@ -109,38 +109,38 @@ suite = {
       "license": ["MIT"],
     },
 
-    "ASM_9.7.1": {
-      "digest": "sha512:4767b01603dad5c79cc1e2b5f3722f72b1059d928f184f446ba11badeb1b381b3a3a9a801cc43d25d396df950b09d19597c73173c411b1da890de808b94f1f50",
-      "sourceDigest": "sha512:d7c0de5912d04949a3d06cad366ff35a877da2682d9c74579625d62686032ea9349aff6102b17f92e9ec7eb4e9b1cd906b649c6a3ac798bfb9e31e5425de009d",
+    "ASM_9.8": {
+      "digest": "sha512:cbd250b9c698a48a835e655f5f5262952cc6dd1a434ec0bc3429a9de41f2ce08fcd3c4f569daa7d50321ca6ad1d32e131e4199aa4fe54bce9e9691b37e45060e",
+      "sourceDigest": "sha512:329663d73f165c7e006a20dd24bb6f5b4ac1079097d83c91770fd9fc537655a384c4cc40e5835f800d6453d393b6adbcd51c6eab6fe90cd8e1e8e87b9b513cc4",
       "maven": {
         "groupId": "org.ow2.asm",
         "artifactId": "asm",
-        "version": "9.7.1",
+        "version": "9.8",
       },
       "license": "BSD-new",
     },
 
-    "ASM_TREE_9.7.1": {
-      "digest": "sha512:e55008c392fdd35e95d3404766b12dd4b46e13d5c362fcd0ab42a65751a82737eaf0ebc857691d1916190d34407adfde4437615d69c278785416fd911e00978d",
+    "ASM_TREE_9.8": {
+      "digest": "sha512:4493f573d9f0cfc8837db9be25a8b61a825a06aafc0e02f0363875584ff184a5a14600e53793c09866300859e44f153faffd0e050de4a7fba1a63b5fb010a9a7",
       "sourceDigest": "sha512:3cea80bc7b55679dfa3d2065c6cb6951007cc7817082e9fcf4c5e3cdc073c22eddf7c7899cff60b1092049ec9038e8d3aa9a8828ef731739bda8b5afcec30e86",
       "maven": {
         "groupId": "org.ow2.asm",
         "artifactId": "asm-tree",
-        "version": "9.7.1",
+        "version": "9.8",
       },
-      "dependencies" : ["ASM_9.7.1"],
+      "dependencies" : ["ASM_9.8"],
       "license": "BSD-new",
     },
 
-    "ASM_COMMONS_9.7.1": {
-      "digest": "sha512:81daf5765e387e6aeec5d45c4b9e4e1b471fb4f350931e5a214845c7c657a2142768f6902765e49c0ce2c595962e5d008883cba2e4a40c4bdce8f2e92518d2db",
+    "ASM_COMMONS_9.8": {
+      "digest": "sha512:d2add10e25416b701bd84651b42161e090df2f32940de5e06e0e2a41c6106734db2fe5136f661d8a8af55e80dc958bc7b385a1004f0ebe550828dfa1e9d70d41",
       "sourceDigest": "sha512:dea8a2f871024210980821dc06c6796a3fca58293f650614275a086aaf9e2f45066a128f434dadabb85162c52796e99c863a6838e851ec02d6d97c603ed5a6d9",
       "maven": {
         "groupId": "org.ow2.asm",
         "artifactId": "asm-commons",
-        "version": "9.7.1",
+        "version": "9.8",
       },
-      "dependencies" : ["ASM_9.7.1", "ASM_TREE_9.7.1"],
+      "dependencies" : ["ASM_9.8", "ASM_TREE_9.8"],
       "license": "BSD-new",
     },
 
@@ -235,6 +235,7 @@ suite = {
       ],
       "requires" : [
         "java.logging",
+        "jdk.management",
         "jdk.unsupported", # sun.misc.Unsafe
       ],
       "javaCompliance" : "17+",
@@ -290,6 +291,7 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [
         "sdk:POLYGLOT",
+        "sdk:NATIVEBRIDGE",
         "com.oracle.truffle.api.bytecode",
         "com.oracle.truffle.api.impl.asm",
       ],
@@ -302,9 +304,13 @@ suite = {
         "java.base" : [
           "jdk.internal.module",
           "jdk.internal.access",
+          "jdk.internal.misc",
         ],
       },
-      "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "annotationProcessors" : [
+        "sdk:NATIVEBRIDGE_PROCESSOR",
+        "TRUFFLE_DSL_PROCESSOR",
+      ],
       "checkstyle" : "com.oracle.truffle.api",
       "javaCompliance" : "17+",
       "workingSets" : "API,Truffle",
@@ -913,6 +919,45 @@ suite = {
       "workingSets" : "Truffle,Tools",
       "graalCompilerSourceEdition": "ignore",
     },
+    "com.oracle.truffle.sandbox": {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.api.exception",
+        "com.oracle.truffle.api.instrumentation",
+      ],
+      "requires" : [
+        "java.logging",
+        "java.management",
+        "jdk.management",
+      ],
+      "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "checkstyle" : "com.oracle.truffle.api",
+      "javaCompliance" : "17+",
+      "workingSets" : "Truffle,Tools",
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "com.oracle.truffle.sandbox.test": {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.api.test",
+        "com.oracle.truffle.api.instrumentation.test",
+        "TRUFFLE_TCK_TESTS",
+        "TRUFFLE_API",
+        "mx:JUNIT",
+      ],
+      "requires" : [
+        "java.logging",
+        "jdk.management",
+      ],
+      "checkstyle" : "com.oracle.truffle.dsl.processor",
+      "javaCompliance" : "17+",
+      "annotationProcessors" : ["TRUFFLE_DSL_PROCESSOR"],
+      "workingSets" : "API,Truffle,Test",
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
+    },
 
     "com.oracle.truffle.nfi" : {
       "subDir" : "src",
@@ -1374,13 +1419,13 @@ suite = {
         "linux" : {
           "<others>" : {
             "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-D_GNU_SOURCE"],
-            "ldlibs" : ["-ldl"],
+            "ldlibs" : ["-ldl", "-pthread"],
           },
         },
-        "<others>" : {
+        "darwin" : {
           "<others>" : {
-            "cflags" : ["-g", "-O3", "-Wall", "-Werror"],
-            "ldlibs" : ["-ldl"],
+            "cflags" : ["-g", "-O3", "-Wall", "-Werror", "-pthread"],
+            "ldlibs" : ["-ldl", "-pthread"],
           },
         },
       },
@@ -1452,9 +1497,9 @@ suite = {
       "javaCompliance" : "17+",
       "spotbugsIgnoresGenerated" : True,
       "shadedDependencies" : [
-        "truffle:ASM_9.7.1",
-        "truffle:ASM_TREE_9.7.1",
-        "truffle:ASM_COMMONS_9.7.1",
+        "truffle:ASM_9.8",
+        "truffle:ASM_TREE_9.8",
+        "truffle:ASM_COMMONS_9.8",
       ],
       "class" : "ShadedLibraryProject",
       "shade" : {
@@ -1735,7 +1780,6 @@ suite = {
         "uses" : [
           "com.oracle.truffle.api.impl.TruffleLocator",
           "com.oracle.truffle.runtime.TruffleTypes",
-          "com.oracle.truffle.runtime.EngineCacheSupport",
           "com.oracle.truffle.runtime.jfr.EventFactory.Provider",
           "com.oracle.truffle.runtime.FloodControlHandler",
           "org.graalvm.home.HomeFinder",
@@ -1755,7 +1799,6 @@ suite = {
         "com.oracle.truffle.runtime",
       ],
       "distDependencies" : [
-        "sdk:JNIUTILS",
         "TRUFFLE_API",
         "TRUFFLE_COMPILER",
       ],
@@ -1787,6 +1830,7 @@ suite = {
           "jdk.unsupported", # sun.misc.Unsafe
           "java.logging",
           "java.management",
+          "jdk.management",
           "java.sql", # java.sql.date java.sql.Time
           "org.graalvm.collections",
           "org.graalvm.nativeimage",
@@ -1821,6 +1865,7 @@ suite = {
 
           # Qualified exports
           "com.oracle.truffle.object to com.oracle.truffle.enterprise, org.graalvm.truffle.runtime, com.oracle.truffle.enterprise, org.graalvm.truffle.runtime.svm, com.oracle.truffle.enterprise.svm",
+          "com.oracle.truffle.polyglot.isolate to org.graalvm.truffle.runtime.svm",
           "com.oracle.truffle.object.enterprise to com.oracle.truffle.enterprise",
           # GR-64984: Exports to com.oracle.truffle.enterprise are only needed for jdk21.
         ],
@@ -1837,6 +1882,7 @@ suite = {
           "com.oracle.truffle.api.library.provider.EagerExportProvider",
           "com.oracle.truffle.api.instrumentation.provider.TruffleInstrumentProvider",
           "com.oracle.truffle.api.strings.provider.JCodingsProvider",
+          "org.graalvm.jniutils.JNIEntryPointProvider",
         ],
       },
 
@@ -1855,12 +1901,14 @@ suite = {
         "com.oracle.truffle.polyglot",
         "com.oracle.truffle.host",
         "com.oracle.truffle.api.staticobject",
+        "com.oracle.truffle.sandbox",
         "TRUFFLE_API_VERSION",
         "TRUFFLE_ATTACH_RESOURCES",
       ],
       "distDependencies" : [
         "sdk:COLLECTIONS",
-        "sdk:NATIVEIMAGE",
+        "sdk:JNIUTILS",
+        "sdk:NATIVEBRIDGE",
         "sdk:POLYGLOT"
       ],
       "description" : "Truffle is a multi-language framework for executing dynamic languages\nthat achieves high performance when combined with Graal.",
@@ -2286,6 +2334,7 @@ suite = {
          "com.oracle.truffle.api.bytecode.test",
          "com.oracle.truffle.api.object.test",
          "com.oracle.truffle.api.staticobject.test",
+         "com.oracle.truffle.sandbox.test",
        ],
        "exclude" : [
          "mx:HAMCREST",

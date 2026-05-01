@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.core.heap;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -31,10 +32,9 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.AlwaysInline;
+import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.Duplicable;
@@ -117,7 +117,7 @@ public class ReferenceAccessImpl implements ReferenceAccess {
     public UnsignedWord getMaxAddressSpaceSize() {
         int compressionShift = ReferenceAccess.singleton().getCompressEncoding().getShift();
         if (compressionShift > 0) {
-            int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+            int referenceSize = ObjectLayout.singleton().getReferenceSize();
             return Word.unsigned(1L << (referenceSize * Byte.SIZE)).shiftLeft(compressionShift);
         }
         // Assume that 48 bit is the maximum address space that can be used.

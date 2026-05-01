@@ -57,7 +57,7 @@ import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.WordFactory;
 
-import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
 import com.oracle.svm.core.jni.headers.JNIEnvironment;
 import com.oracle.svm.core.jni.headers.JNIJavaVM;
 import com.oracle.svm.core.jni.headers.JNIMethodId;

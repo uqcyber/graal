@@ -41,7 +41,7 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.svm.core.StaticFieldsSupport;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.VarHandleSupport;
 import com.oracle.svm.shared.util.VMError;
@@ -50,6 +50,9 @@ import com.oracle.svm.hosted.FeatureImpl.BeforeCompilationAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedUniverse;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.shared.util.ReflectionUtil;
 
@@ -98,8 +101,10 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * shift.
  */
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class VarHandleFeature implements InternalFeature {
 
+    @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
     class VarHandleSupportImpl extends VarHandleSupport {
         @Override
         protected ResolvedJavaField findVarHandleField(CoreProviders providers, JavaConstant varHandleConstant, boolean guaranteeUnsafeAccessed) {

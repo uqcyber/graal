@@ -38,10 +38,10 @@ import com.oracle.svm.core.BuildPhaseProvider.AfterCompilation;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
-import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.core.meta.DirectSubstrateObjectConstant;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.util.HostedStringDeduplication;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.OriginalFieldProvider;
 
@@ -62,7 +62,7 @@ public class SubstrateField implements SharedField {
     private final int modifiers;
     private final int hashCode;
 
-    @UnknownPrimitiveField(availability = AfterCompilation.class) int location;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private int location;
     @UnknownPrimitiveField(availability = AfterCompilation.class) private boolean isAccessed;
     @UnknownPrimitiveField(availability = AfterCompilation.class) private boolean isWritten;
     @UnknownObjectField(types = {DirectSubstrateObjectConstant.class, PrimitiveConstant.class}, fullyQualifiedTypes = "jdk.vm.ci.meta.NullConstant", //
@@ -96,6 +96,15 @@ public class SubstrateField implements SharedField {
         name = null;
         modifiers = -1;
         hashCode = -1;
+        location = -1;
+    }
+
+    protected SubstrateField(String name, int modifiers, int hashCode, int location) {
+        assert SubstrateOptions.useRistretto() : "Must only be initialized at runtime by ristretto";
+        this.name = name;
+        this.modifiers = modifiers;
+        this.hashCode = hashCode;
+        this.location = location;
     }
 
     public void setLinks(SubstrateType type, SubstrateType declaringClass) {

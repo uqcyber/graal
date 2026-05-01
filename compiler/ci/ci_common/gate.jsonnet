@@ -172,7 +172,7 @@
   bootstrap_full_shenandoah:: s.base("build,bootstrapfullverify", no_warning_as_error=true, extra_vm_args="-XX:+UseShenandoahGC"),
   bootstrap_economy:: s.base("build,bootstrapeconomy", no_warning_as_error=true, extra_vm_args="-Djdk.graal.CompilerConfiguration=economy"),
 
-  style:: c.deps.eclipse + c.deps.jdt + c.deps.spotbugs + s.base("style,fullbuild,javadoc") + galahad.exclude,
+  style:: c.deps.jdt + c.deps.spotbugs + s.base("style,fullbuild,javadoc") + galahad.exclude,
 
   avx3:: {
     capabilities+: ["avx512"],
@@ -215,7 +215,7 @@
   # Candidates for Tier1 jobs. In CE, these will be dailies.
   local tier1_jobs = {
     # Style jobs need to stay on a JDK compatible with all the style
-    # checking tools (SpotBugs, Checkstyle, Eclipse formatter etc).
+    # checking tools (SpotBugs, Checkstyle, formatting utilities, etc.).
     "compiler-style-labsjdk-latest-linux-amd64": t("30:00"),
   },
 

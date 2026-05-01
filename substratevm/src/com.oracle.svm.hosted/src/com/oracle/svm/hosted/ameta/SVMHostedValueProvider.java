@@ -36,13 +36,13 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.util.AnalysisError;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.meta.MethodOffset;
 import com.oracle.svm.core.meta.MethodRef;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.classinitialization.SimulateClassInitializerSupport;
 import com.oracle.svm.hosted.meta.PatchedWordConstant;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
@@ -169,7 +169,7 @@ public class SVMHostedValueProvider extends HostedValuesProvider {
             if (object instanceof RelocatedPointer || object instanceof MethodOffset) {
                 return Optional.of(new PatchedWordConstant(word, metaAccess.lookupJavaType(object.getClass())));
             }
-            return Optional.of(JavaConstant.forIntegerKind(ConfigurationValues.getWordKind(), word.rawValue()));
+            return Optional.of(JavaConstant.forIntegerKind(SubstrateTarget.getWordKind(), word.rawValue()));
         }
         return Optional.empty();
     }

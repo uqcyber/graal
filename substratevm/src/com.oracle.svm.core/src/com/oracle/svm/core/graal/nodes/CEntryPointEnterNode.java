@@ -29,7 +29,7 @@ import static jdk.graal.compiler.nodeinfo.NodeSize.SIZE_8;
 
 import org.graalvm.word.LocationIdentity;
 
-import com.oracle.svm.core.c.function.CEntryPointActions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointActions;
 
 import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.graph.NodeClass;

@@ -24,13 +24,15 @@
  */
 package com.oracle.svm.core.graal.amd64;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static jdk.vm.ci.amd64.AMD64.rax;
+import static jdk.vm.ci.amd64.AMD64.rbp;
 import static jdk.vm.ci.amd64.AMD64.rsp;
 import static jdk.vm.ci.amd64.AMD64.xmm0;
 
 import java.util.List;
 
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.struct.RawField;
 import org.graalvm.nativeimage.c.struct.RawStructure;
@@ -38,41 +40,71 @@ import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.impl.Word;
 
+import com.oracle.svm.core.FrameAccess;
+import com.oracle.svm.core.ReservedRegisters;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.c.struct.OffsetOf;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.deopt.DeoptimizationSlotPacking;
 import com.oracle.svm.core.graal.code.InterpreterAccessStubData;
-import com.oracle.svm.core.graal.code.PreparedArgumentType;
+import com.oracle.svm.core.graal.code.PreparedSignature;
+import com.oracle.svm.core.graal.meta.DynamicHubOffsets;
+import com.oracle.svm.core.graal.meta.InterpreterExecutionOffsets;
 import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
-import com.oracle.svm.core.jdk.UninterruptibleUtils;
+import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.core.heap.ReferenceAccess;
+import com.oracle.svm.core.interpreter.InterpreterEnterStub;
 import com.oracle.svm.core.meta.SharedMethod;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.Duplicable;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.NumUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.amd64.AMD64Address;
 import jdk.graal.compiler.asm.amd64.AMD64Assembler;
+import jdk.graal.compiler.asm.amd64.AMD64BaseAssembler;
 import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
+import jdk.graal.compiler.core.common.Stride;
+import jdk.graal.compiler.lir.amd64.AMD64Move;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.CallingConvention;
+import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.code.Register;
-import org.graalvm.word.impl.Word;
+import jdk.vm.ci.code.RegisterConfig;
+import jdk.vm.ci.code.ValueUtil;
+import jdk.vm.ci.meta.JavaKind;
 
 public class AMD64InterpreterStubs {
 
     private static SubstrateAMD64RegisterConfig getRegisterConfig() {
-        return new SubstrateAMD64RegisterConfig(SubstrateRegisterConfig.ConfigKind.NORMAL, null, ConfigurationValues.getTarget(),
+        return new SubstrateAMD64RegisterConfig(SubstrateRegisterConfig.ConfigKind.NORMAL, null, SubstrateTarget.singleton(),
                         SubstrateOptions.PreserveFramePointer.getValue());
     }
 
     public static class InterpreterEnterStubContext extends SubstrateAMD64Backend.SubstrateAMD64FrameContext {
+        private final boolean emitDirectFastPath;
+        private final boolean emitVTableFastPath;
 
         public InterpreterEnterStubContext(SharedMethod method, CallingConvention callingConvention) {
             super(method, callingConvention);
+            boolean useRistretto = SubstrateOptions.useRistretto();
+            InterpreterEnterStub stubType = AnnotationUtil.getAnnotation(method, InterpreterEnterStub.class);
+            assert stubType != null : "Missing @InterpreterEnterStub annotation on interpreter enter stub.";
+            assert !useRistretto || ImageSingletons.contains(InterpreterExecutionOffsets.class) : "Missing InterpreterExecutionOffsets singleton while Ristretto is enabled.";
+            emitDirectFastPath = useRistretto && stubType.value() == InterpreterEnterStub.Kind.DIRECT;
+            emitVTableFastPath = useRistretto && stubType.value() == InterpreterEnterStub.Kind.VTABLE;
         }
 
         private static AMD64Address createAddress(int offset) {
@@ -80,9 +112,179 @@ public class AMD64InterpreterStubs {
             return new AMD64Address(rsp, deoptSlotSize + offset);
         }
 
+        private static AMD64BaseAssembler.OperandSize referenceOperandSize() {
+            int refSize = ObjectLayout.singleton().getReferenceSize();
+            return refSize == Integer.BYTES ? AMD64BaseAssembler.OperandSize.DWORD : AMD64BaseAssembler.OperandSize.QWORD;
+        }
+
+        private static AMD64Address heapObjectAddress(Register base, int offset, boolean compressedBase, int compressionShift) {
+            if (compressedBase) {
+                return new AMD64Address(ReservedRegisters.singleton().getHeapBaseRegister(), base, Stride.fromLog2(compressionShift), offset);
+            }
+            return new AMD64Address(base, offset);
+        }
+
+        private static void loadObjectObjectField(AMD64MacroAssembler masm, Register dst, Register obj, int offset, boolean compressedBase, int compressionShift) {
+            AMD64Assembler.AMD64RMOp.MOV.emit(masm, referenceOperandSize(), dst, heapObjectAddress(obj, offset, compressedBase, compressionShift));
+        }
+
+        private static void loadObjectWordField(AMD64MacroAssembler masm, Register dst, Register obj, int offset, boolean compressedBase, int compressionShift) {
+            AMD64Assembler.AMD64RMOp.MOV.emit(masm, AMD64BaseAssembler.OperandSize.QWORD, dst, heapObjectAddress(obj, offset, compressedBase, compressionShift));
+        }
+
+        /**
+         * See {@code SubstrateBasicLoweringProvider#createReadHub}.
+         */
+        private static void loadHub(AMD64MacroAssembler masm, Register obj, Register hub, Register scratch2) {
+            ObjectLayout ol = ObjectLayout.singleton();
+            long reservedHubBitsMask = Heap.getHeap().getObjectHeader().getReservedHubBitsMask();
+            int compressionShift = ReferenceAccess.singleton().getCompressionShift();
+            int alignmentBits = CodeUtil.log2(ol.getAlignment());
+
+            AMD64Assembler.AMD64RMOp.MOV.emit(masm, ol.getHubSize() == Integer.BYTES ? AMD64BaseAssembler.OperandSize.DWORD : AMD64BaseAssembler.OperandSize.QWORD,
+                            hub, new AMD64Address(obj, ol.getHubOffset()));
+
+            if (reservedHubBitsMask != 0) {
+                int reservedHubBits = CodeUtil.log2(reservedHubBitsMask + 1L);
+                if (reservedHubBits == alignmentBits && compressionShift == 0) {
+                    if (ol.getHubSize() == Integer.BYTES) {
+                        // Clear the reserved low hub-tag bits in place.
+                        masm.andl(hub, (int) ~reservedHubBitsMask);
+                    } else {
+                        masm.movq(scratch2, ~reservedHubBitsMask);
+                        // 64-bit hub: materialize the mask in a register first.
+                        masm.andq(hub, scratch2);
+                    }
+                } else {
+                    // Remove reserved tag bits and reconstruct the aligned heap address.
+                    masm.shrq(hub, reservedHubBits);
+                    if (compressionShift != alignmentBits) {
+                        /*
+                         * Keep scratch1 as a compressed reference; the remaining shift restores the
+                         * alignment bits discarded by hub tagging without fully decoding the
+                         * reference to a heap address.
+                         */
+                        masm.shlq(hub, alignmentBits - compressionShift);
+                    }
+                }
+            }
+            if (ol.getReferenceSize() == Integer.BYTES) {
+                // Zero-extend the upper 32 bits.
+                masm.movl(hub, hub);
+            }
+        }
+
+        private static void goSlowPathIfNull(AMD64MacroAssembler masm, Register value, Label slowPath) {
+            masm.testq(value, value);
+            masm.jccb(AMD64Assembler.ConditionFlag.Zero, slowPath);
+        }
+
+        private static void goSlowPathIfIndexOutOfBounds(AMD64MacroAssembler masm, Register array, Register index, Register scratch, int arrayLengthOffset, Label slowPath) {
+            AMD64Assembler.AMD64RMOp.MOV.emit(masm, AMD64BaseAssembler.OperandSize.DWORD, scratch, new AMD64Address(array, arrayLengthOffset));
+            /*
+             * AboveEqual in the unsigned compare covers both index >= array.length and negative
+             * Java indices.
+             */
+            masm.cmpl(index, scratch);
+            masm.jcc(AMD64Assembler.ConditionFlag.AboveEqual, slowPath);
+        }
+
+        /**
+         * Fast path for {@code InterpreterStubSection.enterDirectInterpreterStub(...)}, or for the
+         * method resolved by {@code InterpreterStubSection.enterVTableInterpreterStub(...)}. If the
+         * target method already has valid installed code, jump to its entry point instead of
+         * entering the interpreter.
+         */
+        private static void emitInstalledCodeFastPath(AMD64MacroAssembler masm, Register interpreterMethod, boolean compressedInterpreterMethod, Register scratch) {
+            Label slowPath = new Label();
+
+            boolean compressedReferences = ReferenceAccess.singleton().haveCompressedReferences();
+            int compressionShift = ReferenceAccess.singleton().getCompressionShift();
+            InterpreterExecutionOffsets executionOffsets = InterpreterExecutionOffsets.singleton();
+
+            /*
+             * Keep this sanity check for now so that, if we ever end up with a null method here, we
+             * fall back to the slow path instead of crashing in the fast path. The slow path also
+             * performs a sanity check, so this guard should be removable in the future.
+             */
+            goSlowPathIfNull(masm, interpreterMethod, slowPath);
+
+            loadObjectObjectField(masm, scratch, interpreterMethod, executionOffsets.getInterpreterResolvedJavaMethodRistrettoMethodOffset(), compressedInterpreterMethod, compressionShift);
+            goSlowPathIfNull(masm, scratch, slowPath);
+
+            loadObjectObjectField(masm, scratch, scratch, executionOffsets.getRistrettoMethodInstalledCodeOffset(), compressedReferences, compressionShift);
+            goSlowPathIfNull(masm, scratch, slowPath);
+
+            loadObjectWordField(masm, scratch, scratch, executionOffsets.getInstalledCodeEntryPointOffset(), compressedReferences, compressionShift);
+            goSlowPathIfNull(masm, scratch, slowPath);
+            // Jump to the entry point of the method.
+            masm.jmp(scratch);
+
+            masm.bind(slowPath);
+        }
+
+        /**
+         * Fast path for resolving the target of
+         * {@code InterpreterStubSection.enterVTableInterpreterStub(...)}. This performs the same
+         * high-level lookup as the Java helper, then tries the installed-code jump before falling
+         * back to the slow path.
+         */
+        private static void emitVTableInstalledCodeFastPath(AMD64MacroAssembler masm, Register receiver, Register vtableIndex, Register scratch1, Register scratch2) {
+            ObjectLayout ol = ObjectLayout.singleton();
+            boolean compression = ReferenceAccess.singleton().haveCompressedReferences();
+            int compressionShift = ReferenceAccess.singleton().getCompressionShift();
+
+            DynamicHubOffsets hubOffsets = DynamicHubOffsets.singleton();
+            InterpreterExecutionOffsets executionOffsets = InterpreterExecutionOffsets.singleton();
+
+            Label slowPath = new Label();
+
+            loadHub(masm, receiver, scratch1, scratch2);
+
+            // Extract the companion.
+            loadObjectObjectField(masm, scratch1, scratch1, hubOffsets.getCompanionOffset(), compression, compressionShift);
+            // Extract the interpreter type of the companion.
+            loadObjectObjectField(masm, scratch1, scratch1, executionOffsets.getDynamicHubCompanionInterpreterTypeOffset(), compression, compressionShift);
+            // Extract the vtable holder of the interpreter type.
+            loadObjectObjectField(masm, scratch1, scratch1, executionOffsets.getInterpreterResolvedObjectTypeVtableHolderOffset(), compression, compressionShift);
+            // Extract the vtable.
+            loadObjectObjectField(masm, scratch1, scratch1, executionOffsets.getVtableHolderVtableOffset(), compression, compressionShift);
+
+            if (compression) {
+                AMD64Move.UncompressPointerOp.emitUncompressWithBaseRegister(masm, scratch1, ReservedRegisters.singleton().getHeapBaseRegister(), compressionShift, true);
+            }
+
+            goSlowPathIfIndexOutOfBounds(masm, scratch1, vtableIndex, scratch2, ol.getArrayLengthOffset(), slowPath);
+
+            Register method = scratch2;
+            /*
+             * Extract the method from the vtable. Address = vtable base + zero-extended 32-bit
+             * index * referenceSize + array header.
+             */
+            AMD64Assembler.AMD64RMOp.MOV.emit(masm, referenceOperandSize(), method,
+                            new AMD64Address(scratch1, vtableIndex, Stride.fromLog2(CodeUtil.log2(ol.getReferenceSize())), ol.getArrayBaseOffset(JavaKind.Object)));
+
+            emitInstalledCodeFastPath(masm, method, compression, scratch1);
+            masm.bind(slowPath);
+        }
+
         @Override
         public void enter(CompilationResultBuilder crb) {
             AMD64MacroAssembler masm = (AMD64MacroAssembler) crb.asm;
+
+            List<Register> gps = getRegisterConfig().getJavaGeneralParameterRegs();
+
+            /*
+             * Ristretto currently makes this frame context reachable during analysis. Explicitly
+             * avoid the singleton lookup in that case until GR-55022 is fixed.
+             */
+            if (SubstrateUtil.HOSTED) {
+                if (emitVTableFastPath) {
+                    emitVTableInstalledCodeFastPath(masm, gps.getFirst(), SubstrateAMD64Backend.HIDDEN_ARGUMENT_REGISTER, AMD64.r10, AMD64.r11);
+                } else if (emitDirectFastPath) {
+                    emitInstalledCodeFastPath(masm, SubstrateAMD64Backend.HIDDEN_ARGUMENT_REGISTER, false, AMD64.r10);
+                }
+            }
 
             Register trampArg = SubstrateAMD64Backend.HIDDEN_ARGUMENT_REGISTER;
             Register spCopy = AMD64.r11;
@@ -94,7 +296,6 @@ public class AMD64InterpreterStubs {
             /* sp points to InterpreterData struct */
             masm.movq(createAddress(offsetAbiSpReg()), spCopy);
 
-            List<Register> gps = getRegisterConfig().getJavaGeneralParameterRegs();
             VMError.guarantee(gps.size() == 6);
 
             masm.movq(createAddress(offsetAbiGp0()), gps.get(0));
@@ -158,14 +359,12 @@ public class AMD64InterpreterStubs {
             AMD64MacroAssembler masm = (AMD64MacroAssembler) crb.asm;
             List<Register> gps = getRegisterConfig().getJavaGeneralParameterRegs();
 
-            /* sp points to four reserved stack slots for this stub */
+            /* sp points to a reserved stack slot for this stub */
 
             /* arg0 is untouched by this extra prolog */
 
-            /* arg1: Pointer to InterpreterData struct */
-            masm.movq(new AMD64Address(rsp, 0), gps.get(1));
-            /* arg2: Variable stack size */
-            masm.movq(new AMD64Address(rsp, 8), gps.get(2));
+            /* arg3: true if the result of the function is in a floating-point register */
+            masm.movq(new AMD64Address(rsp, 0), gps.get(3));
 
             masm.subq(rsp, gps.get(2) /* variable stack size */);
         }
@@ -186,11 +385,6 @@ public class AMD64InterpreterStubs {
             Register stackSize = AMD64.r11;
             masm.movq(stackSize, gps.get(2));
 
-            Label regsHandling = new Label();
-            /* if stackSize == 0 */
-            masm.testq(stackSize, stackSize);
-            masm.jccb(AMD64Assembler.ConditionFlag.Zero, regsHandling);
-
             /* Copy prepared outgoing args to the stack where the ABI expects it */
             Register calleeSpArgs = AMD64.r12;
             Register interpDataSp = AMD64.r9;
@@ -209,8 +403,6 @@ public class AMD64InterpreterStubs {
 
             masm.testq(stackSize, stackSize);
             masm.jccb(AMD64Assembler.ConditionFlag.NotZero, spCopyBegin);
-
-            masm.bind(regsHandling);
 
             /* Set fp argument registers */
             masm.movq(fps.get(0), new AMD64Address(rax, offsetAbiFpArg0()));
@@ -235,9 +427,7 @@ public class AMD64InterpreterStubs {
 
             /* Call into target method */
             masm.call(callTarget);
-
-            Register resultCopy = AMD64.r10;
-            masm.movq(resultCopy, rax);
+            masm.maybeEmitIndirectTargetMarker();
 
             /* Obtain stack size from deopt slot */
             masm.movq(AMD64.r12, new AMD64Address(rsp, 0));
@@ -249,14 +439,14 @@ public class AMD64InterpreterStubs {
             /* Restore stack pointer */
             masm.addq(rsp, AMD64.r12);
 
-            /* Pointer InterpreterData struct */
-            masm.movq(rax, new AMD64Address(rsp, 0));
-
-            /* Save gp ABI register into InterpreterData struct */
-            masm.movq(new AMD64Address(rax, offsetAbiGpRet()), resultCopy);
-
-            /* Save fp ABI register into InterpreterData struct */
-            masm.movq(new AMD64Address(rax, offsetAbiFpRet()), xmm0);
+            Label gpResult = new Label();
+            /* The leave stub returns a long, so check whether the actual call returned in xmm0. */
+            masm.movq(AMD64.r10, new AMD64Address(rsp, 0));
+            masm.testq(AMD64.r10, AMD64.r10);
+            masm.jccb(AMD64Assembler.ConditionFlag.Zero, gpResult);
+            /* Return the raw float/double bits in rax. */
+            masm.movdq(rax, xmm0);
+            masm.bind(gpResult);
 
             super.leave(crb);
         }
@@ -264,7 +454,7 @@ public class AMD64InterpreterStubs {
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static int sizeOfInterpreterData() {
-        return UninterruptibleUtils.NumUtil.roundUp(SizeOf.get(InterpreterDataAMD64.class), 0x10);
+        return NumUtil.roundUp(SizeOf.get(InterpreterDataAMD64.class), 0x10);
     }
 
     public static int additionalFrameSizeEnterStub() {
@@ -274,9 +464,8 @@ public class AMD64InterpreterStubs {
     }
 
     public static int additionalFrameSizeLeaveStub() {
-        int wordSize = 8;
-        // reserve two slots for: base address of outgoing stack args and variable stack size.
-        return 2 * wordSize;
+        /* Reserve one extra word to remember whether the actual call returns in the FP register. */
+        return 8;
     }
 
     @RawStructure
@@ -478,18 +667,19 @@ public class AMD64InterpreterStubs {
         return OffsetOf.get(InterpreterDataAMD64.class, "AbiFpRet");
     }
 
+    @SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Duplicable.class, other = Disallowed.class)
     public static class AMD64InterpreterAccessStubData implements InterpreterAccessStubData {
 
         @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         private static int spAdjustOnCall(int offset) {
             // offset is relative caller sp, undo side-effect of call instruction
-            int spAdjustmentOnCall = ConfigurationValues.getWordSize();
+            int spAdjustmentOnCall = SubstrateTarget.getWordSize();
             return offset + spAdjustmentOnCall;
         }
 
         @Override
         @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-        public void setSp(Pointer data, int stackSize, Pointer stackBuffer) {
+        public void setSpAndStoreStackSizeInDeoptSlot(Pointer data, int stackSize, Pointer stackBuffer) {
             VMError.guarantee(stackBuffer.isNonNull());
 
             InterpreterDataAMD64 p = (InterpreterDataAMD64) data;
@@ -510,7 +700,7 @@ public class AMD64InterpreterStubs {
 
         @Override
         @Uninterruptible(reason = REASON_RAW_POINTER, callerMustBe = true)
-        public long getGpArgumentAt(PreparedArgumentType cArgType, Pointer data, int pos) {
+        public long getGpArgumentAt(int cArgType, Pointer data, int pos) {
             InterpreterDataAMD64 p = (InterpreterDataAMD64) data;
             return switch (pos) {
                 case 0 -> p.getAbiGp0();
@@ -520,20 +710,20 @@ public class AMD64InterpreterStubs {
                 case 4 -> p.getAbiGp4();
                 case 5 -> p.getAbiGp5();
                 default -> {
-                    VMError.guarantee(cArgType.isStackSlot());
+                    VMError.guarantee(PreparedSignature.isStackSlot(cArgType));
                     Pointer sp = Word.pointer(p.getAbiSpReg());
 
-                    yield sp.readLong(spAdjustOnCall(cArgType.getStackOffset()));
+                    yield sp.readLong(spAdjustOnCall(PreparedSignature.getStackOffset(cArgType)));
                 }
             };
         }
 
         @Override
         @Uninterruptible(reason = REASON_RAW_POINTER, callerMustBe = true)
-        public void setGpArgumentAt(PreparedArgumentType cArgType, Pointer data, int pos, long val, boolean incoming) {
+        public void setGpArgumentAt(int cArgType, Pointer data, int pos, long val, boolean incoming) {
             InterpreterDataAMD64 p = (InterpreterDataAMD64) data;
             if (pos >= 0 && pos <= 5) {
-                VMError.guarantee(cArgType.isRegister());
+                VMError.guarantee(PreparedSignature.isRegister(cArgType));
                 switch (pos) {
                     case 0 -> p.setAbiGp0(val);
                     case 1 -> p.setAbiGp1(val);
@@ -544,10 +734,10 @@ public class AMD64InterpreterStubs {
                 }
                 return;
             }
-            VMError.guarantee(cArgType.isStackSlot());
+            VMError.guarantee(PreparedSignature.isStackSlot(cArgType));
 
             Pointer sp = Word.pointer(p.getAbiSpReg());
-            int offset = cArgType.getStackOffset();
+            int offset = PreparedSignature.getStackOffset(cArgType);
             if (incoming) {
                 offset = spAdjustOnCall(offset);
             }
@@ -566,10 +756,10 @@ public class AMD64InterpreterStubs {
 
         @Override
         @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-        public long getFpArgumentAt(PreparedArgumentType cArgType, Pointer data, int pos) {
+        public long getFpArgumentAt(int cArgType, Pointer data, int pos) {
             InterpreterDataAMD64 p = (InterpreterDataAMD64) data;
             if (pos >= 0 && pos <= upperFpEnd()) {
-                VMError.guarantee(cArgType.isRegister());
+                VMError.guarantee(PreparedSignature.isRegister(cArgType));
                 switch (pos) {
                     case 0:
                         return p.getAbiFpArg0();
@@ -589,18 +779,18 @@ public class AMD64InterpreterStubs {
                         return p.getAbiFpArg7();
                 }
             }
-            VMError.guarantee(cArgType.isStackSlot());
+            VMError.guarantee(PreparedSignature.isStackSlot(cArgType));
             Pointer sp = Word.pointer(p.getAbiSpReg());
 
-            return sp.readLong(spAdjustOnCall(cArgType.getStackOffset()));
+            return sp.readLong(spAdjustOnCall(PreparedSignature.getStackOffset(cArgType)));
         }
 
         @Override
         @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-        public void setFpArgumentAt(PreparedArgumentType cArgType, Pointer data, int pos, long val) {
+        public void setFpArgumentAt(int cArgType, Pointer data, int pos, long val) {
             InterpreterDataAMD64 p = (InterpreterDataAMD64) data;
             if (pos >= 0 && pos <= upperFpEnd()) {
-                VMError.guarantee(cArgType.isRegister());
+                VMError.guarantee(PreparedSignature.isRegister(cArgType));
                 switch (pos) {
                     case 0 -> p.setAbiFpArg0(val);
                     case 1 -> p.setAbiFpArg1(val);
@@ -612,10 +802,10 @@ public class AMD64InterpreterStubs {
                     case 7 -> p.setAbiFpArg7(val);
                 }
             } else {
-                VMError.guarantee(cArgType.isStackSlot());
+                VMError.guarantee(PreparedSignature.isStackSlot(cArgType));
 
                 Pointer sp = Word.pointer(p.getAbiSpReg());
-                int offset = cArgType.getStackOffset();
+                int offset = PreparedSignature.getStackOffset(cArgType);
 
                 VMError.guarantee(sp.isNonNull());
                 VMError.guarantee(offset < p.getStackSize());
@@ -653,6 +843,67 @@ public class AMD64InterpreterStubs {
         @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public int allocateStubDataSize() {
             return sizeOfInterpreterData();
+        }
+    }
+
+    /**
+     * Frame context for
+     * {@link com.oracle.svm.core.deopt.Deoptimizer.StubType#InterpreterDeoptEntryPointStub}. This
+     * transition restores the source-frame stack/base pointers, recreates the original return
+     * address edge, and jumps to the interpreter deoptimization entry point.
+     */
+    public static class InterpreterEntryPointStubFrameContext extends SubstrateAMD64Backend.SubstrateAMD64FrameContext {
+        public InterpreterEntryPointStubFrameContext(SharedMethod method, CallingConvention callingConvention) {
+            super(method, callingConvention);
+        }
+
+        @Override
+        public void enter(CompilationResultBuilder tasm) {
+            /*
+             * Keep this otherwise-empty entrypoint walkable (including Windows unwind expectations)
+             * by reporting a minimal frame: return-address slot only.
+             */
+            tasm.setTotalFrameSize(FrameAccess.returnAddressSize());
+        }
+
+        @Override
+        public void leave(CompilationResultBuilder tasm) {
+            AMD64MacroAssembler asm = (AMD64MacroAssembler) tasm.asm;
+
+            RegisterConfig registerConfig = tasm.frameMap.getRegisterConfig();
+
+            /* leave arg0 untouched, it's the first argument to the interpreter entry point */
+
+            Register regRevertSp = ValueUtil.asRegister(callingConvention.getArgument(1));
+            Register regInterpEntryPoint = ValueUtil.asRegister(callingConvention.getArgument(2));
+            Register regOldReturnAddress = ValueUtil.asRegister(callingConvention.getArgument(3));
+            Register regOldBasePointer = ValueUtil.asRegister(callingConvention.getArgument(4));
+
+            if (((SubstrateAMD64RegisterConfig) registerConfig).shouldUseBasePointer()) {
+                asm.movq(rbp, regOldBasePointer);
+            }
+
+            /*
+             * Keep every IP in this epilogue walkable (notably on Windows): materialize the
+             * synthetic return edge first, then make stack-pointer restoration the last state
+             * change before the tail jump.
+             *
+             * This avoids a transient state where rsp already points to revertSp but the synthetic
+             * return-address slot is not initialized yet.
+             */
+            /*
+             * regRevertSp is the caller SP after the deoptimized frame is removed. The active
+             * return-address slot for that SP is [regRevertSp - returnAddressSize()], so write the
+             * original caller return PC there using regOldReturnAddress.
+             */
+            asm.movq(asm.makeAddress(regRevertSp, -FrameAccess.returnAddressSize()), regOldReturnAddress);
+            /*
+             * Set rsp to that exact slot address (not to regRevertSp): the jump target and stack
+             * walkers expect [rsp] to be the current return-address word.
+             */
+            asm.leaq(rsp, asm.makeAddress(regRevertSp, -FrameAccess.returnAddressSize()));
+
+            asm.jmp(regInterpEntryPoint);
         }
     }
 }

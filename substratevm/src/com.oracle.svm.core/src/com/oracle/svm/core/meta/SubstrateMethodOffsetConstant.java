@@ -40,11 +40,17 @@ import jdk.vm.ci.meta.VMConstant;
  * At this time, code offset constants are required only in the heap. When supporting embedding them
  * in code, this class could be merged with {@link SubstrateMethodPointerConstant}.
  */
-@Platforms(Platform.HOSTED_ONLY.class)
-public class SubstrateMethodOffsetConstant implements VMConstant {
+public final class SubstrateMethodOffsetConstant implements VMConstant {
 
+    /*
+     * This entire class should be hosted-only, but with runtime compilation the analysis encounters
+     * it in type checks in the compiler backend. We mark this field hosted-only to fail on any
+     * actual runtime usage of this class.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class) //
     private final MethodOffset offset;
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     public SubstrateMethodOffsetConstant(MethodOffset offset) {
         this.offset = Objects.requireNonNull(offset);
     }
@@ -73,7 +79,9 @@ public class SubstrateMethodOffsetConstant implements VMConstant {
         if (this == obj) {
             return true;
         }
-        return obj instanceof SubstrateMethodOffsetConstant other && offset.getMethod().equals(other.offset.getMethod());
+        return obj instanceof SubstrateMethodOffsetConstant other &&
+                        offset.getMethod().equals(other.offset.getMethod()) &&
+                        offset.permitsRewriteToPLT() == other.offset.permitsRewriteToPLT();
     }
 
     @Override

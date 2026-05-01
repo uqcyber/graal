@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -86,7 +86,7 @@ abstract class AbstractServiceParser extends AbstractBridgeParser {
     private final Set<DeclaredType> ignoreAnnotations;
     private Set<DeclaredType> marshallerAnnotations;
 
-    AbstractServiceParser(NativeBridgeProcessor processor, AbstractTypeCache typeCache, AbstractEndPointMethodProvider endPointMethodProvider,
+    AbstractServiceParser(NativeBridgeProcessor processor, NativeBridgeTypeCache typeCache, AbstractEndPointMethodProvider endPointMethodProvider,
                     Configuration myConfiguration, Configuration otherConfiguration) {
         super(processor, typeCache, myConfiguration.getHandledAnnotationType());
         this.endPointMethodProvider = endPointMethodProvider;
@@ -112,6 +112,11 @@ abstract class AbstractServiceParser extends AbstractBridgeParser {
         return new ServiceDefinitionData(annotatedType, serviceType, peerType, factoryClass, mutable, toGenerate, annotatedTypeConstructorParams,
                         peerConstructorParams, customDispatchAccessor, customReceiverAccessor, marshallerConfig,
                         throwableMarshaller, annotationsToIgnore, annotationsForMarshallerLookup);
+    }
+
+    @Override
+    NativeBridgeTypeCache getTypeCache() {
+        return (NativeBridgeTypeCache) super.getTypeCache();
     }
 
     @Override
@@ -1204,7 +1209,7 @@ abstract class AbstractServiceParser extends AbstractBridgeParser {
         @Override
         Iterable<? extends Element> getVerifiedElements() {
             List<Element> result = new ArrayList<>();
-            result.add(annotatedType.asElement());
+            result.add(annotatedElement);
             if (customDispatchAccessor != null) {
                 result.add(customDispatchAccessor);
             }

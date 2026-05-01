@@ -10,7 +10,7 @@
     timelimit: "30:00",
   },
 
-  local regex_gate = regex_common + common.deps.eclipse + common.deps.jdt + common.deps.spotbugs + {
+  local regex_gate = regex_common + common.deps.jdt + common.deps.spotbugs + {
     name: 'gate-regex-' + self.jdk_name,
     run: [["mx", "--strict-compliance", "gate", "--strict-mode"]],
   },

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,12 +40,19 @@
  */
 package org.graalvm.nativebridge.processor;
 
-import org.graalvm.nativebridge.processor.AbstractBridgeParser.AbstractTypeCache;
+import org.graalvm.nativebridge.processor.AbstractBridgeParser.BaseTypeCache;
 import org.graalvm.nativebridge.processor.AbstractBridgeParser.DefinitionData;
+import org.graalvm.nativebridge.processor.NativeBridgeProcessor.CompilationUnit;
+import org.graalvm.nativebridge.processor.NativeBridgeProcessor.CompilationUnitFactory;
 
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.PackageElement;
+import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 
@@ -55,9 +62,9 @@ abstract class AbstractBridgeGenerator {
 
     private final AbstractBridgeParser parser;
     private final DefinitionData definitionData;
-    private final AbstractTypeCache typeCache;
+    private final BaseTypeCache typeCache;
 
-    AbstractBridgeGenerator(AbstractBridgeParser parser, DefinitionData definitionData, AbstractTypeCache typeCache) {
+    AbstractBridgeGenerator(AbstractBridgeParser parser, DefinitionData definitionData, BaseTypeCache typeCache) {
         this.parser = Objects.requireNonNull(parser, "Parser must be non-null");
         this.definitionData = Objects.requireNonNull(definitionData, "DefinitionData must be non-null.");
         this.typeCache = Objects.requireNonNull(typeCache, "TypeCache must be non-null.");
@@ -71,7 +78,7 @@ abstract class AbstractBridgeGenerator {
         return definitionData;
     }
 
-    AbstractTypeCache getTypeCache() {
+    BaseTypeCache getTypeCache() {
         return typeCache;
     }
 
@@ -85,6 +92,20 @@ abstract class AbstractBridgeGenerator {
     abstract void generateAPI(CodeBuilder builder, CharSequence targetClassSimpleName);
 
     abstract void generateImpl(CodeBuilder builder, CharSequence targetClassSimpleName);
+
+    CompilationUnitFactory getCompilationUnitFactory() {
+        return new CompilationUnitFactory() {
+            @Override
+            public CompilationUnit createCompilationUnit(NativeBridgeProcessor processor, TypeElement annotatedElement) {
+                PackageElement owner = Utilities.getEnclosingPackageElement(annotatedElement);
+                CodeBuilder builder = new CodeBuilder(owner, processor.typeUtils(), typeCache);
+                String simpleName = annotatedElement.getSimpleName() + "Gen";
+                builder.classStart(EnumSet.of(Modifier.FINAL), simpleName, null, Collections.emptyList());
+                builder.indent();
+                return new CompilationUnit(processor, builder, annotatedElement, simpleName);
+            }
+        };
+    }
 
     static CharSequence createCustomObject(CodeBuilder builder, DeclaredType customObject) {
         CodeBuilder object;

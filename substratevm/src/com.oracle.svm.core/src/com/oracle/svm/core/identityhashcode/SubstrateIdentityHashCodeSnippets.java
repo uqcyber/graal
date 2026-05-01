@@ -31,7 +31,6 @@ import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.probabilit
 
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.ObjectHeader;
@@ -62,7 +61,7 @@ final class SubstrateIdentityHashCodeSnippets extends IdentityHashCodeSnippets {
 
     @Override
     protected int computeIdentityHashCode(Object obj) {
-        ObjectLayout ol = ConfigurationValues.getObjectLayout();
+        ObjectLayout ol = ObjectLayout.singleton();
         if (ol.isIdentityHashFieldOptional()) {
             int identityHashCode;
             ObjectHeader oh = Heap.getHeap().getObjectHeader();

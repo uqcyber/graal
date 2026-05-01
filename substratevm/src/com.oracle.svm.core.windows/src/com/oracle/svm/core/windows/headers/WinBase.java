@@ -58,6 +58,8 @@ public class WinBase {
     @CPointerTo(nameOfCType = "HANDLE")
     public interface LPHANDLE extends PointerBase {
         HANDLE read();
+
+        void write(HANDLE value);
     }
 
     /**
@@ -68,9 +70,9 @@ public class WinBase {
 
     @CPointerTo(nameOfCType = "HMODULE")
     public interface HMODULEPointer extends PointerBase {
-        public HMODULE read();
+        HMODULE read();
 
-        public void write(HMODULE value);
+        void write(HMODULE value);
     }
 
     /**

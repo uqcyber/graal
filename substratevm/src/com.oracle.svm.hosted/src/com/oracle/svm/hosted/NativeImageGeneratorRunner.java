@@ -44,6 +44,7 @@ import java.util.TimerTask;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -82,9 +83,11 @@ import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.AnnotatedObjectAccess;
 import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.HostedModuleSupport;
 import com.oracle.svm.util.OriginalMethodProvider;
 
 import jdk.graal.compiler.annotation.AnnotationValue;
+import jdk.graal.compiler.options.OptionDescriptors;
 import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.vmaccess.InvocationException;
@@ -315,8 +318,7 @@ public class NativeImageGeneratorRunner {
         }
     }
 
-    private static VMAccess getVmAccess(String[] classpath, String[] modulepath, HostedOptionParser parser) {
-        VMAccess.Builder builder = GuestAccess.getVmAccessBuilder();
+    private static VMAccess getVmAccess(VMAccess.Builder builder, String[] classpath, String[] modulepath, HostedOptionParser parser) {
         builder.classPath(List.of(classpath));
         builder.modulePath(List.of(modulepath));
 
@@ -326,7 +328,7 @@ public class NativeImageGeneratorRunner {
                         .findAll()//
                         .forEach(ref -> builder.addModule(ref.descriptor().name()));
 
-        if ("espresso".equals(builder.getVMAccessName())) {
+        if (builder.isFullyIsolated()) {
             // Propagate --add-exports into the Espresso guest.
             // GR-73131 will make this non-Espresso specific.
             EconomicMap<OptionKey<?>, Object> options = parser.getHostedValues();
@@ -360,9 +362,27 @@ public class NativeImageGeneratorRunner {
      */
     public static ImageClassLoader installNativeImageClassLoader(String[] classpath, String[] modulepath, List<String> arguments) {
         NativeImageSystemClassLoader nativeImageSystemClassLoader = NativeImageSystemClassLoader.singleton();
-        NativeImageClassLoaderSupport nativeImageClassLoaderSupport = new NativeImageClassLoaderSupport(nativeImageSystemClassLoader.defaultSystemClassLoader, classpath, modulepath);
-        HostedOptionParser parser = nativeImageClassLoaderSupport.setupHostedOptionParser(arguments);
-        VMAccess vmAccess = getVmAccess(classpath, modulepath, parser);
+        VMAccess.Builder vmAccessBuilder = GuestAccess.getVmAccessBuilder();
+        final String[] guestModulePath;
+        final Predicate<OptionDescriptors> builderOptionFilter;
+        if (vmAccessBuilder.isFullyIsolated()) {
+            // no need for guest modules in the native image class loader if isolated
+            guestModulePath = new String[0];
+            builderOptionFilter = od -> {
+                Module optionModule = od.getClass().getModule();
+                if (!optionModule.isNamed()) {
+                    return true;
+                }
+                String moduleName = optionModule.getName();
+                return HostedModuleSupport.GUEST_MODULES.stream().noneMatch(moduleName::equals);
+            };
+        } else {
+            guestModulePath = modulepath;
+            builderOptionFilter = null;
+        }
+        NativeImageClassLoaderSupport nativeImageClassLoaderSupport = new NativeImageClassLoaderSupport(nativeImageSystemClassLoader.defaultSystemClassLoader, classpath, guestModulePath);
+        HostedOptionParser parser = nativeImageClassLoaderSupport.setupHostedOptionParser(arguments, builderOptionFilter);
+        VMAccess vmAccess = getVmAccess(vmAccessBuilder, classpath, modulepath, parser);
         GuestAccess.plantConfiguration(vmAccess);
         nativeImageClassLoaderSupport.setupLibGraalClassLoader();
         /* Perform additional post-processing with the created nativeImageClassLoaderSupport */
@@ -394,7 +414,7 @@ public class NativeImageGeneratorRunner {
 
         checkCommonPool(nativeImageClassLoader);
 
-        return new ImageClassLoader(NativeImageGenerator.getTargetPlatform(nativeImageClassLoader), nativeImageClassLoaderSupport, vmAccess);
+        return new ImageClassLoader(NativeImageGenerator.getTargetPlatform(nativeImageClassLoader), nativeImageClassLoaderSupport);
     }
 
     /**

@@ -36,9 +36,9 @@ import org.graalvm.nativeimage.Platforms;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.espresso.classfile.Constants;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 import com.oracle.svm.shared.util.VMError;
 
@@ -82,7 +82,7 @@ public class RuntimeClassLoading {
                 if (newValue) {
                     /* requires open type world */
                     SubstrateOptions.ClosedTypeWorld.update(values, false);
-                    ClassForNameSupport.Options.ClassForNameRespectsClassLoader.update(values, true);
+                    ClassRegistries.Options.ClassForNameRespectsClassLoader.update(values, true);
                     PredefinedClassesSupport.Options.SupportPredefinedClasses.update(values, false);
                 }
             }
@@ -104,10 +104,10 @@ public class RuntimeClassLoading {
                 throw UserError.invalidOptionValue(RuntimeClassLoading, RuntimeClassLoading.getValue(),
                                 "Requires an open type world, please use " + SubstrateOptionsParser.commandArgument(SubstrateOptions.ClosedTypeWorld, "-"));
             }
-            if (!ClassForNameSupport.Options.ClassForNameRespectsClassLoader.getValue()) {
+            if (!ClassRegistries.Options.ClassForNameRespectsClassLoader.getValue()) {
                 throw UserError.invalidOptionValue(RuntimeClassLoading, RuntimeClassLoading.getValue(),
                                 "Requires Class.forName to respect the classloader argument, please use " +
-                                                SubstrateOptionsParser.commandArgument(ClassForNameSupport.Options.ClassForNameRespectsClassLoader, "+"));
+                                                SubstrateOptionsParser.commandArgument(ClassRegistries.Options.ClassForNameRespectsClassLoader, "+"));
             }
             if (PredefinedClassesSupport.Options.SupportPredefinedClasses.getValue()) {
                 throw UserError.invalidOptionValue(RuntimeClassLoading, RuntimeClassLoading.getValue(),
@@ -258,10 +258,7 @@ public class RuntimeClassLoading {
     }
 
     public static void ensureLinked(DynamicHub dynamicHub) {
-        if (dynamicHub.isLinked()) {
-            return;
-        }
-        // GR-59739 runtime linking
+        dynamicHub.getClassInitializationInfo().ensureLinked(dynamicHub);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)

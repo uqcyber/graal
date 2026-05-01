@@ -68,7 +68,7 @@ local graal_common = import '../../../ci/ci_common/common.jsonnet';
   maven_deploy_base_functions: {
     edition:: vm.edition,
 
-    mx_args(os, arch, reduced=false):: ['--native-images=false'],
+    mx_args(os, arch, reduced=false):: if (reduced) then ['--native-images=false'] else ['--native-images=false', '--polyglot-isolates=true'],
 
     dynamic_imports(os, arch)::
       ['--dynamicimports', vm_common.maven_deploy_base_functions.dynamic_ce_imports(os, arch)],

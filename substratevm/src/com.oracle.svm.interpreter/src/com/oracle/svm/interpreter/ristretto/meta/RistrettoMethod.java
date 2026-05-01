@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,12 +24,14 @@
  */
 package com.oracle.svm.interpreter.ristretto.meta;
 
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Function;
 
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.core.deopt.DeoptimizedFrame.DeoptTargetTier;
 import com.oracle.svm.graal.meta.SubstrateInstalledCodeImpl;
 import com.oracle.svm.graal.meta.SubstrateMethod;
 import com.oracle.svm.graal.meta.SubstrateType;
@@ -37,9 +39,15 @@ import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaType;
 import com.oracle.svm.interpreter.metadata.profile.MethodProfile;
 import com.oracle.svm.interpreter.ristretto.RistrettoConstants;
+import com.oracle.svm.interpreter.ristretto.RistrettoOptions;
 import com.oracle.svm.interpreter.ristretto.RistrettoUtils;
+import com.oracle.svm.interpreter.ristretto.profile.RistrettoDiagnostics;
+import com.oracle.svm.interpreter.ristretto.profile.RistrettoProfileSupport;
 import com.oracle.svm.interpreter.ristretto.profile.RistrettoProfilingInfo;
+import com.oracle.svm.shared.util.VMError;
 
+import jdk.graal.compiler.debug.GraalError;
+import jdk.graal.compiler.nodes.PauseNode;
 import jdk.graal.compiler.nodes.extended.MembarNode;
 import jdk.vm.ci.meta.ConstantPool;
 import jdk.vm.ci.meta.ExceptionHandler;
@@ -94,11 +102,15 @@ public final class RistrettoMethod extends SubstrateMethod {
     public volatile int compilationState = RistrettoConstants.COMPILE_STATE_INIT_VAL;
 
     /**
-     * Pointer to the svm installed code, if compilationState==COMPILED should be non-null.
-     * <p>
-     * TODO - deoptimization and retirement of this pointer not implemented yet.
+     * Pointer to the current runtime-compiled code for this method.
+     *
+     * Stale invalidation requests must claim this field atomically before mutating method-global
+     * state so older installed-code objects cannot clobber newer compilations.
      */
     public volatile SubstrateInstalledCodeImpl installedCode;
+
+    private static final AtomicReferenceFieldUpdater<RistrettoMethod, SubstrateInstalledCodeImpl> INSTALLED_CODE_UPDATER = AtomicReferenceFieldUpdater.newUpdater(RistrettoMethod.class,
+                    SubstrateInstalledCodeImpl.class, "installedCode");
     // JIT COMPILER SUPPORT END
 
     private RistrettoMethod(InterpreterResolvedJavaMethod interpreterMethod) {
@@ -127,6 +139,108 @@ public final class RistrettoMethod extends SubstrateMethod {
 
     public static RistrettoMethod getOrCreate(InterpreterResolvedJavaMethod interpreterMethod) {
         return (RistrettoMethod) interpreterMethod.getRistrettoMethod(RISTRETTO_METHOD_FUNCTION);
+    }
+
+    private void transitionToInterpreted() {
+        int oldState = RistrettoProfileSupport.COMPILATION_STATE_UPDATER.get(this);
+        do {
+            switch (oldState) {
+                case RistrettoConstants.COMPILE_STATE_INIT_VAL:
+                case RistrettoConstants.COMPILE_STATE_SUBMITTED:
+                case RistrettoConstants.COMPILE_STATE_INTERPRETED:
+                    return;
+                case RistrettoConstants.COMPILE_STATE_COMPILED:
+                    if (RistrettoProfileSupport.COMPILATION_STATE_UPDATER.compareAndSet(this, RistrettoConstants.COMPILE_STATE_COMPILED, RistrettoConstants.COMPILE_STATE_INTERPRETED)) {
+                        RistrettoProfileSupport.trace(RistrettoOptions.JITTraceCompilationQueuing, "[Ristretto Method]Transitioned to INTERPRETED from COMPILED for %s%n", this);
+                        return;
+                    }
+                    PauseNode.pause();
+                    break;
+                case RistrettoConstants.COMPILE_STATE_INITIALIZING:
+                    throw GraalError.shouldNotReachHere("Can never go back to initialization");
+                default:
+                    throw VMError.shouldNotReachHere("Unknown state " + oldState);
+            }
+            oldState = RistrettoProfileSupport.COMPILATION_STATE_UPDATER.get(this);
+        } while (true);
+    }
+
+    /**
+     * Publishes a freshly compiled installed-code object and advances the method state to
+     * {@code COMPILED}.
+     *
+     * The installed-code pointer is published before the state transition so interpreter dispatch
+     * never observes a compiled state without a current code object.
+     *
+     * @param code the newly compiled code object
+     * @param installCode whether the current test configuration wants to publish {@code code}
+     *            through {@link #installedCode}
+     */
+    public void onCompilationSuccess(SubstrateInstalledCodeImpl code, boolean installCode) {
+        if (installCode) {
+            INSTALLED_CODE_UPDATER.set(this, code);
+        }
+        if (!RistrettoProfileSupport.COMPILATION_STATE_UPDATER.compareAndSet(this, RistrettoConstants.COMPILE_STATE_SUBMITTED,
+                        RistrettoConstants.COMPILE_STATE_COMPILED)) {
+            if (installCode) {
+                INSTALLED_CODE_UPDATER.compareAndSet(this, code, null);
+            }
+            throw GraalError.shouldNotReachHere(
+                            String.format("Only a single compile of %s should ever reach the compile queue, it cannot be that we reach here with a different state but did %s",
+                                            this, RistrettoProfileSupport.COMPILATION_STATE_UPDATER.get(this)));
+        }
+    }
+
+    /**
+     * Restores interpreter profiling after a queued compilation failed.
+     *
+     * Failed background compilations must not leave the method stuck in
+     * {@code COMPILE_STATE_SUBMITTED}, otherwise profiling would stop permanently.
+     */
+    public void onCompilationFailure() {
+        while (RistrettoProfileSupport.COMPILATION_STATE_UPDATER.get(this) == RistrettoConstants.COMPILE_STATE_SUBMITTED) {
+            if (RistrettoProfileSupport.COMPILATION_STATE_UPDATER.compareAndSet(this, RistrettoConstants.COMPILE_STATE_SUBMITTED, RistrettoConstants.COMPILE_STATE_INTERPRETED)) {
+                return;
+            }
+            PauseNode.pause();
+        }
+    }
+
+    /**
+     * Invalidates the method-global runtime-compilation state only if {@code expectedInstalledCode}
+     * is still the current installed code for this method.
+     *
+     * This keeps stale invalidations and reprofiling requests from older code objects from
+     * resetting the profile or compile state of a newer compilation.
+     *
+     * @param expectedInstalledCode the installed-code object that triggered invalidation
+     * @param reprofile whether the invalidation should also reset interpreter profiling
+     */
+    public void invalidateInstalledCode(SubstrateInstalledCodeImpl expectedInstalledCode, boolean reprofile) {
+        if (!INSTALLED_CODE_UPDATER.compareAndSet(this, expectedInstalledCode, null)) {
+            return;
+        }
+        RistrettoDiagnostics.InvalidatedCode.getAndIncrement();
+        if (reprofile) {
+            RistrettoDiagnostics.ReprofileRequested.getAndIncrement();
+            getProfile().reprofile();
+        }
+        transitionToInterpreted();
+    }
+
+    public void invalidate() {
+        RistrettoDiagnostics.InvalidatedCode.getAndIncrement();
+        // directly go back to interpreted if possible
+        transitionToInterpreted();
+        INSTALLED_CODE_UPDATER.set(this, null);
+    }
+
+    @Override
+    public void reprofile() {
+        RistrettoDiagnostics.ReprofileRequested.getAndIncrement();
+        // first overwrite profile and then transition back to interpreted
+        getProfile().reprofile();
+        transitionToInterpreted();
     }
 
     public MethodProfile getProfile() {
@@ -167,12 +281,12 @@ public final class RistrettoMethod extends SubstrateMethod {
 
     @Override
     public boolean canBeInlined() {
-        final boolean wasCompiledAOT = RistrettoUtils.wasAOTCompiled(this.getInterpreterMethod());
-        if (!wasCompiledAOT) {
+        InterpreterResolvedJavaMethod interpreter = this.getInterpreterMethod();
+        if (!RistrettoUtils.wasAOTCompiled(interpreter)) {
             // until GR-71589 is fixed we assume every other method can be inlined
-            return RistrettoUtils.runtimeBytecodesAvailable(this.getInterpreterMethod());
+            return RistrettoUtils.runtimeBytecodesAvailable(interpreter);
         }
-        return false;
+        return RistrettoUtils.canInlineAOT(interpreter);
     }
 
     @Override
@@ -216,6 +330,11 @@ public final class RistrettoMethod extends SubstrateMethod {
     @Override
     public LineNumberTable getLineNumberTable() {
         return interpreterMethod.getLineNumberTable();
+    }
+
+    @Override
+    public StackTraceElement asStackTraceElement(int bci) {
+        return interpreterMethod.asStackTraceElement(bci);
     }
 
     @Override
@@ -371,4 +490,16 @@ public final class RistrettoMethod extends SubstrateMethod {
             }
         }
     }
+
+    /**
+     * AOT-compiled Ristretto methods can deoptimize to baseline-style target code because they
+     * already have the necessary AOT metadata, while runtime-compiled-only methods must resume in
+     * the interpreter.
+     */
+    @Override
+    public DeoptTargetTier getDeoptTargetTier() {
+        assert !SubstrateUtil.HOSTED && SubstrateOptions.useRistretto();
+        return RistrettoUtils.wasAOTCompiled(this) ? DeoptTargetTier.BaselineCompiledCode : DeoptTargetTier.Interpreter;
+    }
+
 }

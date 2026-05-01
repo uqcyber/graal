@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -64,11 +64,11 @@ import org.graalvm.wasm.WasmInstance;
 import org.graalvm.wasm.WasmLanguage;
 import org.graalvm.wasm.WasmModule;
 import org.graalvm.wasm.WasmType;
-import org.graalvm.wasm.vector.Vector128;
-import org.graalvm.wasm.vector.Vector128Ops;
 import org.graalvm.wasm.debugging.data.DebugFunction;
 import org.graalvm.wasm.exception.Failure;
 import org.graalvm.wasm.exception.WasmException;
+import org.graalvm.wasm.vector.Vector128;
+import org.graalvm.wasm.vector.Vector128Ops;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -282,11 +282,9 @@ public class WasmFunctionRootNode extends WasmRootNode {
                 sourceSection = debugFunction.getSourceSection();
                 return;
             }
-            WasmContext context = WasmContext.get(this);
-            if (context != null) {
-                if (!context.getContextOptions().debugTestMode()) {
-                    sourceSection = debugFunction.loadSourceSection(context.environment());
-                }
+            WasmContext context = getContextOrNull();
+            if (context != null && !context.getContextOptions().debugTestMode()) {
+                sourceSection = debugFunction.loadSourceSection(context.environment());
             }
             if (sourceSection == null) {
                 sourceSection = debugFunction.createSourceSection(context == null ? null : context.environment());
@@ -307,7 +305,7 @@ public class WasmFunctionRootNode extends WasmRootNode {
                 sourceSection = debugFunction.getSourceSection();
                 return sourceSection;
             }
-            WasmContext context = WasmContext.get(this);
+            WasmContext context = getContextOrNull();
             sourceSection = debugFunction.createSourceSection(context == null ? null : context.environment());
         }
         return sourceSection;

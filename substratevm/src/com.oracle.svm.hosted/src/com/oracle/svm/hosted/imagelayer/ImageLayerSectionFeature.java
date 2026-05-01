@@ -38,30 +38,31 @@ import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.SignedWord;
-import org.graalvm.word.impl.Word;
 import org.graalvm.word.WordBase;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.objectfile.BasicProgbitsSectionImpl;
 import com.oracle.objectfile.ObjectFile;
 import com.oracle.objectfile.SectionName;
 import com.oracle.svm.core.Isolates;
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.SubstrateTarget;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.image.ImageHeapLayoutInfo;
 import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.imagelayer.ImageLayerSection;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.c.AppLayerCGlobalTracking;
 import com.oracle.svm.hosted.c.CGlobalDataFeature;
 import com.oracle.svm.hosted.image.NativeImage;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import jdk.graal.compiler.core.common.CompressEncoding;
 import jdk.graal.compiler.core.common.NumUtil;
@@ -130,7 +131,7 @@ public final class ImageLayerSectionFeature implements InternalFeature {
 
     @Override
     public List<Class<? extends Feature>> getRequiredFeatures() {
-        return List.of(HostedDynamicLayerInfoFeature.class, LoadImageSingletonFeature.class, CrossLayerConstantRegistryFeature.class, CGlobalDataFeature.class, CrossLayerFieldUpdaterFeature.class);
+        return List.of(LoadImageSingletonFeature.class, CrossLayerConstantRegistryFeature.class, CGlobalDataFeature.class, CrossLayerFieldUpdaterFeature.class);
     }
 
     @Override
@@ -163,7 +164,7 @@ public final class ImageLayerSectionFeature implements InternalFeature {
     }
 
     private static byte[] createWords(int count, WordBase initialValue) {
-        Architecture arch = ConfigurationValues.getTarget().arch;
+        Architecture arch = SubstrateTarget.getArchitecture();
         assert arch.getWordSize() == Long.BYTES : "currently hard-coded for 8 byte words";
         ByteBuffer buffer = ByteBuffer.allocate(count * Long.BYTES).order(arch.getByteOrder());
         for (int i = 0; i < count; i++) {
@@ -198,7 +199,7 @@ public final class ImageLayerSectionFeature implements InternalFeature {
         int sectionMaxSize = VARIABLY_SIZED_DATA_OFFSET;
 
         int numSingletonSlots = ImageSingletons.lookup(LoadImageSingletonFeature.class).getConstantToTableSlotMap().size();
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
         int singletonsTableSize = NumUtil.roundUp(numSingletonSlots * referenceSize, Long.BYTES);
         sectionMaxSize += Long.BYTES + singletonsTableSize;
 
@@ -283,7 +284,7 @@ public final class ImageLayerSectionFeature implements InternalFeature {
 
         ByteBuffer buffer = ByteBuffer.wrap(layeredSectionData.getContent()).order(ByteOrder.LITTLE_ENDIAN);
 
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
         buffer.position(VARIABLY_SIZED_DATA_OFFSET);
         buffer.putLong(singletonTableInfo.length);
         for (long imageSingletonOffset : singletonTableInfo) {

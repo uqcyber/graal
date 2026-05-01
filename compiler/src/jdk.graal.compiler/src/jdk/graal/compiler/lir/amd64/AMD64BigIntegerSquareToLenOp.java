@@ -65,10 +65,10 @@ public final class AMD64BigIntegerSquareToLenOp extends AMD64LIRInstruction {
 
     public static final LIRInstructionClass<AMD64BigIntegerSquareToLenOp> TYPE = LIRInstructionClass.create(AMD64BigIntegerSquareToLenOp.class);
 
-    @Use({OperandFlag.REG}) private Value xValue;
-    @Use({OperandFlag.REG}) private Value lenValue;
-    @Use({OperandFlag.REG}) private Value zValue;
-    @Use({OperandFlag.REG}) private Value zlenValue;
+    @Alive({OperandFlag.REG}) private Value xValue;
+    @Alive({OperandFlag.REG}) private Value lenValue;
+    @Alive({OperandFlag.REG}) private Value zValue;
+    @Alive({OperandFlag.REG}) private Value zlenValue;
 
     @Temp({OperandFlag.REG}) private Value tmp1Value;
     @Temp({OperandFlag.REG}) private Value[] tmpValues;
@@ -83,8 +83,8 @@ public final class AMD64BigIntegerSquareToLenOp extends AMD64LIRInstruction {
                     Value zlenValue) {
         super(TYPE);
 
-        // Due to lack of allocatable registers, we use fixed registers and mark them as @Use+@Temp.
-        // This allows the fixed registers to be reused for hosting temporary values.
+        // This stub uses fixed registers. len/zlen are preserved across the instruction while the
+        // temporary set contains only the real scratch registers.
         GraalError.guarantee(asRegister(xValue).equals(rdi), "expect xValue at rdi, but was %s", xValue);
         GraalError.guarantee(asRegister(lenValue).equals(rsi), "expect lenValue at rsi, but was %s", lenValue);
         GraalError.guarantee(asRegister(zValue).equals(r11), "expect zValue at r11, but was %s", zValue);
@@ -105,14 +105,10 @@ public final class AMD64BigIntegerSquareToLenOp extends AMD64LIRInstruction {
 
         this.tmpValues = new Value[]{
                         rax.asValue(),
-                        rcx.asValue(),
                         rdx.asValue(),
                         rbx.asValue(),
-                        rsi.asValue(),
-                        rdi.asValue(),
                         r9.asValue(),
                         r10.asValue(),
-                        r11.asValue(),
                         r13.asValue(),
         };
     }

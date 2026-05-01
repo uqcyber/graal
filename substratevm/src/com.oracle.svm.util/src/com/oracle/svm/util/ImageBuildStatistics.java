@@ -33,6 +33,10 @@ import java.util.function.Consumer;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.nodes.extended.BytecodeExceptionNode;
 import jdk.graal.compiler.options.Option;
@@ -41,6 +45,7 @@ import jdk.graal.compiler.options.OptionKey;
 /**
  * This class collects detailed counters that are then saved into the image build statistics file.
  */
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class ImageBuildStatistics {
 
     public static class Options {

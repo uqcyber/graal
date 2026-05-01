@@ -1,5 +1,5 @@
 [[rule]]
-files = "benchmark-*.libsonnet benchmark-*.jsonnet"
+files = "*bench*.libsonnet *bench*.jsonnet"
 any = [
     "francois.farquet@oracle.com",
     "andrija.kolic@oracle.com",

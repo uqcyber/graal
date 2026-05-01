@@ -38,7 +38,7 @@ import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.heap.ImageHeapScanner;
 import com.oracle.svm.core.CPUFeatureAccess;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.graal.code.SubstrateCompilationIdentifier;
 import com.oracle.svm.core.graal.code.SubstrateCompilationResult;
@@ -100,7 +100,7 @@ public class SubstrateGraalUtils {
             return IsolatedGraalUtils.compileInNewIsolateAndInstall(method, installedCodeFactory);
         }
         RuntimeConfiguration runtimeConfiguration = RuntimeCompilationSupport.getRuntimeConfig();
-        DebugContext debug = new DebugContext.Builder(RuntimeOptionValues.singleton(), new GraalDebugHandlersFactory(runtimeConfiguration.getProviders().getSnippetReflection())).build();
+        DebugContext debug = new DebugContext.Builder(RuntimeOptionValues.singleton().get(), new GraalDebugHandlersFactory(runtimeConfiguration.getProviders().getSnippetReflection())).build();
         SubstrateInstalledCode installedCode = installedCodeFactory.createSubstrateInstalledCode();
         CompilationResult compilationResult = doCompile(debug, RuntimeCompilationSupport.getRuntimeConfig(), RuntimeCompilationSupport.getLIRSuites(), method);
         RuntimeCodeInstaller.install(method, compilationResult, installedCode);

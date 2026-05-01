@@ -31,7 +31,6 @@ import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.ImageClassLoader;
@@ -156,14 +155,14 @@ public class WebImageOptions {
      * This value should not be used to make compilation decisions.
      */
     public static String getTargetVM() {
-        return JSRuntime.getValue(HostedOptionValues.singleton()).name();
+        return JSRuntime.getValue(HostedOptionValues.singleton().get()).name();
     }
 
     /**
      * Returns true if the given target runtime should be supported.
      */
     public static boolean supportRuntime(VMType target) {
-        return JSRuntime.getValue(HostedOptionValues.singleton()).includes(target);
+        return JSRuntime.getValue(HostedOptionValues.singleton().get()).includes(target);
     }
 
     /**
@@ -294,14 +293,7 @@ public class WebImageOptions {
     public static final OptionKey<Boolean> OutlineRuntimeChecks = new OptionKey<>(true);
 
     @Option(help = "Generate source maps to debug Java code")//
-    public static final OptionKey<Boolean> GenerateSourceMap = new OptionKey<>(false) {
-        @Override
-        protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Boolean oldValue, Boolean newValue) {
-            if (newValue) {
-                SubstrateOptions.IncludeNodeSourcePositions.update(values, oldValue);
-            }
-        }
-    };
+    public static final OptionKey<Boolean> GenerateSourceMap = new OptionKey<>(false);
 
     @Option(help = "Directory containing source files for DevTools. May be relative to output file.")//
     public static final OptionKey<String> SourceMapSourceRoot = new OptionKey<>("");
@@ -365,7 +357,7 @@ public class WebImageOptions {
      * {@link CommentVerbosity#NORMAL} is {@code null}).
      */
     public static boolean genJSComments(CommentVerbosity verbosity) {
-        return JSComments.getValue(HostedOptionValues.singleton()).isEnabled(verbosity == null ? CommentVerbosity.NORMAL : verbosity);
+        return JSComments.getValue(HostedOptionValues.singleton().get()).isEnabled(verbosity == null ? CommentVerbosity.NORMAL : verbosity);
     }
 
     @Option(help = "Determine if the Web Image compilation should be silent and not dump info")//

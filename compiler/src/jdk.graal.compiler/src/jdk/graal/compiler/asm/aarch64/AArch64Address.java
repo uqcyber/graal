@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -359,7 +359,9 @@ public final class AArch64Address extends AbstractAddress {
             case LD2_MULTIPLE_2R:
                 return regByteSize * 2;
             case ST1_MULTIPLE_3R:
+            case ST3_MULTIPLE_3R:
             case LD1_MULTIPLE_3R:
+            case LD3_MULTIPLE_3R:
                 return regByteSize * 3;
             case ST1_MULTIPLE_4R:
             case ST4_MULTIPLE_4R:

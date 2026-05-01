@@ -3481,7 +3481,7 @@ public class TagTest extends AbstractInstructionTest {
 
     }
 
-    @ExpectError("Too many @Instrumentation and provided tags specified. %")
+    @ExpectError("Too many @Instrumentation annotated operations and provided tags specified. %")
     @GenerateBytecode(languageClass = ManyRootTagTestLanguage.class, //
                     enableTagInstrumentation = true, //
                     enableRootBodyTagging = false, enableRootTagging = false)

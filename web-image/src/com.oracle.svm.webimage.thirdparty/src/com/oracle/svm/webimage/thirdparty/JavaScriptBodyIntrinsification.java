@@ -121,7 +121,7 @@ public class JavaScriptBodyIntrinsification {
     }
 
     static void findJSMethods(FeatureImpl.DuringAnalysisAccessImpl access) {
-        for (ResolvedJavaMethod m : access.getImageClassLoader().findAnnotatedResolvedJavaMethods(JavaScriptBody.class)) {
+        for (ResolvedJavaMethod m : access.getImageClassLoader().guestTypes.findAnnotatedMethods(JavaScriptBody.class)) {
             AnalysisMethod aMethod = access.getUniverse().lookup(m);
             JSBodyStubMethod stubMethod = (JSBodyStubMethod) aMethod.getWrapped();
             JSBody.JSCode jsCode = stubMethod.getJsCode();

@@ -60,6 +60,7 @@ import com.oracle.truffle.api.instrumentation.Tag;
 public final class BytecodeConfig {
 
     private static final long SOURCE_ENCODING = 0b1L;
+    private static final long SOURCE_WITH_CONTENT_ENCODING = 0b11L;
 
     /**
      * Do not materialize any source or instrumentation information.
@@ -74,6 +75,16 @@ public final class BytecodeConfig {
      * @since 24.2
      */
     public static final BytecodeConfig WITH_SOURCE = new BytecodeConfig(null, SOURCE_ENCODING);
+
+    /**
+     * Materialize source information and load content.
+     * <p>
+     * If the interpreter does not declare a {@link GenerateBytecode#sourceContentSupplier() source
+     * content supplier}, this config is equivalent to {@link #WITH_SOURCE}.
+     *
+     * @since 25.1
+     */
+    public static final BytecodeConfig WITH_SOURCE_CONTENT = new BytecodeConfig(null, SOURCE_WITH_CONTENT_ENCODING);
 
     /**
      * Materialize all information.
@@ -125,6 +136,20 @@ public final class BytecodeConfig {
         public Builder addSource() {
             CompilerAsserts.neverPartOfCompilation();
             this.encoding |= SOURCE_ENCODING;
+            return this;
+        }
+
+        /**
+         * Sets whether to {@link #addSource materialize sources} and their content.
+         * <p>
+         * This method has no effect unless a {@link GenerateBytecode#sourceContentSupplier() source
+         * content supplier} is provided.
+         *
+         * @since 25.1
+         */
+        public Builder addSourceContent() {
+            CompilerAsserts.neverPartOfCompilation();
+            this.encoding |= SOURCE_WITH_CONTENT_ENCODING;
             return this;
         }
 

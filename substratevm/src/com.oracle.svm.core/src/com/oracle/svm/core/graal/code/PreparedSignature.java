@@ -24,31 +24,99 @@
  */
 package com.oracle.svm.core.graal.code;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import java.util.Arrays;
+
+import com.oracle.svm.shared.Uninterruptible;
 
 import jdk.vm.ci.meta.JavaKind;
 
 public final class PreparedSignature {
+    private static final JavaKind[] JAVA_KINDS = JavaKind.values();
+    private static final int KIND_BITS = 4;
+    private static final int KIND_MASK = (1 << KIND_BITS) - 1;
+    private static final int REGISTER_SHIFT = KIND_BITS;
+    private static final int VALUE_SHIFT = REGISTER_SHIFT + 1;
+
+    static {
+        assert JAVA_KINDS.length <= (1 << KIND_BITS) : "Not enough bits reserved to encode every JavaKind value.";
+    }
+
     private final JavaKind returnKind;
-    private final PreparedArgumentType[] preparedArgumentTypes;
+    private final int[] preparedArgumentTypes;
     private final int stackSize;
 
-    public PreparedSignature(JavaKind returnKind, PreparedArgumentType[] preparedArgumentTypes, int stackSize) {
+    public PreparedSignature(JavaKind returnKind, int[] preparedArgumentTypes, int stackSize) {
         this.returnKind = returnKind;
         this.preparedArgumentTypes = preparedArgumentTypes;
         this.stackSize = stackSize;
     }
 
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof PreparedSignature that)) {
+            return false;
+        }
+        return returnKind == that.returnKind && stackSize == that.stackSize && Arrays.equals(preparedArgumentTypes, that.preparedArgumentTypes);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = returnKind.hashCode();
+        result = 31 * result + Arrays.hashCode(preparedArgumentTypes);
+        result = 31 * result + stackSize;
+        return result;
+    }
+
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-    public PreparedArgumentType[] getPreparedArgumentTypes() {
+    public int[] getArgumentTypes() {
         return preparedArgumentTypes;
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-    public int getCount() {
-        return preparedArgumentTypes.length;
+    public static int encodeArgumentType(JavaKind kind, int value, boolean isRegister) {
+        return kind.ordinal() | ((isRegister ? 1 : 0) << REGISTER_SHIFT) | (value << VALUE_SHIFT);
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static JavaKind getKind(int argType) {
+        return JAVA_KINDS[argType & KIND_MASK];
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static boolean isRegister(int argType) {
+        return ((argType >>> REGISTER_SHIFT) & 1) != 0;
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static boolean isStackSlot(int argType) {
+        return !isRegister(argType);
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static int getRegister(int argType) {
+        assert isRegister(argType);
+        return getValue(argType);
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static int getStackOffset(int argType) {
+        assert isStackSlot(argType);
+        return getValue(argType);
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    private static int getValue(int argType) {
+        return argType >>> VALUE_SHIFT;
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static int getDefaultArgumentType() {
+        return 0;
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)

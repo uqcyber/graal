@@ -37,7 +37,6 @@ import java.util.Set;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.configure.ConfigurationTypeDescriptor;
 import com.oracle.svm.configure.JsonFileWriter;
@@ -48,16 +47,16 @@ import com.oracle.svm.configure.config.ConfigurationFileCollection;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo;
 import com.oracle.svm.configure.config.ConfigurationSet;
 import com.oracle.svm.configure.config.ConfigurationType;
-import com.oracle.svm.core.AlwaysInline;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;
-import com.oracle.svm.core.jdk.RuntimeSupportFeature;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.thread.VMOperation;
+import com.oracle.svm.shared.AlwaysInline;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.option.OptionUtils;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
@@ -101,9 +100,18 @@ public final class MetadataTracer {
 
         @Option(help = TRACE_METADATA_HELP, stability = OptionStability.EXPERIMENTAL)//
         public static final RuntimeOptionKey<String> TraceMetadata = new RuntimeOptionKey<>(null);
+
+        @Option(help = """
+                        Specifies a comma-separated list of package prefixes used to condition traced metadata.
+                        If specified, traced metadata is conditional on the first class on the call stack whose name starts with one of the package prefixes.
+                        Trace events without a matching stack class are ignored. This option only has an effect when -XX:TraceMetadata is set.
+                        """, stability = OptionStability.EXPERIMENTAL)//
+        public static final RuntimeOptionKey<String> TraceMetadataConditionPackages = new RuntimeOptionKey<>(null);
     }
 
     private TraceOptions options;
+    private List<String> conditionPackagePrefixes;
+    private StackWalker conditionStackWalker;
     private JsonFileWriter debugWriter;
     private final ThreadLocal<String> disableTracingReason = new ThreadLocal<>();
 
@@ -126,6 +134,8 @@ public final class MetadataTracer {
 
     private void initialize(TraceOptions parsedOptions) {
         this.options = parsedOptions;
+        this.conditionPackagePrefixes = initializeConditionPackagePrefixes();
+        this.conditionStackWalker = conditionPackagePrefixes.isEmpty() ? null : StackWalker.getInstance();
         this.debugWriter = initializeDebugWriter(parsedOptions);
         this.config = initializeConfigurationSet(parsedOptions);
     }
@@ -261,8 +271,11 @@ public final class MetadataTracer {
         }
         ConfigurationSet configurationSet = getConfigurationSetForTracing();
         if (configurationSet != null) {
-            debugReflectionType(typeDescriptor, configurationSet);
-            return configurationSet.getReflectionConfiguration().getOrCreateType(UnresolvedAccessCondition.unconditional(), typeDescriptor);
+            UnresolvedAccessCondition condition = traceCondition();
+            if (condition != null) {
+                debugReflectionType(condition, typeDescriptor, configurationSet);
+                return configurationSet.getReflectionConfiguration().getOrCreateType(condition, typeDescriptor);
+            }
         }
         return null;
     }
@@ -315,8 +328,11 @@ public final class MetadataTracer {
         assert enabledAtRunTime();
         ConfigurationSet configurationSet = getConfigurationSetForTracing();
         if (configurationSet != null) {
-            debugResourceGlob(resourceName, moduleName);
-            configurationSet.getResourceConfiguration().addGlobPattern(UnresolvedAccessCondition.unconditional(), resourceName, moduleName);
+            UnresolvedAccessCondition condition = traceCondition();
+            if (condition != null) {
+                debugResourceGlob(resourceName, moduleName);
+                configurationSet.getResourceConfiguration().addGlobPattern(condition, resourceName, moduleName);
+            }
         }
     }
 
@@ -327,8 +343,11 @@ public final class MetadataTracer {
         assert enabledAtRunTime();
         ConfigurationSet configurationSet = getConfigurationSetForTracing();
         if (configurationSet != null) {
-            debug("resource bundle registered", baseName);
-            configurationSet.getResourceConfiguration().addBundle(UnresolvedAccessCondition.unconditional(), baseName, List.of());
+            UnresolvedAccessCondition condition = traceCondition();
+            if (condition != null) {
+                debug("resource bundle registered", baseName);
+                configurationSet.getResourceConfiguration().addBundle(condition, baseName, List.of());
+            }
         }
     }
 
@@ -388,13 +407,36 @@ public final class MetadataTracer {
      * Debug helper for reflective type accesses. Avoids "type is already registered" check if debug
      * logging is disabled.
      */
-    private void debugReflectionType(ConfigurationTypeDescriptor typeDescriptor, ConfigurationSet configurationSet) {
+    private void debugReflectionType(UnresolvedAccessCondition condition, ConfigurationTypeDescriptor typeDescriptor, ConfigurationSet configurationSet) {
         if (debugWriter == null) {
             return;
         }
-        if (configurationSet.getReflectionConfiguration().get(UnresolvedAccessCondition.unconditional(), typeDescriptor) == null) {
+        if (configurationSet.getReflectionConfiguration().get(condition, typeDescriptor) == null) {
             debug("type registered for reflection", typeDescriptor);
         }
+    }
+
+    private UnresolvedAccessCondition traceCondition() {
+        if (conditionPackagePrefixes.isEmpty()) {
+            return UnresolvedAccessCondition.unconditional();
+        }
+        try (var _ = new DisableTracingImpl("condition stack trace")) {
+            return conditionStackWalker.walk(stackFrames -> stackFrames
+                            .map(StackWalker.StackFrame::getClassName)
+                            .filter(this::matchesConditionPackagePrefix)
+                            .findFirst()
+                            .map(className -> UnresolvedAccessCondition.create(NamedConfigurationTypeDescriptor.fromTypeName(className))))
+                            .orElse(null);
+        }
+    }
+
+    private boolean matchesConditionPackagePrefix(String className) {
+        for (String conditionPackagePrefix : conditionPackagePrefixes) {
+            if (className.startsWith(conditionPackagePrefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -449,6 +491,13 @@ public final class MetadataTracer {
         } catch (IOException ex) {
             throw new IllegalArgumentException("Exception occurred preparing the debug log file (" + options.debugLog() + ")", ex);
         }
+    }
+
+    private static List<String> initializeConditionPackagePrefixes() {
+        if (!Options.TraceMetadataConditionPackages.hasBeenSet()) {
+            return List.of();
+        }
+        return TraceConditionPackagePrefixes.parse(Options.TraceMetadataConditionPackages.getValue());
     }
 
     private static ConfigurationSet initializeConfigurationSet(TraceOptions options) {
@@ -511,9 +560,10 @@ public final class MetadataTracer {
                 return;
             }
             VMError.guarantee(!Options.MetadataTracingSupport.getValue());
-            if (Options.TraceMetadata.hasBeenSet()) {
+            if (Options.TraceMetadata.hasBeenSet() || Options.TraceMetadataConditionPackages.hasBeenSet()) {
                 throw new IllegalArgumentException(
-                                "The option " + Options.TraceMetadata.getName() + " can only be used if metadata tracing is enabled at build time (using " +
+                                "The options " + Options.TraceMetadata.getName() + " and " + Options.TraceMetadataConditionPackages.getName() +
+                                                " can only be used if metadata tracing is enabled at build time (using " +
                                                 hostedOptionCommandArgument + ").");
             }
         };
@@ -632,17 +682,31 @@ record TraceOptions(Path path, boolean merge, Path debugLog) {
     }
 }
 
+final class TraceConditionPackagePrefixes {
+    private static final String SEPARATOR = ",";
+
+    private TraceConditionPackagePrefixes() {
+    }
+
+    static List<String> parse(String optionValue) {
+        if (optionValue == null || optionValue.isEmpty()) {
+            throw new IllegalArgumentException("Option " + MetadataTracer.Options.TraceMetadataConditionPackages.getName() + " cannot be empty.");
+        }
+        List<String> packages = Arrays.asList(StringUtil.split(optionValue, SEPARATOR));
+        if (packages.stream().anyMatch(packageName -> packageName.isEmpty() || !OptionUtils.isValidPackageOrClassName(packageName))) {
+            throw new IllegalArgumentException("Option " + MetadataTracer.Options.TraceMetadataConditionPackages.getName() +
+                            " must contain package prefixes separated by '" + SEPARATOR + "'.");
+        }
+        return packages.stream().map(packageName -> packageName + ".").toList();
+    }
+}
+
 @AutomaticallyRegisteredFeature
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = SingleLayer.class)
 class MetadataTracerFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
         return ImageLayerBuildingSupport.firstImageBuild();
-    }
-
-    @Override
-    public List<Class<? extends Feature>> getRequiredFeatures() {
-        return List.of(RuntimeSupportFeature.class);
     }
 
     @Override

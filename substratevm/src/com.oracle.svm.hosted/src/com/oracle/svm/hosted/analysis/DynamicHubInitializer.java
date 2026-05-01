@@ -27,11 +27,11 @@ package com.oracle.svm.hosted.analysis;
 import static com.oracle.svm.core.classinitialization.ClassInitializationInfo.InitState.FullyInitialized;
 import static com.oracle.svm.core.classinitialization.ClassInitializationInfo.InitState.InitializationError;
 
-import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.oracle.svm.core.hub.DynamicHubCompanion;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 
 import com.oracle.graal.pointsto.BigBang;
@@ -50,10 +50,8 @@ import com.oracle.svm.core.classinitialization.ClassInitializationInfo;
 import com.oracle.svm.core.encoder.IdentitySymbolEncoder;
 import com.oracle.svm.core.encoder.SymbolEncoder;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.hub.DynamicHubCompanion;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.meta.MethodPointer;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.BootLoaderSupport;
 import com.oracle.svm.hosted.ClassLoaderFeature;
 import com.oracle.svm.hosted.ExceptionSynthesizer;
@@ -63,7 +61,9 @@ import com.oracle.svm.hosted.classinitialization.SimulateClassInitializerSupport
 import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
 import com.oracle.svm.hosted.imagelayer.SVMImageLayerLoader;
 import com.oracle.svm.hosted.jdk.HostedClassLoaderPackageManagement;
-import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.JVMCIReflectionUtil;
 
 import jdk.graal.compiler.debug.Assertions;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
@@ -81,11 +81,11 @@ public class DynamicHubInitializer {
 
     private final Map<InterfacesEncodingKey, DynamicHub[]> interfacesEncodings;
 
-    private final Field hubCompanionArrayHubField;
-    private final Field hubCompanionClassInitializationInfo;
-    private final Field hubCompanionInterfacesEncoding;
-    private final Field hubCompanionAnnotationsEnumConstantsReference;
-    private final Field hubCompanionInterpreterType;
+    private final ResolvedJavaField hubCompanionArrayHubField;
+    private final ResolvedJavaField hubCompanionClassInitializationInfo;
+    private final ResolvedJavaField hubCompanionInterfacesEncoding;
+    private final ResolvedJavaField hubCompanionAnnotationsEnumConstantsReference;
+    private final ResolvedJavaField hubCompanionInterpreterType;
     private final SVMImageLayerLoader layerLoader;
 
     public DynamicHubInitializer(BigBang bb) {
@@ -96,12 +96,12 @@ public class DynamicHubInitializer {
         this.symbolEncoder = SymbolEncoder.singleton();
 
         this.interfacesEncodings = new ConcurrentHashMap<>();
-
-        hubCompanionArrayHubField = ReflectionUtil.lookupField(DynamicHubCompanion.class, "arrayHub");
-        hubCompanionClassInitializationInfo = ReflectionUtil.lookupField(DynamicHubCompanion.class, "classInitializationInfo");
-        hubCompanionInterfacesEncoding = ReflectionUtil.lookupField(DynamicHubCompanion.class, "interfacesEncoding");
-        hubCompanionAnnotationsEnumConstantsReference = ReflectionUtil.lookupField(DynamicHubCompanion.class, "enumConstantsReference");
-        hubCompanionInterpreterType = ReflectionUtil.lookupField(DynamicHubCompanion.class, "interpreterType");
+        ResolvedJavaType dynamicHubCompanionType = GuestAccess.get().lookupType(DynamicHubCompanion.class);
+        hubCompanionArrayHubField = JVMCIReflectionUtil.getUniqueDeclaredField(dynamicHubCompanionType, "arrayHub");
+        hubCompanionClassInitializationInfo = JVMCIReflectionUtil.getUniqueDeclaredField(dynamicHubCompanionType, "classInitializationInfo");
+        hubCompanionInterfacesEncoding = JVMCIReflectionUtil.getUniqueDeclaredField(dynamicHubCompanionType, "interfacesEncoding");
+        hubCompanionAnnotationsEnumConstantsReference = JVMCIReflectionUtil.getUniqueDeclaredField(dynamicHubCompanionType, "enumConstantsReference");
+        hubCompanionInterpreterType = JVMCIReflectionUtil.getUniqueDeclaredField(dynamicHubCompanionType, "interpreterType");
         layerLoader = HostedImageLayerBuildingSupport.singleton().getLoader();
     }
 

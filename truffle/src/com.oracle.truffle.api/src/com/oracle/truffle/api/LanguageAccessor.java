@@ -85,6 +85,7 @@ final class LanguageAccessor extends Accessor {
     static final RuntimeSupport RUNTIME = ACCESSOR.runtimeSupport();
     static final ExceptionSupport EXCEPTIONS = ACCESSOR.exceptionSupport();
     static final HostSupport HOST = ACCESSOR.hostSupport();
+    static final PolyglotIsolateSupport ISOLATE = ACCESSOR.polyglotIsolateSupport();
 
     private LanguageAccessor() {
     }

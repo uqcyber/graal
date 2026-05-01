@@ -36,7 +36,12 @@ public final class SemanticJavaException extends RuntimeException {
     @java.io.Serial static final long serialVersionUID = 8271499373291031203L;
 
     private SemanticJavaException(Throwable cause) {
-        super(cause);
+        /*
+         * RuntimeException(Throwable) derives the wrapper message from cause.toString(), which can
+         * itself throw for guest exceptions with lazy or hostile message formatting. Preserve only
+         * the cause so semantic guest exceptions cannot turn into host-side wrapper failures.
+         */
+        super(null, cause);
     }
 
     @Override

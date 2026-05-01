@@ -27,6 +27,7 @@ package com.oracle.svm.hosted.webimage.wasm.gc;
 
 import java.lang.ref.Reference;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
@@ -34,7 +35,6 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.MemoryWalker;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.genscavenge.ImageHeapWalker;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.ObjectHeader;
@@ -107,7 +107,7 @@ public class WasmHeapVerifier {
             return false;
         }
 
-        int objectAlignment = ConfigurationValues.getObjectLayout().getAlignment();
+        int objectAlignment = ObjectLayout.singleton().getAlignment();
         if (ptr.unsignedRemainder(objectAlignment).notEqual(0)) {
             Log.log().string("Object ").zhex(ptr).string(" is not properly aligned to ").signed(objectAlignment).string(" bytes.").newline();
             return false;

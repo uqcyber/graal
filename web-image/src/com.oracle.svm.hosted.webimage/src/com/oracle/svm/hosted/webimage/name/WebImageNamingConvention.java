@@ -65,7 +65,7 @@ public final class WebImageNamingConvention implements NamingConvention {
 
     public static void initialize() {
         GraalError.guarantee(singletonInstance == null, "A naming convention instance has already been created");
-        singletonInstance = new WebImageNamingConvention(WebImageOptions.NamingConvention.getValue(HostedOptionValues.singleton()));
+        singletonInstance = new WebImageNamingConvention(WebImageOptions.NamingConvention.getValue(HostedOptionValues.singleton().get()));
     }
 
     public static WebImageNamingConvention getInstance() {

@@ -25,9 +25,9 @@
  */
 package com.oracle.svm.core.jdk;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.annotate.RecomputeFieldValue.Kind.Reset;
 import static com.oracle.svm.core.snippets.KnownIntrinsics.readHub;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import java.io.File;
 import java.io.InputStream;
@@ -51,8 +51,6 @@ import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.NeverInlineTrivial;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.AnnotateOriginal;
 import com.oracle.svm.core.annotate.Delete;
@@ -65,16 +63,18 @@ import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.container.Container;
 import com.oracle.svm.core.container.OperatingSystem;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
-import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
+import com.oracle.svm.core.jdk.strings.StringInternSupport;
 import com.oracle.svm.core.monitor.MonitorSupport;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.VMOperation;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.replacements.nodes.BinaryMathIntrinsicGenerationNode;
 import jdk.graal.compiler.replacements.nodes.BinaryMathIntrinsicNode.BinaryOperation;
@@ -303,7 +303,7 @@ final class Target_java_lang_Throwable {
 
                     BacktraceVisitor visitor = new BacktraceVisitor();
                     JavaThreads.visitCurrentStackFrames(visitor);
-                    backtrace = visitor.getArray();
+                    backtrace = visitor.getBacktraceHolder();
 
                     stackTrace = UNASSIGNED_STACK;
                 }
@@ -316,7 +316,7 @@ final class Target_java_lang_Throwable {
 
                     BacktraceVisitor visitor = new BacktraceVisitor();
                     JavaThreads.visitCurrentStackFrames(visitor);
-                    backtrace = visitor.getArray();
+                    backtrace = visitor.getBacktraceHolder();
 
                     stackTrace = UNASSIGNED_STACK;
                 }
@@ -366,7 +366,7 @@ final class Target_java_lang_StackTraceElement {
      */
     @Substitute
     static StackTraceElement[] of(Object x, int depth) {
-        return StackTraceBuilder.build((long[]) x);
+        return StackTraceBuilder.build(x);
     }
 }
 
@@ -674,7 +674,7 @@ final class Target_jdk_internal_loader_BootLoader {
     }
 
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     public static Stream<Package> packages() {
         Target_jdk_internal_loader_BuiltinClassLoader bootClassLoader = Target_jdk_internal_loader_ClassLoaders.bootLoader();
         Target_java_lang_ClassLoader systemClassLoader = SubstrateUtil.cast(bootClassLoader, Target_java_lang_ClassLoader.class);
@@ -682,30 +682,16 @@ final class Target_jdk_internal_loader_BootLoader {
     }
 
     @Delete("only used by #packages()")
-    @TargetElement(name = "getSystemPackageNames", onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
+    @TargetElement(name = "getSystemPackageNames", onlyWith = ClassRegistries.IgnoresClassLoader.class)
     private static native String[] getSystemPackageNamesDeleted();
 
     @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.RespectsClassLoader.class)
+    @TargetElement(onlyWith = ClassRegistries.RespectsClassLoader.class)
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/java.base/share/native/libjava/BootLoader.c#L37-L41")
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L3003-L3007")
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+16/src/hotspot/share/classfile/classLoader.cpp#L907-L924")
     private static String[] getSystemPackageNames() {
         return ClassRegistries.getSystemPackageNames();
-    }
-
-    @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
-    private static Class<?> loadClassOrNull(String name) {
-        return ClassForNameSupport.forNameOrNull(name, null);
-    }
-
-    @SuppressWarnings("unused")
-    @Substitute
-    @TargetElement(onlyWith = ClassForNameSupport.IgnoresClassLoader.class)
-    private static Class<?> loadClass(Module module, String name) {
-        /* The module system is not supported for now, therefore the module parameter is ignored. */
-        return ClassForNameSupport.forNameOrNull(name, null);
     }
 
     @SuppressWarnings({"unused", "restricted"})

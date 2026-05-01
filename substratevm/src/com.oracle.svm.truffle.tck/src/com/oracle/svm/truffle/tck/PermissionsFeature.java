@@ -207,6 +207,8 @@ public class PermissionsFeature implements Feature {
         safePackages.add("com.oracle.svm.core.");
         safePackages.add("com.oracle.truffle.api.");
         safePackages.add("com.oracle.truffle.polyglot.");
+        safePackages.add("com.oracle.truffle.polyglot.isolate.");
+        safePackages.add("com.oracle.truffle.sandbox.");
         safePackages.add("com.oracle.truffle.host.");
         safePackages.add("com.oracle.truffle.nfi.");
         safePackages.add("com.oracle.truffle.object.");
@@ -217,8 +219,6 @@ public class PermissionsFeature implements Feature {
         safePackages.add("com.oracle.truffle.runtime.hotspot.");
         safePackages.add("com.oracle.truffle.runtime.hotspot.libgraal.");
         safePackages.add("com.oracle.truffle.runtime.enterprise.");
-        safePackages.add("com.oracle.truffle.sandbox.enterprise.");
-        safePackages.add("com.oracle.truffle.polyglot.enterprise.");
         safePackages.add("com.oracle.truffle.object.enterprise.");
         safePackages.add("com.oracle.svm.truffle.api.");
         safePackages.add("com.oracle.svm.truffle.isolated.");

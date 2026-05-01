@@ -35,6 +35,7 @@ import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
 
 import jdk.graal.compiler.core.common.type.IntegerStamp;
+import jdk.graal.compiler.core.common.type.ObjectStamp;
 import jdk.graal.compiler.core.common.type.PrimitiveStamp;
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.debug.DebugCloseable;
@@ -65,6 +66,7 @@ import jdk.graal.compiler.nodes.ValueProxyNode;
 import jdk.graal.compiler.nodes.calc.MinMaxNode;
 import jdk.graal.compiler.nodes.extended.FixedValueAnchorNode;
 import jdk.graal.compiler.nodes.java.InstanceOfNode;
+import jdk.graal.compiler.nodes.java.LoadFieldNode;
 import jdk.graal.compiler.nodes.java.MethodCallTargetNode;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.nodes.spi.SimplifierTool;
@@ -80,8 +82,10 @@ import jdk.graal.compiler.serviceprovider.SpeculationReasonGroup;
 import jdk.graal.compiler.vector.architecture.VectorArchitecture;
 import jdk.graal.compiler.vector.architecture.VectorLoweringProvider;
 import jdk.graal.compiler.vector.nodes.simd.SimdStamp;
+import jdk.graal.compiler.vector.replacements.vectorapi.nodes.VectorAPILoadMaskedNode;
 import jdk.graal.compiler.vector.replacements.vectorapi.nodes.VectorAPIMacroNode;
 import jdk.graal.compiler.vector.replacements.vectorapi.nodes.VectorAPISinkNode;
+import jdk.graal.compiler.vector.replacements.vectorapi.nodes.VectorAPIStoreMaskedNode;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -295,8 +299,8 @@ public class VectorAPIExpansionPhase extends PostRunCanonicalizationPhase<HighTi
          */
         EconomicMap<ConstantNode, ValueNode> simdConstantCache = EconomicMap.create();
 
-        NodeUnionFind unionFind = collectNodes(graph, context, flood);
-        Iterable<ConnectedComponent> components = buildConnectedComponents(graph, context, unionFind, flood, simdConstantCache);
+        NodeUnionFind unionFind = collectNodes(graph, context, flood, vectorArch);
+        Iterable<ConnectedComponent> components = buildConnectedComponents(graph, context, unionFind, flood, simdConstantCache, vectorArch);
         checkComponentExpandability(graph, components, vectorArch);
         expandComponents(graph, context, simdConstantCache, components, vectorArch);
     }
@@ -306,7 +310,7 @@ public class VectorAPIExpansionPhase extends PostRunCanonicalizationPhase<HighTi
      * data structure. Also visit phis and proxies connected to macros and group them accordingly.
      * Exactly the nodes added to the union-find are also marked in {@code flood}.
      */
-    private static NodeUnionFind collectNodes(StructuredGraph graph, CoreProviders providers, NodeFlood flood) {
+    private static NodeUnionFind collectNodes(StructuredGraph graph, CoreProviders providers, NodeFlood flood, VectorArchitecture vectorArch) {
         /*
          * A grouping of nodes in the graph into equivalence classes. Each class will become a
          * connected component.
@@ -315,7 +319,17 @@ public class VectorAPIExpansionPhase extends PostRunCanonicalizationPhase<HighTi
         /* Connect all macro nodes to their inputs. */
         for (VectorAPIMacroNode macro : graph.getNodes(VectorAPIMacroNode.TYPE)) {
             flood.add(macro);
+            boolean disconnectFromInputs = (macro instanceof VectorAPIStoreMaskedNode storeMasked && shouldUseScalarMaskedFallback(storeMasked, vectorArch, providers)) ||
+                            (macro instanceof VectorAPILoadMaskedNode loadMasked && loadMasked.vectorStamp() != null && shouldUseScalarMaskedFallback(loadMasked, vectorArch, providers));
             for (Node input : macro.vectorInputs()) {
+                if (disconnectFromInputs) {
+                    /*
+                     * Keep unsupported masked load/store operations as scalar macro calls. Their
+                     * vector inputs are boxed at the use site so neighboring SIMD components can
+                     * still expand.
+                     */
+                    continue;
+                }
                 if (input instanceof ValuePhiNode phi && isPhiToBox(phi, providers)) {
                     continue;
                 }
@@ -375,7 +389,7 @@ public class VectorAPIExpansionPhase extends PostRunCanonicalizationPhase<HighTi
      * the {@code BinaryOp}. This method below will build a component containing all four nodes.
      */
     private static Iterable<ConnectedComponent> buildConnectedComponents(StructuredGraph graph, HighTierContext context, NodeUnionFind unionFind, NodeFlood flood,
-                    EconomicMap<ConstantNode, ValueNode> simdConstantCache) {
+                    EconomicMap<ConstantNode, ValueNode> simdConstantCache, VectorArchitecture vectorArch) {
         /*
          * This map contains the components we build. For each node n in the union find, its
          * component can be found using unionFind.find(n) as the key.
@@ -397,17 +411,35 @@ public class VectorAPIExpansionPhase extends PostRunCanonicalizationPhase<HighTi
              * properties to determine if the component can still be expanded to SIMD code.
              */
             if (node instanceof VectorAPIMacroNode macro) {
-                component.macros.add(macro);
-                if (macro instanceof VectorAPISinkNode sink) {
-                    component.sinks.add(sink);
-                    isSink = true;
-                }
-                if (macro.vectorStamp() == null) {
-                    node.graph().getDebug().log(DebugContext.DETAILED_LEVEL, "macro %s has null vector stamp %s", macro, macro.vectorStamp());
-                    component.canExpand = false;
-                } else if (component.canExpand) {
-                    component.simdStamps.put(macro, macro.vectorStamp());
-                    propagateStampToUsages(macro, macro.vectorStamp(), component, flood, context);
+                if (macro instanceof VectorAPILoadMaskedNode loadMasked && loadMasked.vectorStamp() != null && shouldUseScalarMaskedFallback(loadMasked, vectorArch, context)) {
+                    /*
+                     * Keep unsupported masked loads as scalar macro calls. The resulting boxed
+                     * vector object is unboxed where used so surrounding SIMD operations can still
+                     * expand.
+                     */
+                    VectorAPIType unboxableType = VectorAPIBoxingUtils.asUnboxableVectorType(loadMasked, context);
+                    if (unboxableType == null) {
+                        node.graph().getDebug().log(DebugContext.DETAILED_LEVEL, "unsupported masked load %s is not unboxable", loadMasked);
+                        component.canExpand = false;
+                    } else {
+                        component.unboxes.add(loadMasked);
+                        component.simdStamps.put(loadMasked, unboxableType.stamp);
+                        propagateStampToUsages(loadMasked, unboxableType.stamp, component, flood, context);
+                        isUnboxInput = true;
+                    }
+                } else {
+                    component.macros.add(macro);
+                    if (macro instanceof VectorAPISinkNode sink) {
+                        component.sinks.add(sink);
+                        isSink = true;
+                    }
+                    if (macro.vectorStamp() == null) {
+                        node.graph().getDebug().log(DebugContext.DETAILED_LEVEL, "macro %s has null vector stamp %s", macro, macro.vectorStamp());
+                        component.canExpand = false;
+                    } else if (component.canExpand) {
+                        component.simdStamps.put(macro, macro.vectorStamp());
+                        propagateStampToUsages(macro, macro.vectorStamp(), component, flood, context);
+                    }
                 }
             } else if (node instanceof ValuePhiNode phi) {
                 component.phis.add(phi);
@@ -714,11 +746,51 @@ public class VectorAPIExpansionPhase extends PostRunCanonicalizationPhase<HighTi
         } else if (use instanceof ReturnNode returnNode && returnNode.result().equals(value)) {
             /* If a vector value is returned, we can also try to box the vector there. */
             return VectorAPIBoxingUtils.asUnboxableVectorType(value, providers) != null;
+        } else if (use instanceof LoadFieldNode loadField && loadField.object() == value) {
+            /*
+             * Some Vector API operations still use Java fallbacks that read the boxed vector's
+             * payload field. Box the value so these payload reads don't block SIMD expansion.
+             */
+            return loadField.field().getName().equals("payload") && VectorAPIBoxingUtils.asUnboxableVectorType(value, providers) != null;
+        } else if (use instanceof VectorAPIStoreMaskedNode storeMasked) {
+            /*
+             * If a masked store must stay scalar, keep the store as a fallback call and box the
+             * input vector/mask at this use.
+             */
+            return shouldUseScalarMaskedFallback(storeMasked, VectorAPIUtils.vectorArchitecture(providers), providers) && VectorAPIBoxingUtils.asUnboxableVectorType(value, providers) != null;
         } else if (use instanceof ValuePhiNode phi && isPhiToBox(phi, providers)) {
             /* A phi that mixes vector and non-vector inputs, box all its input vectors. */
             return true;
         }
 
+        return false;
+    }
+
+    private static boolean shouldUseScalarMaskedFallback(VectorAPILoadMaskedNode loadMasked, VectorArchitecture vectorArch, CoreProviders providers) {
+        return !loadMasked.supportsVectorMaskedMove(vectorArch) || shouldBoxMaskedInput(loadMasked.getMask(), providers);
+    }
+
+    private static boolean shouldUseScalarMaskedFallback(VectorAPIStoreMaskedNode storeMasked, VectorArchitecture vectorArch, CoreProviders providers) {
+        return !storeMasked.supportsVectorMaskedMove(vectorArch) || shouldBoxMaskedInput(storeMasked.getMask(), providers);
+    }
+
+    private static boolean shouldBoxMaskedInput(ValueNode mask, CoreProviders providers) {
+        if (mask instanceof ValuePhiNode phi && isPhiToBox(phi, providers)) {
+            return true;
+        }
+        if (VectorAPIBoxingUtils.asUnboxableVectorType(mask, providers) != null) {
+            return false;
+        }
+        /*
+         * This covers exact boxed mask objects whose stamp is still nullable, e.g., a PiNode that
+         * refines the type but has not proved the value non-null. The unboxing helpers require a
+         * non-null exact stamp, so keep masked operations as scalar fallbacks in this case.
+         */
+        if (mask.stamp(NodeView.DEFAULT) instanceof ObjectStamp objectStamp && objectStamp.isExactType()) {
+            ResolvedJavaType type = objectStamp.type();
+            VectorAPIType vectorType = type == null ? null : VectorAPIType.ofType(type, providers);
+            return vectorType != null && vectorType.isMask;
+        }
         return false;
     }
 

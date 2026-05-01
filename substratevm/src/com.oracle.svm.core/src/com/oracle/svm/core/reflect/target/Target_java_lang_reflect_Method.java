@@ -32,13 +32,11 @@ import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 
-import com.oracle.svm.core.code.RuntimeMetadataDecoderImpl;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 
 import com.oracle.svm.configure.config.ConfigurationMemberInfo;
 import com.oracle.svm.configure.config.SignatureUtil;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -46,13 +44,16 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.code.RuntimeMetadataDecoderImpl;
 import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.hub.ConstantPoolProvider;
+import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.reflect.MissingReflectionRegistrationUtils;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 import jdk.internal.reflect.ConstantPool;
 import sun.reflect.annotation.AnnotationParser;
@@ -158,12 +159,21 @@ public final class Target_java_lang_reflect_Method {
             return null;
         }
         Class<?> memberType = AnnotationType.invocationHandlerReturnType(getReturnType());
-        /*
-         * The layer id of the method is not necessarily the same as the declaring class, so the
-         * constant pool used need to be chosen using the layer id of the method.
-         */
+        Target_jdk_internal_reflect_ConstantPool constPool;
+        DynamicHub declaringHub = DynamicHub.fromClass(getDeclaringClass());
+        if (declaringHub.isRuntimeLoaded()) {
+            constPool = new Target_jdk_internal_reflect_ConstantPool(layerId, declaringHub);
+        } else if (ImageLayerBuildingSupport.buildingImageLayer()) {
+            /*
+             * The layer id of the method is not necessarily the same as the declaring class, so the
+             * constant pool used need to be chosen using the layer id of the method.
+             */
+            constPool = ConstantPoolProvider.singletons()[layerId].getConstantPool();
+        } else {
+            constPool = null;
+        }
         Object result = AnnotationParser.parseMemberValue(memberType, ByteBuffer.wrap(annotationDefault),
-                        ImageLayerBuildingSupport.buildingImageLayer() ? SubstrateUtil.cast(ConstantPoolProvider.singletons()[layerId].getConstantPool(), ConstantPool.class) : null,
+                        SubstrateUtil.cast(constPool, ConstantPool.class),
                         getDeclaringClass());
         if (result instanceof ExceptionProxy) {
             if (result instanceof TypeNotPresentExceptionProxy proxy) {

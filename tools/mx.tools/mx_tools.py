@@ -61,7 +61,7 @@ class JMHRunnerToolsBenchmarkSuite(mx_benchmark.JMHRunnerBenchmarkSuite):
         return "tools"
 
     def extraVmArgs(self):
-        return ['-XX:-UseJVMCIClassLoader'] + super(JMHRunnerToolsBenchmarkSuite, self).extraVmArgs()
+        return ['-XX:-UseJVMCIClassLoader'] + super().extraVmArgs()
 
 mx_benchmark.add_bm_suite(JMHRunnerToolsBenchmarkSuite())
 
@@ -78,9 +78,10 @@ def javadoc(args):
     javadocDir = os.sep.join([_suite.dir, 'javadoc'])
     index = os.sep.join([javadocDir, 'index.html'])
     if exists(index):
-        indexContent = open(index, 'r').read()
-        new_file = open(index, "w")
-        new_file.write(indexContent)
+        with open(index, encoding='utf-8') as existing_index:
+            indexContent = existing_index.read()
+        with open(index, "w", encoding='utf-8') as new_file:
+            new_file.write(indexContent)
     checkLinks(javadocDir)
 
 def checkLinks(javadocDir):
@@ -90,7 +91,8 @@ def checkLinks(javadocDir):
         for f in files:
             if f.endswith('.html'):
                 html = os.path.join(root, f)
-                content = open(html, 'r').read()
+                with open(html, encoding='utf-8') as html_file:
+                    content = html_file.read()
                 for url in href.findall(content):
                     full = urljoin(html, url)
                     sectionIndex = full.find('#')
@@ -119,9 +121,10 @@ def checkLinks(javadocDir):
             mx.warn('Referenced file ' + referencedfile + ' does not exist. Referenced from ' + sections[0][0])
             err = True
         else:
-            content = open(referencedfile, 'r').read()
+            with open(referencedfile, encoding='utf-8') as referenced:
+                content = referenced.read()
             for path, s in sections:
-                if not s is None:
+                if s is not None:
                     s = s.replace("%3C", "&lt;")
                     s = s.replace("%3E", "&gt;")
                     whereName = content.find('name="' + s + '"')
@@ -136,7 +139,7 @@ def checkLinks(javadocDir):
 class ToolsUnittestConfig(mx_unittest.MxUnittestConfig):
 
     def __init__(self):
-        super(ToolsUnittestConfig, self).__init__('tools')
+        super().__init__('tools')
 
     def apply(self, config):
         vmArgs, mainClass, mainClassArgs = config

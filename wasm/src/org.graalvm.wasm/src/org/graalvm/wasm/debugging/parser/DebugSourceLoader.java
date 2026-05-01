@@ -73,7 +73,7 @@ public class DebugSourceLoader {
         } catch (SecurityException e) {
             // source not available or not accessible
             if (env != null) {
-                env.getLogger("").warning("Debug source file could not be loaded or accessed: " + path);
+                env.getLogger(DebugSourceLoader.class).warning("Debug source file could not be loaded or accessed: " + path);
             }
         }
         return source;
@@ -90,7 +90,7 @@ public class DebugSourceLoader {
             source = Source.newBuilder(language, file).build();
         } catch (IOException | SecurityException e) {
             // source not available or not accessible
-            env.getLogger("").warning("Debug source file could not be loaded or accessed: " + path);
+            env.getLogger(DebugSourceLoader.class).warning("Debug source file could not be loaded or accessed: " + path);
         }
         return source;
     }

@@ -9,16 +9,18 @@ CLSS public final com.oracle.truffle.api.bytecode.BytecodeConfig
 fld public final static com.oracle.truffle.api.bytecode.BytecodeConfig COMPLETE
 fld public final static com.oracle.truffle.api.bytecode.BytecodeConfig DEFAULT
 fld public final static com.oracle.truffle.api.bytecode.BytecodeConfig WITH_SOURCE
+fld public final static com.oracle.truffle.api.bytecode.BytecodeConfig WITH_SOURCE_CONTENT
 innr public final static Builder
 meth public static com.oracle.truffle.api.bytecode.BytecodeConfig$Builder newBuilder(com.oracle.truffle.api.bytecode.BytecodeConfigEncoder)
 supr java.lang.Object
-hfds SOURCE_ENCODING,encoder,encoding
+hfds SOURCE_ENCODING,SOURCE_WITH_CONTENT_ENCODING,encoder,encoding
 
 CLSS public final static com.oracle.truffle.api.bytecode.BytecodeConfig$Builder
  outer com.oracle.truffle.api.bytecode.BytecodeConfig
 meth public com.oracle.truffle.api.bytecode.BytecodeConfig build()
 meth public com.oracle.truffle.api.bytecode.BytecodeConfig$Builder addInstrumentation(java.lang.Class<?>)
 meth public com.oracle.truffle.api.bytecode.BytecodeConfig$Builder addSource()
+meth public com.oracle.truffle.api.bytecode.BytecodeConfig$Builder addSourceContent()
 meth public com.oracle.truffle.api.bytecode.BytecodeConfig$Builder addTag(java.lang.Class<? extends com.oracle.truffle.api.instrumentation.Tag>)
 supr java.lang.Object
 hfds encoder,encoding
@@ -45,6 +47,7 @@ hfds safeSingleton,unsafeSingleton
 
 CLSS public abstract com.oracle.truffle.api.bytecode.BytecodeDescriptor<%0 extends com.oracle.truffle.api.nodes.RootNode & com.oracle.truffle.api.bytecode.BytecodeRootNode, %1 extends com.oracle.truffle.api.TruffleLanguage<?>, %2 extends com.oracle.truffle.api.bytecode.BytecodeBuilder>
 cons protected init(java.lang.Object)
+meth protected final void onTransition(com.oracle.truffle.api.TruffleLanguage<?>,{com.oracle.truffle.api.bytecode.BytecodeDescriptor%0},com.oracle.truffle.api.bytecode.BytecodeTransition)
 meth protected final long withGlobalConfig(com.oracle.truffle.api.TruffleLanguage<?>,long)
 meth protected final void onPrepareForLoad(com.oracle.truffle.api.TruffleLanguage<?>,{com.oracle.truffle.api.bytecode.BytecodeDescriptor%0})
 meth public abstract com.oracle.truffle.api.bytecode.BytecodeConfig$Builder newConfigBuilder()
@@ -84,8 +87,10 @@ meth public java.lang.Object getLocalValue(int)
 meth public java.lang.Object[] getLocalNames()
 meth public static com.oracle.truffle.api.bytecode.BytecodeFrame get(com.oracle.truffle.api.TruffleStackTraceElement)
 meth public static com.oracle.truffle.api.bytecode.BytecodeFrame get(com.oracle.truffle.api.frame.FrameInstance,com.oracle.truffle.api.frame.FrameInstance$FrameAccess)
+meth public static com.oracle.truffle.api.bytecode.BytecodeFrame getTop(com.oracle.truffle.api.frame.FrameInstance$FrameAccess,com.oracle.truffle.api.nodes.Node,int)
 meth public static com.oracle.truffle.api.bytecode.BytecodeFrame getNonVirtual(com.oracle.truffle.api.TruffleStackTraceElement)
 meth public static com.oracle.truffle.api.bytecode.BytecodeFrame getNonVirtual(com.oracle.truffle.api.frame.FrameInstance)
+meth public static <%0 extends java.lang.Object> {%%0} iterateBytecodeFrames(java.util.function.Function<com.oracle.truffle.api.bytecode.BytecodeFrame,{%%0}>,com.oracle.truffle.api.frame.FrameInstance$FrameAccess,com.oracle.truffle.api.nodes.Node,int,int)
 meth public void setArgument(int,java.lang.Object)
 meth public void setLocalValue(int,java.lang.Object)
 supr java.lang.Object
@@ -104,6 +109,7 @@ supr java.lang.Object
 CLSS public final com.oracle.truffle.api.bytecode.BytecodeLocation
 meth public boolean equals(java.lang.Object)
 meth public com.oracle.truffle.api.bytecode.BytecodeLocation ensureSourceInformation()
+meth public com.oracle.truffle.api.bytecode.BytecodeLocation ensureSourceInformationWithContent()
 meth public com.oracle.truffle.api.bytecode.BytecodeLocation update()
 meth public com.oracle.truffle.api.bytecode.BytecodeNode getBytecodeNode()
 meth public com.oracle.truffle.api.bytecode.Instruction getInstruction()
@@ -141,6 +147,7 @@ meth protected com.oracle.truffle.api.frame.Frame resolveFrameImpl(com.oracle.tr
 meth protected com.oracle.truffle.api.frame.Frame resolveNonVirtualFrameImpl(com.oracle.truffle.api.TruffleStackTraceElement)
 meth protected double getLocalValueInternalDouble(com.oracle.truffle.api.frame.Frame,int,int) throws com.oracle.truffle.api.nodes.UnexpectedResultException
 meth protected final com.oracle.truffle.api.bytecode.BytecodeLocation findLocation(int)
+meth protected abstract com.oracle.truffle.api.bytecode.BytecodeTransition createTransition(com.oracle.truffle.api.bytecode.BytecodeNode,int,com.oracle.truffle.api.bytecode.BytecodeNode,int,boolean)
 meth protected final static java.lang.Object createDefaultStackTraceElement(com.oracle.truffle.api.TruffleStackTraceElement)
 meth protected float getLocalValueInternalFloat(com.oracle.truffle.api.frame.Frame,int,int) throws com.oracle.truffle.api.nodes.UnexpectedResultException
 meth protected int getLocalValueInternalInt(com.oracle.truffle.api.frame.Frame,int,int) throws com.oracle.truffle.api.nodes.UnexpectedResultException
@@ -152,6 +159,7 @@ meth protected void setLocalValueInternalFloat(com.oracle.truffle.api.frame.Fram
 meth protected void setLocalValueInternalInt(com.oracle.truffle.api.frame.Frame,int,int,int)
 meth protected void setLocalValueInternalLong(com.oracle.truffle.api.frame.Frame,int,int,long)
 meth public abstract boolean hasSourceInformation()
+meth public abstract boolean hasSourceInformationWithContent()
 meth public abstract com.oracle.truffle.api.bytecode.BytecodeTier getTier()
 meth public abstract com.oracle.truffle.api.bytecode.SourceInformationTree getSourceInformationTree()
 meth public abstract com.oracle.truffle.api.bytecode.TagTree getTagTree()
@@ -166,6 +174,7 @@ meth public abstract java.util.List<com.oracle.truffle.api.bytecode.LocalVariabl
 meth public abstract java.util.List<com.oracle.truffle.api.bytecode.SourceInformation> getSourceInformation()
 meth public abstract void setLocalValue(int,com.oracle.truffle.api.frame.Frame,int,java.lang.Object)
 meth public abstract void setUncachedThreshold(int)
+meth public com.oracle.truffle.api.bytecode.BytecodeNode ensureSourceInformationWithContent()
 meth public final com.oracle.truffle.api.bytecode.BytecodeFrame createCopiedFrame(int,com.oracle.truffle.api.frame.Frame)
 meth public final com.oracle.truffle.api.bytecode.BytecodeFrame createMaterializedFrame(int,com.oracle.truffle.api.frame.MaterializedFrame)
 meth public final com.oracle.truffle.api.bytecode.BytecodeLocation getBytecodeLocation(com.oracle.truffle.api.frame.Frame,com.oracle.truffle.api.nodes.Node)
@@ -208,10 +217,13 @@ meth public com.oracle.truffle.api.bytecode.BytecodeLocation getStartLocation()
 meth public com.oracle.truffle.api.bytecode.BytecodeNode getBytecodeNode()
 meth public com.oracle.truffle.api.bytecode.BytecodeRootNodes<?> getRootNodes()
 meth public com.oracle.truffle.api.exception.AbstractTruffleException interceptTruffleException(com.oracle.truffle.api.exception.AbstractTruffleException,com.oracle.truffle.api.frame.VirtualFrame,com.oracle.truffle.api.bytecode.BytecodeNode,int)
+meth public com.oracle.truffle.api.source.Source getSource()
 meth public com.oracle.truffle.api.source.SourceSection ensureSourceSection()
+meth public com.oracle.truffle.api.source.SourceSection ensureSourceSectionWithContent()
 meth public java.lang.Object interceptControlFlowException(com.oracle.truffle.api.nodes.ControlFlowException,com.oracle.truffle.api.frame.VirtualFrame,com.oracle.truffle.api.bytecode.BytecodeNode,int) throws java.lang.Throwable
 meth public java.lang.String dump()
 meth public java.lang.Throwable interceptInternalException(java.lang.Throwable,com.oracle.truffle.api.frame.VirtualFrame,com.oracle.truffle.api.bytecode.BytecodeNode,int)
+meth public void traceTransition(com.oracle.truffle.api.bytecode.BytecodeTransition,com.oracle.truffle.api.frame.Frame)
 
 CLSS public abstract com.oracle.truffle.api.bytecode.BytecodeRootNodes<%0 extends com.oracle.truffle.api.nodes.RootNode & com.oracle.truffle.api.bytecode.BytecodeRootNode>
 cons protected init(java.lang.Object,com.oracle.truffle.api.bytecode.BytecodeParser<? extends com.oracle.truffle.api.bytecode.BytecodeBuilder>)
@@ -220,6 +232,7 @@ fld protected {com.oracle.truffle.api.bytecode.BytecodeRootNodes%0}[] nodes
 meth protected abstract boolean updateImpl(com.oracle.truffle.api.bytecode.BytecodeConfigEncoder,long)
 meth protected final com.oracle.truffle.api.bytecode.BytecodeParser<? extends com.oracle.truffle.api.bytecode.BytecodeBuilder> getParser()
 meth protected void updateGlobalInstructionTracers(com.oracle.truffle.api.bytecode.InstructionTracer[])
+meth public boolean ensureSourceInformationWithContent()
 meth public final boolean ensureComplete()
 meth public final boolean ensureSourceInformation()
 meth public final boolean update(com.oracle.truffle.api.bytecode.BytecodeConfig)
@@ -263,6 +276,17 @@ fld public final static com.oracle.truffle.api.bytecode.BytecodeTier UNCACHED
 meth public static com.oracle.truffle.api.bytecode.BytecodeTier valueOf(java.lang.String)
 meth public static com.oracle.truffle.api.bytecode.BytecodeTier[] values()
 supr java.lang.Enum<com.oracle.truffle.api.bytecode.BytecodeTier>
+
+CLSS public abstract com.oracle.truffle.api.bytecode.BytecodeTransition
+cons protected init(java.lang.Object)
+meth public abstract boolean isBytecodeUpdate()
+meth public abstract boolean isTransferToInterpreter()
+meth public abstract com.oracle.truffle.api.bytecode.BytecodeLocation getNewLocation()
+meth public abstract com.oracle.truffle.api.bytecode.BytecodeLocation getOldLocation()
+meth public java.lang.String toString()
+meth public abstract java.util.Set<java.lang.Class<?>> getAddedInstrumentations()
+meth public abstract java.util.Set<java.lang.Class<?>> getAddedTags()
+supr java.lang.Object
 
 CLSS public abstract interface !annotation com.oracle.truffle.api.bytecode.ConstantOperand
  anno 0 java.lang.annotation.Repeatable(java.lang.Class<? extends java.lang.annotation.Annotation> value=class com.oracle.truffle.api.bytecode.ConstantOperand$Repeat)
@@ -381,6 +405,7 @@ meth public abstract !hasdefault java.lang.Class<?>[] boxingEliminationTypes()
 meth public abstract !hasdefault java.lang.String defaultLocalValue()
 meth public abstract !hasdefault java.lang.String defaultUncachedThreshold()
 meth public abstract !hasdefault java.lang.String illegalLocalExceptionFactory()
+meth public abstract !hasdefault java.lang.String sourceContentSupplier()
 meth public abstract !hasdefault java.lang.String variadicStackLimit()
 meth public abstract java.lang.Class<? extends com.oracle.truffle.api.TruffleLanguage<?>> languageClass()
 
@@ -1200,4 +1225,3 @@ meth public abstract java.lang.annotation.ElementType[] value()
 
 CLSS public abstract interface java.lang.constant.Constable
 meth public abstract java.util.Optional<? extends java.lang.constant.ConstantDesc> describeConstable()
-

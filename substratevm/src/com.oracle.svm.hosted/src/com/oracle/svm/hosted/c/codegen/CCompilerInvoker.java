@@ -40,14 +40,12 @@ import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 
 import com.oracle.svm.core.JavaVersionUtil;
 import com.oracle.svm.core.OS;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateTargetDescription;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.c.libc.HostedLibCBase;
@@ -58,6 +56,7 @@ import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ClassUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.aarch64.AArch64;
@@ -277,7 +276,7 @@ public abstract class CCompilerInvoker {
 
         @Override
         protected void verify() {
-            Class<? extends Architecture> substrateTargetArch = ImageSingletons.lookup(SubstrateTargetDescription.class).arch.getClass();
+            Class<? extends Architecture> substrateTargetArch = SubstrateTarget.getArchitecture().getClass();
             Class<? extends Architecture> guessed = guessArchitecture(compilerInfo.targetArch);
             if (guessed == null) {
                 UserError.abort("Linux native toolchain (%s) has no matching native-image target architecture.", compilerInfo.targetArch);
@@ -325,7 +324,7 @@ public abstract class CCompilerInvoker {
 
         @Override
         protected void verify() {
-            Class<? extends Architecture> substrateTargetArch = ImageSingletons.lookup(SubstrateTargetDescription.class).arch.getClass();
+            Class<? extends Architecture> substrateTargetArch = SubstrateTarget.getArchitecture().getClass();
             Class<? extends Architecture> guessed = guessArchitecture(compilerInfo.targetArch);
             if (guessed == null) {
                 UserError.abort("Darwin native toolchain (%s) has no matching native-image target architecture.", compilerInfo.targetArch);

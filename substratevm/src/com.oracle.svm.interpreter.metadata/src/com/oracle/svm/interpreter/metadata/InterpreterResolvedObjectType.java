@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,16 +25,19 @@
 package com.oracle.svm.interpreter.metadata;
 
 import static com.oracle.svm.core.BuildPhaseProvider.AfterAnalysis;
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import java.util.Arrays;
 import java.util.List;
 
+import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.WordBase;
 
 import com.oracle.svm.core.StaticFieldsSupport;
+import com.oracle.svm.core.graal.meta.KnownOffsets;
+import com.oracle.svm.core.graal.snippets.OpenTypeWorldDispatchTableSnippets;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
@@ -45,19 +48,25 @@ import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
 import com.oracle.svm.espresso.shared.meta.TypeAccess;
-import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.interpreter.metadata.serialization.VisibleForSerialization;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
+import jdk.vm.ci.meta.ResolvedJavaRecordComponent;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
+/**
+ * The interpreter's representation for all reference types: normal classes, interfaces, and array
+ * classes. Primitive types are represented by {@link InterpreterResolvedPrimitiveType}.
+ */
 public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
+    // Important note: This is, in general, NOT equal to `getHub().getModifiers()`.
+    private final char modifiers;
     private final InterpreterResolvedJavaType componentType;
-    private final int modifiers;
     private final InterpreterResolvedObjectType superclass;
     private final InterpreterResolvedObjectType[] interfaces;
     private InterpreterResolvedJavaMethod[] declaredMethods;
@@ -76,10 +85,12 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
         public InterpreterResolvedObjectType holder;
         @UnknownObjectField(availability = AfterAnalysis.class) //
         public InterpreterResolvedJavaMethod[] vtable;
+        public int classVtableLength;
 
-        public VTableHolder(InterpreterResolvedObjectType holder, InterpreterResolvedJavaMethod[] vtable) {
+        public VTableHolder(InterpreterResolvedObjectType holder, InterpreterResolvedJavaMethod[] vtable, int classVtableLength) {
             this.holder = holder;
             this.vtable = vtable;
+            this.classVtableLength = classVtableLength;
         }
     }
 
@@ -93,7 +104,8 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
                     JavaConstant clazzConstant,
                     boolean isWordType, String sourceFileName) {
         super(type, clazzConstant, isWordType);
-        this.modifiers = modifiers;
+        assert (char) modifiers == modifiers;
+        this.modifiers = (char) modifiers;
         this.componentType = componentType;
         this.superclass = superclass;
         this.interfaces = interfaces;
@@ -109,7 +121,8 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
                     boolean isWordType) {
         super(type, javaClass, isWordType);
         assert isWordType == WordBase.class.isAssignableFrom(javaClass);
-        this.modifiers = modifiers;
+        assert (char) modifiers == modifiers;
+        this.modifiers = (char) modifiers;
         this.superclass = superclass;
         this.interfaces = interfaces;
         this.componentType = componentType;
@@ -124,8 +137,9 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
                     Class<?> javaClass,
                     String sourceFileName) {
         super(type, javaClass);
+        assert (char) modifiers == modifiers;
         this.originalType = originalType;
-        this.modifiers = modifiers;
+        this.modifiers = (char) modifiers;
         this.componentType = componentType;
         this.superclass = superclass;
         this.interfaces = interfaces;
@@ -156,10 +170,10 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
         return new InterpreterResolvedObjectType(type, modifiers, componentType, superclass, interfaces, constantPool, javaClass, isWordType);
     }
 
-    public static CremaResolvedObjectType createForCrema(ParserKlass parserKlass, int modifiers, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
+    public static CremaResolvedObjectType createForCrema(ParserKlass parserKlass, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
                     InterpreterResolvedObjectType[] interfaces, Class<?> javaClass,
                     int staticReferenceFields, int staticPrimitiveFieldsSize) {
-        return new CremaResolvedObjectType(parserKlass, modifiers, componentType, superclass, interfaces, null, javaClass, false, staticReferenceFields, staticPrimitiveFieldsSize);
+        return new CremaResolvedObjectType(parserKlass, componentType, superclass, interfaces, null, javaClass, false, staticReferenceFields, staticPrimitiveFieldsSize);
     }
 
     @VisibleForSerialization
@@ -185,8 +199,8 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
     }
 
     @Override
-    public final InterpreterResolvedJavaType resolveClassConstantInPool(int cpi) {
-        return null;
+    public InterpreterResolvedJavaType resolveClassConstantInPool(int cpi) {
+        throw VMError.unimplemented("should be unneeded for AOT types.");
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -194,6 +208,14 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
         return originalType;
     }
 
+    /**
+     * Important note: This is, in general, NOT equal to {@link DynamicHub#getModifiers()}.
+     * <p>
+     * When working with JVM-side modifiers, always use this method rather than
+     * {@link DynamicHub#getModifiers()}.
+     *
+     * @see DynamicHub#getModifiers()
+     */
     @Override
     public final int getModifiers() {
         return modifiers;
@@ -205,13 +227,30 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
     }
 
     @Override
-    public boolean isHidden() {
-        throw VMError.unimplemented("isHidden");
+    public final boolean isHidden() {
+        if (clazz == null) {
+            throw VMError.unimplemented("isHidden with no class");
+        } else {
+            return clazz.isHidden();
+        }
     }
 
     @Override
     public List<JavaType> getPermittedSubclasses() {
         throw VMError.unimplemented("getPermittedSubclasses");
+    }
+
+    @Override
+    public List<? extends ResolvedJavaRecordComponent> getRecordComponents() {
+        if (isArray()) {
+            return null;
+        }
+        // Crema only ever creates InterpreterResolvedObjectTypes for arrays (see
+        // createForInterpreter). At build time, InterpreterResolvedObjectTypes are
+        // created for AOT classes when RuntimeClassLoading is enabled. However,
+        // for these classes, Class.getRecordComponents routes to
+        // ImageReflectionMetadata.getRecordComponents which does not end up here.
+        throw VMError.shouldNotReachHere("getRecordComponents: class file attributes for " + toClassName() + " not available at runtime");
     }
 
     @Override
@@ -281,8 +320,17 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
         return vtableHolder.vtable;
     }
 
-    public final void setVtable(InterpreterResolvedJavaMethod[] vtable) {
-        this.vtableHolder = new VTableHolder(this, vtable);
+    public final void setVtable(InterpreterResolvedJavaMethod[] vtable, int classVtableLength) {
+        // The stored table may include interface dispatch tail entries beyond the class vtable.
+        VMError.guarantee(classVtableLength >= 0 && classVtableLength <= vtable.length, "Invalid class vtable length");
+        this.vtableHolder = new VTableHolder(this, vtable, classVtableLength);
+    }
+
+    public final int getClassVtableLength() {
+        if (vtableHolder == null) {
+            return 0;
+        }
+        return vtableHolder.classVtableLength;
     }
 
     @Override
@@ -424,7 +472,21 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
 
     @Override
     public final InterpreterResolvedJavaType findLeastCommonAncestor(InterpreterResolvedJavaType other) {
-        throw VMError.unimplemented("findLeastCommonAncestor");
+        assert !isPrimitive() && !other.isPrimitive();
+        assert !isInterface() && !other.isInterface();
+        assert !isArray() && !other.isArray();
+        InterpreterResolvedObjectType t1 = this;
+        InterpreterResolvedObjectType t2 = (InterpreterResolvedObjectType) other;
+        while (true) {
+            if (t1.isAssignableFrom(t2)) {
+                return t1;
+            }
+            if (t2.isAssignableFrom(t1)) {
+                return t2;
+            }
+            t1 = t1.getSuperclass();
+            t2 = t2.getSuperclass();
+        }
     }
 
     /**
@@ -457,11 +519,6 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
     }
 
     @Override
-    public final InterpreterResolvedJavaType getHostType() {
-        throw VMError.unimplemented("getHostType");
-    }
-
-    @Override
     public final Symbol<Name> getSymbolicRuntimePackage() {
         ByteSequence hostPkgName = TypeSymbols.getRuntimePackage(getSymbolicType());
         return SymbolsSupport.getNames().getOrCreate(hostPkgName);
@@ -484,6 +541,89 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
             return getSuperclass().lookupField(name, type);
         }
         return null;
+    }
+
+    /**
+     * Not the {@linkplain CremaResolvedObjectType#getNestHost() nest host}, but the "Host type" of
+     * VM-anonymous classes, no longer in use in Java 17+, so return null. Requested by the
+     * {@link com.oracle.svm.espresso.shared.verifier.Verifier verifier}.
+     */
+    @Override
+    public final InterpreterResolvedJavaType getHostType() {
+        return null;
+    }
+
+    public final void imposeLoadingConstraints() {
+        if (!isInterface() && getSuperClass() != null) {
+            InterpreterResolvedJavaMethod[] thisTable = getVtable();
+            InterpreterResolvedJavaMethod[] superTable = getSuperClass().getVtable();
+            if (thisTable == null || superTable == null) {
+                throw VMError.shouldNotReachHere("Uninitialized interpreter VTable during loading constraints recording.");
+            }
+            int superTableEnd = getSuperClass().getClassVtableLength();
+            // Iterate our vtable to impose constraints between us and our superclass if necessary.
+            for (int i = 0; i < superTableEnd; i++) {
+                InterpreterResolvedJavaMethod entry = thisTable[i];
+                if (entry.getDeclaringClass() == this) {
+                    // If we override a method in super's table, enforce constraint to ensure we
+                    // agree on the types.
+                    entry.checkLoadingConstraints(getClassLoader(), superTable[i].getDeclaringClass().getClassLoader());
+                }
+            }
+
+            // Iterate the itables to impose constraints.
+            for (InterpreterResolvedObjectType superInterface : computeTransitiveInterfaceList()) {
+                VMError.guarantee(superInterface.getVtable() != null);
+                int start = determineITableStartingIndex(superInterface);
+                for (int i = 0; i < superInterface.getVtable().length; i++) {
+                    InterpreterResolvedJavaMethod thisMethod = thisTable[start + i];
+                    // Ensure this class and its interfaces agree on the types for their related
+                    // methods.
+                    if (thisMethod.getDeclaringClass() == this) {
+                        thisMethod.checkLoadingConstraints(getClassLoader(), superInterface.getClassLoader());
+                    } else {
+                        thisMethod.checkLoadingConstraints(superInterface.getClassLoader(), thisMethod.getDeclaringClass().getClassLoader());
+                        thisMethod.checkLoadingConstraints(getClassLoader(), thisMethod.getDeclaringClass().getClassLoader());
+                    }
+                }
+            }
+        }
+    }
+
+    public int determineITableStartingIndex(InterpreterResolvedObjectType seedInterface) {
+        /*
+         * iTableStartingOffset includes the initial offset to the vtable array and describes an
+         * offset (not index)
+         */
+        long iTableStartingOffset = OpenTypeWorldDispatchTableSnippets.determineITableStartingOffset(getHub(), seedInterface.getHub().getInterfaceID());
+
+        int vtableBaseOffset = KnownOffsets.singleton().getVTableBaseOffset();
+        int vtableEntrySize = KnownOffsets.singleton().getVTableEntrySize();
+
+        return (int) (iTableStartingOffset - vtableBaseOffset) / vtableEntrySize;
+    }
+
+    private Iterable<InterpreterResolvedObjectType> computeTransitiveInterfaceList() {
+        EconomicSet<InterpreterResolvedObjectType> set = EconomicSet.create();
+        InterpreterResolvedObjectType current = this;
+        while (current != null) {
+            for (InterpreterResolvedObjectType interfaceClass : current.getInterfaces()) {
+                collectInterfaces(interfaceClass, set);
+            }
+            current = current.getSuperclass();
+        }
+        for (InterpreterResolvedObjectType interfaceClass : getInterfaces()) {
+            collectInterfaces(interfaceClass, set);
+        }
+        return set;
+    }
+
+    private static void collectInterfaces(InterpreterResolvedObjectType interfaceClass, EconomicSet<InterpreterResolvedObjectType> result) {
+        if (result.add(interfaceClass)) {
+            for (InterpreterResolvedObjectType superInterface : interfaceClass.getInterfaces()) {
+                collectInterfaces(superInterface, result);
+            }
+        }
     }
 
 }

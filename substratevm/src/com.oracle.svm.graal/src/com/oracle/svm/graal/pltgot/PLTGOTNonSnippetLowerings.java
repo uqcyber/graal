@@ -32,7 +32,7 @@ import org.graalvm.word.LocationIdentity;
 
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.meta.KnownOffsets;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
@@ -91,7 +91,7 @@ public final class PLTGOTNonSnippetLowerings {
             if (methodAddressResolutionSupport.shouldCallViaPLTGOT(caller, callee)) {
                 ValueNode heapBaseNode = graph.addOrUnique(ReadReservedRegister.createReadHeapBaseNode(graph));
                 int targetGotEntry = gotEntryAllocator.getMethodGotEntry(callee);
-                ValueNode offsetNode = ConstantNode.forIntegerKind(ConfigurationValues.getWordKind(), GOTAccess.getGotEntryOffsetFromHeapRegister(targetGotEntry), graph);
+                ValueNode offsetNode = ConstantNode.forIntegerKind(SubstrateTarget.getWordKind(), GOTAccess.getGotEntryOffsetFromHeapRegister(targetGotEntry), graph);
                 OffsetAddressNode offsetAddressNode = graph.unique(new OffsetAddressNode(heapBaseNode, offsetNode));
                 ReadNode methodAddress = graph
                                 .add(new ReadNode(offsetAddressNode, LocationIdentity.ANY_LOCATION, FrameAccess.getWordStamp(), BarrierType.NONE, MemoryOrderMode.PLAIN));

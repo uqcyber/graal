@@ -40,7 +40,7 @@ import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.CalleeSavedRegisters;
 import com.oracle.svm.core.ReservedRegisters;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.code.CodeInfoEncoder.Counters;
@@ -48,7 +48,6 @@ import com.oracle.svm.core.code.CodeInfoEncoder.Encoders;
 import com.oracle.svm.core.code.FrameInfoDecoder.ConstantAccess;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueInfo;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueType;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.encoder.SymbolEncoder;
 import com.oracle.svm.core.hub.LayoutEncoding;
@@ -729,7 +728,7 @@ public class FrameInfoEncoder {
         /* The first element is the hub of the virtual object. */
         valueList.add(makeValueInfo(data, JavaKind.Object, constantAccess.forObject(type.getHub(), false), isDeoptEntry));
 
-        ObjectLayout objectLayout = ConfigurationValues.getObjectLayout();
+        ObjectLayout objectLayout = ObjectLayout.singleton();
         assert type.isArray() == LayoutEncoding.isArray(type.getHub().getLayoutEncoding()) : "deoptimization code uses layout encoding to determine if type is an array";
         if (type.isArray()) {
             /* We do not know the final length yet, so add a placeholder. */
@@ -881,7 +880,7 @@ public class FrameInfoEncoder {
     private static int computeOffset(ArrayList<ValueInfo> valueInfos, int startIndex) {
         int result = 0;
         for (int i = startIndex; i < valueInfos.size(); i++) {
-            result += ConfigurationValues.getObjectLayout().sizeInBytes(valueInfos.get(i).kind);
+            result += ObjectLayout.singleton().sizeInBytes(valueInfos.get(i).kind);
         }
         return result;
     }
@@ -900,8 +899,8 @@ public class FrameInfoEncoder {
     @Uninterruptible(reason = "Safe for GC, but called from uninterruptible code.", calleeMustBe = false)
     private static void afterInstallation(CodeInfo info) {
         ImageSingletons.lookup(Counters.class).frameInfoSize.add(
-                        ConfigurationValues.getObjectLayout().getArrayElementOffset(JavaKind.Byte, NonmovableArrays.lengthOf(CodeInfoAccess.getFrameInfoEncodings(info))) +
-                                        ConfigurationValues.getObjectLayout().getArrayElementOffset(JavaKind.Object, NonmovableArrays.lengthOf(CodeInfoAccess.getObjectConstants(info))));
+                        ObjectLayout.singleton().getArrayElementOffset(JavaKind.Byte, NonmovableArrays.lengthOf(CodeInfoAccess.getFrameInfoEncodings(info))) +
+                                        ObjectLayout.singleton().getArrayElementOffset(JavaKind.Object, NonmovableArrays.lengthOf(CodeInfoAccess.getObjectConstants(info))));
     }
 
     private NonmovableArray<Byte> encodeFrameDatas(Runnable recordActivity) {

@@ -27,7 +27,7 @@ package com.oracle.svm.core.genscavenge;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.image.ImageHeapObject;
 import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.shared.util.VMError;
@@ -147,7 +147,7 @@ class ChunkedImageHeapAllocator {
         this.position = position;
 
         /* Cache to prevent frequent lookups of the object layout from ImageSingletons. */
-        this.minimumObjectSize = ConfigurationValues.getObjectLayout().getMinImageHeapObjectSize();
+        this.minimumObjectSize = ObjectLayout.singleton().getMinImageHeapObjectSize();
     }
 
     public long getPosition() {

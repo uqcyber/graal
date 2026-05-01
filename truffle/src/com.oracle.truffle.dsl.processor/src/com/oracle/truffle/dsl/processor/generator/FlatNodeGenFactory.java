@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -297,11 +297,17 @@ public class FlatNodeGenFactory {
                 int dimensions = 0;
                 if (pruneInternalClasses) {
                     if (ElementUtils.isAssignable(type, types.Node)) {
-                        type = types.Node;
+                        if (!isPublicInlineFieldType(type)) {
+                            type = types.Node;
+                        }
                     } else if (ElementUtils.isAssignable(type, types.NodeInterface)) {
-                        type = types.NodeInterface;
+                        if (!isPublicInlineFieldType(type)) {
+                            type = types.NodeInterface;
+                        }
                     } else if (isNodeArray(type)) {
-                        type = new ArrayCodeTypeMirror(types.Node);
+                        if (!isPublicInlineFieldType(((ArrayType) type).getComponentType())) {
+                            type = new ArrayCodeTypeMirror(types.Node);
+                        }
                     } else if (type.getKind() == TypeKind.ARRAY) {
                         type = context.getType(Object[].class);
                         AnnotationMirror annotationMirror = ElementUtils.findAnnotationMirror(var, types.CompilerDirectives_CompilationFinal);
@@ -320,6 +326,26 @@ public class FlatNodeGenFactory {
         this.nodeConstants = savedConstants;
         return fields;
 
+    }
+
+    private static boolean isPublicInlineFieldType(TypeMirror type) {
+        if (type instanceof GeneratedTypeMirror) {
+            return false;
+        } else if (type.getKind() == TypeKind.ARRAY) {
+            return isPublicInlineFieldType(((ArrayType) type).getComponentType());
+        }
+        TypeElement typeElement = ElementUtils.castTypeElement(type);
+        if (typeElement == null) {
+            return false;
+        }
+        Element current = typeElement;
+        while (current instanceof TypeElement) {
+            if (ElementUtils.getVisibility(current.getModifiers()) != Modifier.PUBLIC) {
+                return false;
+            }
+            current = current.getEnclosingElement();
+        }
+        return true;
     }
 
     static boolean isImplicitCastUsed(ExecutableTypeData executable, Collection<SpecializationData> usedSpecializations, TypeGuard guard) {
@@ -2024,11 +2050,11 @@ public class FlatNodeGenFactory {
 
                     CodeVariableElement inlinedCacheField;
                     if (isAssignable(type, types().Node)) {
-                        inlinedCacheField = createNodeField(Modifier.PRIVATE, types.Node, inlinedFieldName, types().Node_Child);
+                        inlinedCacheField = createNodeField(Modifier.PRIVATE, type, inlinedFieldName, types().Node_Child);
                     } else if (isAssignable(type, types().NodeInterface)) {
-                        inlinedCacheField = createNodeField(Modifier.PRIVATE, types.NodeInterface, inlinedFieldName, types().Node_Child);
+                        inlinedCacheField = createNodeField(Modifier.PRIVATE, type, inlinedFieldName, types().Node_Child);
                     } else if (isNodeArray(type)) {
-                        inlinedCacheField = createNodeField(Modifier.PRIVATE, new ArrayCodeTypeMirror(types.Node), inlinedFieldName, types().Node_Children);
+                        inlinedCacheField = createNodeField(Modifier.PRIVATE, type, inlinedFieldName, types().Node_Children);
                     } else {
                         inlinedCacheField = createNodeField(Modifier.PRIVATE, type, inlinedFieldName, null);
                         addCompilationFinalAnnotation(inlinedCacheField, field.getDimensions());
@@ -5930,9 +5956,13 @@ public class FlatNodeGenFactory {
             if (useSpecializationClass) {
                 method.addParameter(new CodeVariableElement(specializationType, specializationLocalName));
             }
+            for (VariableElement arg : plugs.additionalArguments()) {
+                method.addParameter(arg);
+            }
             CodeTreeBuilder builder = method.createBuilder();
             if (!useSpecializationClass || !specialization.hasMultipleInstances()) {
                 // single instance remove
+                builder.tree(multiState.createForceLoad(frameState, StateQuery.create(SpecializationActive.class, specialization)));
                 builder.tree((multiState.createSet(frameState, null, StateQuery.create(SpecializationActive.class, specialization), false, true)));
                 plugs.notifySpecialize(this, builder, frameState, specialization);
                 if (useSpecializationClass) {
@@ -5957,7 +5987,7 @@ public class FlatNodeGenFactory {
                 builder.statement("update = cur.next_");
                 builder.end().startElseBlock();
                 if (specializedIsNode) {
-                    builder.statement("update = original.remove(this, ", specializationLocalName, ")");
+                    builder.startStatement().string("update = original.remove(").tree(createNodeAccess(frameState)).string(", ").string(specializationLocalName).string(")").end();
                 } else {
                     builder.statement("update = original.remove(", specializationLocalName, ")");
                 }
@@ -5999,6 +6029,9 @@ public class FlatNodeGenFactory {
         }
         if (useSpecializationClass) {
             builder.string(specializationLocalName);
+        }
+        for (VariableElement arg : plugs.additionalArguments()) {
+            builder.variable(arg);
         }
         builder.end().end();
         builder.tree(createCallExecuteAndSpecialize(builder, forType, frameState));

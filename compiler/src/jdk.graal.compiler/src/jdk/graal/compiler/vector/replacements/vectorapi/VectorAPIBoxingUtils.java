@@ -59,6 +59,7 @@ import jdk.graal.compiler.nodes.memory.address.IndexAddressNode;
 import jdk.graal.compiler.nodes.memory.address.OffsetAddressNode;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.nodes.spi.ValueProxy;
+import jdk.graal.compiler.nodes.virtual.AllocatedObjectNode;
 import jdk.graal.compiler.replacements.DefaultJavaLoweringProvider;
 import jdk.graal.compiler.vector.architecture.VectorArchitecture;
 import jdk.graal.compiler.vector.architecture.VectorLoweringProvider;
@@ -198,6 +199,7 @@ public class VectorAPIBoxingUtils {
          * or it must be a phi or a pi with a fixed guard so we have a valid insertion position.
          */
         if (!(value instanceof FixedWithNextNode || value instanceof VectorAPIMacroNode ||
+                        (value instanceof AllocatedObjectNode allocated && allocated.getCommit() != null) ||
                         value instanceof ValuePhiNode ||
                         (value instanceof ValueProxy pi && pi.getGuard() != null && pi.getGuard() instanceof FixedWithNextNode))) {
             return null;
@@ -304,6 +306,9 @@ public class VectorAPIBoxingUtils {
             insertionPoint = fixed;
         } else if (value instanceof VectorAPIMacroNode macro) {
             insertionPoint = macro.next();
+        } else if (value instanceof AllocatedObjectNode allocated) {
+            GraalError.guarantee(allocated.getCommit() != null, "expected a commit for %s", allocated);
+            insertionPoint = allocated.getCommit();
         } else if (value instanceof ValuePhiNode phi) {
             insertionPoint = phi.merge();
         } else {

@@ -14,3 +14,11 @@ all = [
 ]
 any = [
 ]
+
+[[rule]]
+files = ["SystemPropertiesSupport.java", "Target_jdk_internal_misc_Signal.java"]
+all = [
+    "christian.haeubl@oracle.com"
+]
+any = [
+]

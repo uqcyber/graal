@@ -157,7 +157,7 @@ class MetricValueRule(mx_benchmark.CSVBaseRule):
             },
             filter_fn=filter_fn,
             delimiter=';', quotechar='"', escapechar='\\'
-        ),
+        )
         self.filename = metric_value_file
 
     def getCSVFiles(self, text):
@@ -183,8 +183,8 @@ class CounterBenchmarkMixin(CompilerMetricsBenchmarkMixin):
     def metricsVmArgs(self):
         return super().metricsVmArgs() + ["-Djdk.graal.Counters=" + ','.join(CounterBenchmarkMixin.counters)]
 
-    def filterResult(self, r):
-        return r if r['name'] in CounterBenchmarkMixin.counters else None
+    def filterResult(self, result):
+        return result if result['name'] in CounterBenchmarkMixin.counters else None
 
 
 # Default regex matching all accumulated metrics, extracting their name.
@@ -311,7 +311,7 @@ class JMHDistGraalCoreBenchmarkSuite(mx_benchmark.JMHDistBenchmarkSuite, JMHJarB
         return self.intercept_run(super(), benchmarks, bmSuiteArgs)
 
     def filter_distribution(self, dist):
-        return super(JMHDistGraalCoreBenchmarkSuite, self).filter_distribution(dist) and \
+        return super().filter_distribution(dist) and \
                not JMHDistWhiteboxBenchmarkSuite.is_whitebox_dependency(dist)
 
     def successPatterns(self):
@@ -340,7 +340,7 @@ class JMHDistWhiteboxBenchmarkSuite(mx_benchmark.JMHDistBenchmarkSuite, JMHJarBa
         return hasattr(dist, 'graalWhiteboxDistribution') and dist.graalWhiteboxDistribution
 
     def filter_distribution(self, dist):
-        return super(JMHDistWhiteboxBenchmarkSuite, self).filter_distribution(dist) and \
+        return super().filter_distribution(dist) and \
                JMHDistWhiteboxBenchmarkSuite.is_whitebox_dependency(dist)
 
 
@@ -361,7 +361,7 @@ class JMHDistWhiteboxBenchmarkSuite(mx_benchmark.JMHDistBenchmarkSuite, JMHJarBa
                  '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.strings=ALL-UNNAMED',
                  '--add-exports=org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED',
                  '--add-exports=org.graalvm.truffle/com.oracle.truffle.api=ALL-UNNAMED']
-        return extra + super(JMHDistWhiteboxBenchmarkSuite, self).extraVmArgs()
+        return extra + super().extraVmArgs()
 
     def getJMHEntry(self, bmSuiteArgs):
         assert self.dist

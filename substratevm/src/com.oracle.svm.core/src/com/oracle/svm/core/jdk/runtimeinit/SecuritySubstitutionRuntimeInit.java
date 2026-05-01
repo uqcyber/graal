@@ -119,7 +119,7 @@ final class Target_javax_crypto_JceSecurity {
 final class Target_sun_security_jca_ProviderConfig {
 
     @Alias //
-    private String provName;
+    String provName;
 
     @Alias//
     private static sun.security.util.Debug debug;
@@ -183,6 +183,41 @@ final class Target_sun_security_jca_ProviderConfig {
             }
         }
         return provider;
+    }
+}
+
+@TargetClass(className = "sun.security.jca.ProviderList", onlyWith = SecurityProvidersInitializedAtRunTime.class)
+@SuppressWarnings({"unused", "static-method"})
+final class Target_sun_security_jca_ProviderList {
+
+    @Alias //
+    private Target_sun_security_jca_ProviderConfig[] configs;
+
+    @Alias
+    private native Provider getProvider(int index);
+
+    @Alias
+    private native int getIndex(String name);
+
+    @Substitute
+    public Provider getProvider(String name) {
+        int index = getIndex(name);
+        if (index >= 0) {
+            return getProvider(index);
+        }
+        for (Target_sun_security_jca_ProviderConfig config : configs) {
+            String configuredProviderName = config.provName;
+            String providerName = SecurityProvidersSupport.getBuiltInProviderName(configuredProviderName);
+            String providerFQName = SecurityProvidersSupport.getBuiltInProviderClassName(configuredProviderName);
+            boolean matches = configuredProviderName.equals(name) || (providerName != null && providerName.equals(name)) || (providerFQName != null && providerFQName.equals(name));
+            if (matches) {
+                if (SecurityProvidersSupport.singleton().isMissingBuiltInProvider(configuredProviderName)) {
+                    throw SecurityProvidersSupport.missingBuiltInProvider(configuredProviderName);
+                }
+                return config.getProvider();
+            }
+        }
+        return null;
     }
 }
 

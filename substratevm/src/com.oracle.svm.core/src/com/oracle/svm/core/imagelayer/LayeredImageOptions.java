@@ -35,6 +35,7 @@ import com.oracle.svm.shared.option.HostedOptionKey;
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionType;
+import jdk.graal.compiler.options.OptionValues;
 
 public class LayeredImageOptions {
     public static final String LAYER_OPTION_PREFIX = "-H:Layer"; // "--layer"
@@ -72,7 +73,7 @@ public class LayeredImageOptions {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Boolean oldValue, Boolean newValue) {
             if (newValue) {
-                UserError.guarantee(UseSharedLayerStrengthenedGraphs.getValueOrDefault(values),
+                UserError.guarantee(UseSharedLayerGraphs.getValue(new OptionValues(values)),
                                 "UseSharedLayerStrengthenedGraph is a subset of UseSharedLayerGraphs, so the former cannot be enabled alone.");
             } else {
                 SubstrateOptions.NeverInline.update(values, "SubstrateStringConcatHelper.simpleConcat");

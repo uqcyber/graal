@@ -53,10 +53,11 @@ final class ReflectionRuntimeMetadata {
         final HostedType[] nestMembers;
         final JavaConstant[] signers;
         final int flags;
+        final RuntimeDynamicAccessMetadata dynamicAccess;
         final RuntimeDynamicAccessMetadata unsafeAllocation;
 
         ClassMetadata(HostedType[] classes, Object enclosingMethodInfo, RecordComponentMetadata[] recordComponents, HostedType[] permittedSubclasses, HostedType[] nestMembers, JavaConstant[] signers,
-                        int flags, RuntimeDynamicAccessMetadata unsafeAllocation, AnnotationValue[] annotations, TypeAnnotationValue[] typeAnnotations) {
+                        int flags, RuntimeDynamicAccessMetadata dynamicAccess, RuntimeDynamicAccessMetadata unsafeAllocation, AnnotationValue[] annotations, TypeAnnotationValue[] typeAnnotations) {
             super(annotations, typeAnnotations);
             this.classes = classes;
             this.enclosingMethodInfo = enclosingMethodInfo;
@@ -65,6 +66,7 @@ final class ReflectionRuntimeMetadata {
             this.nestMembers = nestMembers;
             this.signers = signers;
             this.flags = flags;
+            this.dynamicAccess = dynamicAccess;
             this.unsafeAllocation = unsafeAllocation;
         }
     }

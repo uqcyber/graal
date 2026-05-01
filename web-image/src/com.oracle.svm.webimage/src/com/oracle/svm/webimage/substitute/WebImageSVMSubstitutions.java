@@ -68,7 +68,7 @@ final class Target_com_oracle_svm_core_deopt_Deoptimizer {
     }
 
     @Substitute
-    public static void invalidateMethodOfFrame(IsolateThread thread, Pointer sourceSp, SpeculationLog.SpeculationReason speculation) {
+    public static void invalidateMethodOfFrame(IsolateThread thread, Pointer sourceSp, SpeculationLog.SpeculationReason speculation, boolean reprofile) {
         throw new Error("Deoptimization not supported...");
     }
 

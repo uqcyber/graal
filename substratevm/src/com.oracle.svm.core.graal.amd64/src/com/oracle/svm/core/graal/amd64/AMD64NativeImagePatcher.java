@@ -29,7 +29,7 @@ import java.util.function.Consumer;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.graal.code.NativeImagePatcher;
 import com.oracle.svm.core.graal.code.PatchConsumerFactory;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,10 +45,14 @@ import static com.oracle.truffle.polyglot.TracingSourceCacheListener.truncateStr
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.logging.Level;
 
@@ -58,6 +62,10 @@ import org.graalvm.options.OptionValues;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLogger;
 import com.oracle.truffle.api.bytecode.BytecodeDescriptor;
+import com.oracle.truffle.api.bytecode.BytecodeLocation;
+import com.oracle.truffle.api.bytecode.BytecodeNode;
+import com.oracle.truffle.api.bytecode.BytecodeRootNode;
+import com.oracle.truffle.api.bytecode.BytecodeTransition;
 import com.oracle.truffle.api.bytecode.debug.HistogramInstructionTracer;
 import com.oracle.truffle.api.bytecode.debug.PrintInstructionTracer;
 import com.oracle.truffle.api.nodes.LanguageInfo;
@@ -65,6 +73,7 @@ import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
 import com.oracle.truffle.polyglot.PolyglotEngineOptions.BytecodeHistogramGrouping;
+import com.oracle.truffle.polyglot.PolyglotEngineOptions.BytecodeTransitionKind;
 
 /**
  * Encapsulates data and logic related to polyglot instruction tracers.
@@ -101,6 +110,14 @@ final class PolyglotInstructionTracers {
             EngineAccessor.BYTECODE.registerInstructionTracerFactory(layer, tracingFactory);
         } else {
             this.tracingFactory = null;
+        }
+
+        List<BytecodeTransitionKind> transitionTracing = options.get(PolyglotEngineOptions.TraceBytecodeTransition);
+        if (transitionTracing != null) {
+            TruffleLogger engineLogger = layer.engine.getEngineLogger();
+            Set<BytecodeTransitionKind> kinds = parseTransitionKinds(transitionTracing);
+            EngineAccessor.BYTECODE.registerTransitionLogger(layer,
+                            buildTransitionLogger(engineLogger, kinds, languageFilter, methodFilter));
         }
 
         List<BytecodeHistogramGrouping> groups = options.get(PolyglotEngineOptions.BytecodeHistogram);
@@ -188,6 +205,9 @@ final class PolyglotInstructionTracers {
     }
 
     private void dumpAndReset() {
+        if (histogramFactory == null) {
+            return;
+        }
         List<HistogramInstructionTracer> engineTracers = EngineAccessor.BYTECODE.getEngineInstructionTracers(layer, histogramFactory);
         TruffleLogger logger = layer.engine.getEngineLogger();
         for (HistogramInstructionTracer t : engineTracers) {
@@ -199,7 +219,8 @@ final class PolyglotInstructionTracers {
         OptionValues options = layer.engine.getEngineOptionValues();
         boolean traceBytecode = options.get(PolyglotEngineOptions.TraceBytecode);
         List<BytecodeHistogramGrouping> bytecodeStatistics = options.get(PolyglotEngineOptions.BytecodeHistogram);
-        if (!traceBytecode && bytecodeStatistics == null) {
+        boolean traceTransition = options.get(PolyglotEngineOptions.TraceBytecodeTransition) != null;
+        if (!traceBytecode && bytecodeStatistics == null && !traceTransition) {
             // fast-path: not enabled
             return null;
         }
@@ -212,10 +233,8 @@ final class PolyglotInstructionTracers {
                 return false;
             }
         }
-        if (methodFilter != null) {
-            if (!applyMethodFilter(rootNode.getQualifiedName(), methodFilter)) {
-                return false;
-            }
+        if (methodFilter != null && !applyMethodFilter(rootNode.getQualifiedName(), methodFilter)) {
+            return false;
         }
         return true;
     }
@@ -313,6 +332,163 @@ final class PolyglotInstructionTracers {
             }
         }
         return true;
+    }
+
+    private static Set<BytecodeTransitionKind> parseTransitionKinds(List<BytecodeTransitionKind> optionKinds) {
+        return EnumSet.copyOf(optionKinds);
+    }
+
+    private static BiConsumer<BytecodeRootNode, BytecodeTransition> buildTransitionLogger(TruffleLogger engineLogger, Set<BytecodeTransitionKind> transitionKinds,
+                    Pair<List<LanguageInfo>, List<LanguageInfo>> languageFilter,
+                    Pair<List<String>, List<String>> methodFilter) {
+        return (root, transition) -> {
+            if (!engineLogger.isLoggable(Level.INFO)) {
+                return;
+            }
+            RootNode rn = (RootNode) root;
+            if (!filterRootNode(languageFilter, methodFilter, rn)) {
+                return;
+            }
+            EnumSet<BytecodeTransitionKind> transitionKindSet = classifyTransitionKinds(transition);
+            if (!includesAnyTransitionKind(transitionKinds, transitionKindSet)) {
+                return;
+            }
+            engineLogger.info(formatTransitionLog(transitionKindSet, rn, transition));
+        };
+    }
+
+    private static String formatTransitionLog(EnumSet<BytecodeTransitionKind> transitionKinds, RootNode root, BytecodeTransition transition) {
+        String rootName = root.getQualifiedName();
+        if (rootName == null) {
+            rootName = root.toString();
+        }
+        rootName = rootName.replace('\n', ' ');
+
+        LanguageInfo languageInfo = root.getLanguageInfo();
+        String languageId = languageInfo == null ? "<unknown>" : languageInfo.getId();
+        String threadName = Thread.currentThread().getName();
+
+        return String.format("[bc-transition] kinds=%s lang=%s root=%s thread=%s%n  old: %s%n  new: %s%n  changes: %s",
+                        formatTransitionKinds(transitionKinds),
+                        languageId,
+                        rootName,
+                        threadName,
+                        formatTransitionLocation(transition.getOldLocation()),
+                        formatTransitionLocation(transition.getNewLocation()),
+                        formatTransitionChanges(transition));
+    }
+
+    private static String formatTransitionChanges(BytecodeTransition transition) {
+        return String.format("addedTags=%s addedInstrumentations=%s",
+                        formatTransitionClasses(transition.getAddedTags()),
+                        formatTransitionClasses(transition.getAddedInstrumentations()));
+    }
+
+    private static String formatTransitionClasses(Set<Class<?>> classes) {
+        if (classes == null || classes.isEmpty()) {
+            return "none";
+        }
+        List<String> names = new ArrayList<>(classes.size());
+        for (Class<?> clazz : classes) {
+            names.add(clazz.getSimpleName());
+        }
+        names.sort(String::compareTo);
+        return String.join(",", names);
+    }
+
+    private static String formatTransitionLocation(BytecodeLocation location) {
+        BytecodeNode bytecodeNode = location.getBytecodeNode();
+        var instruction = location.getInstruction();
+        String opcode = instruction == null ? "<unknown>" : instruction.getName();
+        boolean instrumentation = instruction != null && instruction.isInstrumentation();
+        String tag = bytecodeNode.getTagTree() == null ? "none" : "present";
+
+        return String.format("tier=%s bci=%d op=%s src=%s tag=%s instr=%s",
+                        bytecodeNode.getTier().name().toLowerCase(Locale.ROOT),
+                        location.getBytecodeIndex(),
+                        opcode,
+                        formatSourceSection(location.getSourceLocation()),
+                        tag,
+                        instrumentation);
+    }
+
+    private static String formatSourceSection(SourceSection sourceSection) {
+        if (sourceSection == null) {
+            return "none";
+        }
+        Source source = sourceSection.getSource();
+        String sourceName = source == null ? "<unknown>" : truncateString(source.getName(), MAX_SOURCE_NAME_LENGTH);
+        if (!sourceSection.isAvailable()) {
+            return sourceName;
+        }
+        return String.format("%s:%d:%d-%d:%d",
+                        sourceName,
+                        sourceSection.getStartLine(),
+                        sourceSection.getStartColumn(),
+                        sourceSection.getEndLine(),
+                        sourceSection.getEndColumn());
+    }
+
+    private static boolean includesAnyTransitionKind(Set<BytecodeTransitionKind> configuredKinds, EnumSet<BytecodeTransitionKind> transitionKinds) {
+        for (BytecodeTransitionKind kind : transitionKinds) {
+            if (configuredKinds.contains(kind)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static EnumSet<BytecodeTransitionKind> classifyTransitionKinds(BytecodeTransition transition) {
+        EnumSet<BytecodeTransitionKind> kinds = EnumSet.noneOf(BytecodeTransitionKind.class);
+
+        if (transition.isBytecodeUpdate()) {
+            kinds.add(BytecodeTransitionKind.bytecode);
+            BytecodeLocation oldLocation = transition.getOldLocation();
+            BytecodeLocation newLocation = transition.getNewLocation();
+            if (oldLocation != null && newLocation != null) {
+                BytecodeNode oldBytecodeNode = oldLocation.getBytecodeNode();
+                BytecodeNode newBytecodeNode = newLocation.getBytecodeNode();
+                if (oldBytecodeNode.getTier() != newBytecodeNode.getTier()) {
+                    kinds.add(BytecodeTransitionKind.tier);
+                }
+            }
+            if (!transition.getAddedTags().isEmpty()) {
+                kinds.add(BytecodeTransitionKind.tag);
+            }
+            if (!transition.getAddedInstrumentations().isEmpty()) {
+                kinds.add(BytecodeTransitionKind.instrumentation);
+            }
+        }
+        if (transition.isTransferToInterpreter()) {
+            kinds.add(BytecodeTransitionKind.transferToInterpreter);
+        }
+        return kinds;
+    }
+
+    private static final BytecodeTransitionKind[] TRANSITION_KIND_FORMAT_ORDER = {
+                    BytecodeTransitionKind.bytecode,
+                    BytecodeTransitionKind.tier,
+                    BytecodeTransitionKind.tag,
+                    BytecodeTransitionKind.instrumentation,
+                    BytecodeTransitionKind.transferToInterpreter,
+    };
+
+    private static String formatTransitionKinds(EnumSet<BytecodeTransitionKind> kinds) {
+        StringBuilder b = new StringBuilder();
+        for (BytecodeTransitionKind kind : TRANSITION_KIND_FORMAT_ORDER) {
+            appendTransitionKind(b, kinds, kind);
+        }
+        return b.toString();
+    }
+
+    private static void appendTransitionKind(StringBuilder b, EnumSet<BytecodeTransitionKind> kinds, BytecodeTransitionKind kind) {
+        if (!kinds.contains(kind)) {
+            return;
+        }
+        if (b.length() > 0) {
+            b.append(',');
+        }
+        b.append(kind);
     }
 
     private record RootNodeGroup(RootNode rootNode) {

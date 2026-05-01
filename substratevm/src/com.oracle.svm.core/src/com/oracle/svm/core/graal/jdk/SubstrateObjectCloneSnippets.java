@@ -30,12 +30,12 @@ import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.FAST_PATH_
 
 import java.util.Map;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.JavaMemoryUtil;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
 import com.oracle.svm.core.graal.snippets.SubstrateTemplates;
@@ -137,13 +137,13 @@ public final class SubstrateObjectCloneSnippets extends SubstrateTemplates imple
         int entryCount = refMapPos.readInt(0);
         refMapPos = refMapPos.add(4);
 
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
 
         assert entryCount >= 0;
         UnsignedWord sizeOfEntries = Word.unsigned(InstanceReferenceMapEncoder.MAP_ENTRY_SIZE).multiply(entryCount);
         Pointer refMapEnd = refMapPos.add(sizeOfEntries);
 
-        long curOffset = ConfigurationValues.getObjectLayout().getFirstFieldOffset();
+        long curOffset = ObjectLayout.singleton().getFirstFieldOffset();
         while (refMapPos.belowThan(refMapEnd)) {
             int objectOffset = refMapPos.readInt(0);
             refMapPos = refMapPos.add(4);
@@ -182,7 +182,7 @@ public final class SubstrateObjectCloneSnippets extends SubstrateTemplates imple
         }
 
         /* Reset identity hashcode if it is outside the object header. */
-        if (ConfigurationValues.getObjectLayout().isIdentityHashFieldAtTypeSpecificOffset()) {
+        if (ObjectLayout.singleton().isIdentityHashFieldAtTypeSpecificOffset()) {
             int offset = LayoutEncoding.getIdentityHashOffset(result);
             ObjectAccess.writeInt(result, offset, 0);
         }

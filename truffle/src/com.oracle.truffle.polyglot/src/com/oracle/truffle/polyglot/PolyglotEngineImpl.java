@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -274,6 +274,7 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
                     DispatchOutputStream out, DispatchOutputStream err, InputStream in, OptionValuesImpl engineOptions,
                     Map<String, Level> logLevels,
                     EngineLoggerProvider engineLoggerSupplier, Map<String, String> options,
+                    Map<String, String> systemPropertiesOptions, boolean useSystemProperties,
                     boolean allowExperimentalOptions, boolean boundEngine, boolean preInitialization,
                     MessageTransport messageTransport, LogHandler logHandler,
                     TruffleLanguage<Object> hostImpl, boolean hostLanguageOnly, AbstractPolyglotHostService polyglotHostService, Consumer<PolyglotException> exceptionHandler) {
@@ -356,12 +357,12 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
 
         Map<PolyglotLanguage, Map<String, String>> languagesOptions = new HashMap<>();
         Map<PolyglotInstrument, Map<String, String>> instrumentsOptions = new HashMap<>();
-        parseOptions(options, languagesOptions, instrumentsOptions);
+        parseOptions(options, systemPropertiesOptions, useSystemProperties, languagesOptions, instrumentsOptions);
 
         for (PolyglotLanguage language : languagesOptions.keySet()) {
             OptionValuesImpl languageOptions = language.getOptionValues();
             Map<String, String> unparsedOptions = languagesOptions.get(language);
-            parseAllOptions(languageOptions, unparsedOptions, deprecatedDescriptors);
+            parseAllOptions(languageOptions, unparsedOptions, allowExperimentalOptions, deprecatedDescriptors);
         }
 
         if (engineOptionValues.get(PolyglotEngineOptions.SpecializationStatistics)) {
@@ -402,10 +403,11 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
         this.weakAPI = engineAPI;
     }
 
-    private void parseAllOptions(OptionValuesImpl targetOptions, Map<String, String> unparsedOptions, List<OptionDescriptor> deprecatedDescriptors) {
+    private void parseAllOptions(OptionValuesImpl targetOptions, Map<String, String> unparsedOptions, boolean allowExperimental,
+                    List<OptionDescriptor> deprecatedDescriptors) {
         for (var entry : unparsedOptions.entrySet()) {
-            OptionDescriptor d = targetOptions.put(entry.getKey(), entry.getValue(), allowExperimentalOptions, this::getAllOptions);
-            if (d != null && d.isDeprecated()) {
+            OptionDescriptor d = targetOptions.put(entry.getKey(), entry.getValue(), allowExperimental, this::getAllOptions);
+            if (d.isDeprecated()) {
                 deprecatedDescriptors.add(d);
             }
         }
@@ -542,7 +544,21 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
 
     void notifyCreated() {
         RUNTIME.onEngineCreate(this, this.runtimeData);
-        impl.getRootImpl().onEngineCreated(this);
+        long interpreterCallStackHeadRoom = engineOptionValues.get(PolyglotEngineOptions.InterpreterCallStackHeadRoom);
+        if (interpreterCallStackHeadRoom != 0) {
+            if (EngineAccessor.SANDBOX.isInterpreterCallStackHeadRoomSupported()) {
+                if (runtimeData != null) {
+                    EngineAccessor.RUNTIME.initializeInterpreterCallStackHeadRoom(runtimeData, interpreterCallStackHeadRoom);
+                } else {
+                    throw PolyglotEngineException.illegalArgument(
+                                    "The engine.InterpreterCallStackHeadRoom option is set to a non-zero value, but the option is not supported on the fallback Truffle runtime. " +
+                                                    "In order to resolve this either switch to an optimized Truffle runtime that supports the option or don't set it.");
+                }
+            } else {
+                throw PolyglotEngineException.illegalArgument("The engine.InterpreterCallStackHeadRoom option is set to a non-zero value, but the option is not supported on the current VM. " +
+                                "In order to resolve this either switch to a VM that supports the option or don't set it.");
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -710,6 +726,8 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
                     LogConfig newLogConfig,
                     EngineLoggerProvider logSupplier,
                     Map<String, String> newOptions,
+                    Map<String, String> newSystemPropertiesOptions,
+                    boolean newUseSystemProperties,
                     boolean newAllowExperimentalOptions,
                     boolean newBoundEngine, LogHandler newLogHandler,
                     TruffleLanguage<?> newHostLanguage,
@@ -751,7 +769,7 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
 
         Map<PolyglotLanguage, Map<String, String>> languagesOptions = new HashMap<>();
         Map<PolyglotInstrument, Map<String, String>> instrumentsOptions = new HashMap<>();
-        parseOptions(newOptions, languagesOptions, instrumentsOptions);
+        parseOptions(newOptions, newSystemPropertiesOptions, newUseSystemProperties, languagesOptions, instrumentsOptions);
 
         sourceCacheStatisticsListener = SourceCacheStatisticsListener.createOrNull(this);
 
@@ -759,23 +777,13 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
 
         List<OptionDescriptor> deprecatedDescriptors = new ArrayList<>();
         for (PolyglotLanguage language : languagesOptions.keySet()) {
-            for (Map.Entry<String, String> languageOption : languagesOptions.get(language).entrySet()) {
-                OptionDescriptor descriptor = language.getOptionValues().put(languageOption.getKey(), languageOption.getValue(), newAllowExperimentalOptions, this::getAllOptions);
-                if (descriptor.isDeprecated()) {
-                    deprecatedDescriptors.add(descriptor);
-                }
-            }
+            parseAllOptions(language.getOptionValues(), languagesOptions.get(language), newAllowExperimentalOptions, deprecatedDescriptors);
         }
 
         // Set instruments options but do not call onCreate. OnCreate is called only in case of
         // successful context patch.
         for (PolyglotInstrument instrument : instrumentsOptions.keySet()) {
-            for (Map.Entry<String, String> instrumentOption : instrumentsOptions.get(instrument).entrySet()) {
-                OptionDescriptor descriptor = instrument.getEngineOptionValues().put(instrumentOption.getKey(), instrumentOption.getValue(), newAllowExperimentalOptions, this::getAllOptions);
-                if (descriptor.isDeprecated()) {
-                    deprecatedDescriptors.add(descriptor);
-                }
-            }
+            parseAllOptions(instrument.getEngineOptionValues(), instrumentsOptions.get(instrument), newAllowExperimentalOptions, deprecatedDescriptors);
         }
         validateSandbox();
         printDeprecatedOptionsWarning(deprecatedDescriptors);
@@ -806,7 +814,7 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
 
     private void createInstruments(Map<PolyglotInstrument, Map<String, String>> instrumentsOptions, List<OptionDescriptor> deprecatedDescriptors) {
         for (PolyglotInstrument instrument : instrumentsOptions.keySet()) {
-            parseAllOptions(instrument.getEngineOptionValues(), instrumentsOptions.get(instrument), deprecatedDescriptors);
+            parseAllOptions(instrument.getEngineOptionValues(), instrumentsOptions.get(instrument), allowExperimentalOptions, deprecatedDescriptors);
         }
         ensureInstrumentsCreated(instrumentsOptions.keySet());
     }
@@ -848,8 +856,24 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
     }
 
     private void parseOptions(Map<String, String> options,
+                    Map<String, String> systemPropertiesOptions,
+                    boolean useSystemProperties,
                     Map<PolyglotLanguage, Map<String, String>> languagesOptions,
                     Map<PolyglotInstrument, Map<String, String>> instrumentsOptions) {
+        parseOptionsInto(options, languagesOptions, instrumentsOptions, false);
+        /*
+         * In native-image, constant options do not need to be looked up because both constant and
+         * preset options are set during the native-image build.
+         */
+        if (!systemPropertiesOptions.isEmpty() && (useSystemProperties || !ImageInfo.inImageRuntimeCode())) {
+            parseOptionsInto(systemPropertiesOptions, languagesOptions, instrumentsOptions, !useSystemProperties);
+        }
+    }
+
+    private void parseOptionsInto(Map<String, String> options,
+                    Map<PolyglotLanguage, Map<String, String>> languagesOptions,
+                    Map<PolyglotInstrument, Map<String, String>> instrumentsOptions,
+                    boolean constantOptionsOnly) {
         for (String key : options.keySet()) {
             String group = parseOptionGroup(key);
             String value = options.get(key);
@@ -860,7 +884,9 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
                     languageOptions = new HashMap<>();
                     languagesOptions.put(language, languageOptions);
                 }
-                languageOptions.put(key, value);
+                if (!constantOptionsOnly || isConstantOption(language.getOptionValues(), key)) {
+                    languageOptions.putIfAbsent(key, value);
+                }
                 continue;
             }
             PolyglotInstrument instrument = idToInstrument.get(group);
@@ -870,7 +896,9 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
                     instrumentOptions = new HashMap<>();
                     instrumentsOptions.put(instrument, instrumentOptions);
                 }
-                instrumentOptions.put(key, value);
+                if (!constantOptionsOnly || isConstantOption(instrument.getEngineOptionValues(), key)) {
+                    instrumentOptions.putIfAbsent(key, value);
+                }
                 continue;
             }
 
@@ -881,9 +909,23 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
                     throw new AssertionError("Log or engine options should already be parsed.");
                 case OPTION_GROUP_IMAGE_BUILD_TIME:
                     throw PolyglotEngineException.illegalArgument("Image build-time option '" + key + "' cannot be set at runtime");
+                default:
+                    /*
+                     * When constantOptionsOnly is true (HotSpot with system properties disabled),
+                     * only constant options are considered. Since non-constant system properties
+                     * are not read in this mode, unknown option names must be tolerated and ignored
+                     * instead of causing a failure.
+                     */
+                    if (!constantOptionsOnly) {
+                        throw OptionValuesImpl.failNotFound(getAllOptions(), key);
+                    }
             }
-            throw OptionValuesImpl.failNotFound(getAllOptions(), key);
         }
+    }
+
+    private static boolean isConstantOption(OptionValuesImpl targetOptions, String key) {
+        OptionDescriptor descriptor = targetOptions.getDescriptors().get(key);
+        return descriptor != null && descriptor.isConstant();
     }
 
     static String parseOptionGroup(String key) {
@@ -1286,19 +1328,33 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
         }
 
         synchronized (this.lock) {
-            if (closingThread != null || closed) {
-                throw new IllegalStateException("The engine is already closed and cannot be cancelled or persisted.");
-            }
-            if (!storeEngine) {
-                throw new IllegalStateException(
-                                "In order to store the cache the option 'engine.CacheStoreEnabled' must be set to 'true'.");
-            }
-            List<PolyglotContextImpl> localContexts = collectAliveContexts();
-            if (!localContexts.isEmpty()) {
-                throw new IllegalStateException("There are still alive contexts that need to be closed or cancelled before the engine can be persisted.");
-            }
-
+            validateStoreCacheState();
             return RUNTIME.onStoreCache(this.runtimeData, targetPath, cancelledWord);
+        }
+    }
+
+    ByteBuffer persistCache(Engine.CancellationCallback callback) {
+        if (!TruffleOptions.AOT) {
+            throw new UnsupportedOperationException("Persisting the engine cache is only supported on native-image hosts.");
+        }
+
+        synchronized (this.lock) {
+            validateStoreCacheState();
+            return RUNTIME.persistCache(this.runtimeData, callback);
+        }
+    }
+
+    private void validateStoreCacheState() {
+        if (closingThread != null || closed) {
+            throw new IllegalStateException("The engine is already closed and cannot be cancelled or persisted.");
+        }
+        if (!storeEngine) {
+            throw new IllegalStateException(
+                            "In order to store the cache the option 'engine.CacheStoreEnabled' must be set to 'true'.");
+        }
+        List<PolyglotContextImpl> localContexts = collectAliveContexts();
+        if (!localContexts.isEmpty()) {
+            throw new IllegalStateException("There are still alive contexts that need to be closed or cancelled before the engine can be persisted.");
         }
     }
 
@@ -1957,7 +2013,7 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
                 if (!ALLOW_CREATE_PROCESS) {
                     throw PolyglotEngineException.illegalArgument("Cannot allowCreateProcess() because the privilege is removed at image build time");
                 }
-                useProcessHandler = processHandler != null ? processHandler : getImpl().newDefaultProcessHandler();
+                useProcessHandler = processHandler != null ? processHandler : newDefaultProcessHandler();
             } else {
                 useProcessHandler = null;
             }
@@ -2061,6 +2117,14 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
             getAPIAccess().processReferenceQueue();
         }
         return contextAPI;
+    }
+
+    static ProcessHandler newDefaultProcessHandler() {
+        if (PolyglotEngineImpl.ALLOW_CREATE_PROCESS) {
+            return ProcessHandlers.newDefaultProcessHandler();
+        } else {
+            return null;
+        }
     }
 
     private Context loadPreinitializedContext(PolyglotContextConfig config, Engine engineAPI, boolean registerInActiveContexts) {
@@ -2570,9 +2634,9 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
 
     @SuppressWarnings("try")
     void validateVirtualThreadCreation() {
+        var options = getEngineOptionValues();
         if (!warnedVirtualThreadSupport.get() && warnedVirtualThreadSupport.compareAndSet(false, true)) {
-            try (AbstractPolyglotImpl.ThreadScope scope = impl.getRootImpl().createThreadScope()) {
-                var options = getEngineOptionValues();
+            try (AbstractPolyglotImpl.ThreadScope scope = impl.createThreadScope()) {
                 boolean warnVirtualThreadSupport = options.get(PolyglotEngineOptions.WarnVirtualThreadSupport);
 
                 if (warnVirtualThreadSupport && !(Truffle.getRuntime() instanceof DefaultTruffleRuntime)) {
@@ -2596,8 +2660,9 @@ final class PolyglotEngineImpl implements com.oracle.truffle.polyglot.PolyglotIm
                 }
             }
         }
-
-        impl.getRootImpl().validateVirtualThreadCreation(getEngineOptionValues());
+        if (options.get(PolyglotEngineOptions.SpawnIsolate) != null) {
+            throw PolyglotEngineException.illegalState("Using isolated polyglot contexts together with Java virtual threads is currently not supported.");
+        }
     }
 
     /**

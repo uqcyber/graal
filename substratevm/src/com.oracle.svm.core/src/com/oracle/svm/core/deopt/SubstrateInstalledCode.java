@@ -24,13 +24,12 @@
  */
 package com.oracle.svm.core.deopt;
 
-import jdk.graal.compiler.core.common.CompilationIdentifier;
-
-import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.RuntimeCodeCache;
+import com.oracle.svm.shared.Uninterruptible;
 
+import jdk.graal.compiler.core.common.CompilationIdentifier;
 import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -92,6 +91,12 @@ public interface SubstrateInstalledCode {
      * {@link #isValid} and {@link #isAlive} return {@code false}.
      */
     void invalidate();
+
+    /**
+     * Indicates whether the code associated with this method should be subject to profiling again
+     * after invalidation.
+     */
+    void reprofile();
 
     /** Whether the code represented by this object exists and could have live invocations. */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)

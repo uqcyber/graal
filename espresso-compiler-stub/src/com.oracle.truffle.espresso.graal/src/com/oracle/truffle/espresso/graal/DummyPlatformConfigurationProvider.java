@@ -34,6 +34,11 @@ public final class DummyPlatformConfigurationProvider implements PlatformConfigu
 
     @Override
     public boolean canVirtualizeLargeByteArrayAccess() {
-        throw GraalError.unimplementedOverride();
+        SuspiciousHostAccessCollector.onSuspiciousHostAccess();
+        /*
+         * Used at least by PartialEscapePhase.run indirectly via
+         * VirtualizerToolImpl.setVirtualEntry.
+         */
+        return false;
     }
 }

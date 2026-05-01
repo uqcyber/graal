@@ -74,10 +74,7 @@ public final class MethodProfile {
     /**
      * Caches the index of the last returned profile for the next access. Initialized to 0, will be
      * set in {@link #getAtBCI(int, Class)}. This field may be written concurrently by multiple
-     * threads, yet we do not synchronize access to it for performance reasons. Its value is always
-     * compared to the length of {@code profiles[]} array and thus can never cause out of bounds
-     * reads. Also tearing cannot happen because it is a 32 bit field and such writes are atomic on
-     * all supported platforms.
+     * threads. Updates are coordinated through synchronized profile lookup and reset paths.
      */
     private int lastIndex;
 
@@ -173,12 +170,19 @@ public final class MethodProfile {
         profileType(bci, type);
     }
 
+    public synchronized void reprofile() {
+        for (int i = 0; i < profiles.length; i++) {
+            profiles[i] = profiles[i].reset();
+        }
+        isMature = false;
+    }
+
     /**
      * Gets the profile for {@code bci} whose class is {@code clazz}.
      * 
      * @return null if there's no profile
      */
-    private InterpreterProfile getAtBCI(int bci, Class<? extends InterpreterProfile> clazz) {
+    private synchronized InterpreterProfile getAtBCI(int bci, Class<? extends InterpreterProfile> clazz) {
         int lastIndexLocal = lastIndex;
         for (int i = lastIndexLocal; i < profiles.length; i++) {
             InterpreterProfile profile = profiles[i];
@@ -224,6 +228,8 @@ public final class MethodProfile {
         public int getBci() {
             return bci;
         }
+
+        public abstract InterpreterProfile reset();
     }
 
     /**
@@ -248,6 +254,11 @@ public final class MethodProfile {
         public String toString() {
             return "{Counting:bci=" + bci + ", counter=" + counter + "}";
         }
+
+        @Override
+        public InterpreterProfile reset() {
+            return new CountingProfile(bci);
+        }
     }
 
     /**
@@ -255,38 +266,52 @@ public final class MethodProfile {
      * normally represented by {@link IfNode}.
      */
     public static class BranchProfile extends CountingProfile {
-        private long takenCounter;
+        private long notTakenCounter;
 
         public BranchProfile(int bci) {
             super(bci);
         }
 
         public void incrementTakenCounter() {
-            takenCounter++;
             counter++;
         }
 
         public void incrementNotTakenCounter() {
-            counter++;
+            notTakenCounter++;
         }
 
         public double takenProfile() {
-            if (counter == 0) {
+            /*
+             * The counters can be updated concurrently so we only read them once.
+             */
+            long localTakenCounter = counter;
+            long sum = localTakenCounter + notTakenCounter;
+            if (sum == 0) {
                 return -1D;
             }
-            return (double) takenCounter / (double) counter;
+            return (double) localTakenCounter / (double) sum;
         }
 
         public double notTakenProfile() {
-            if (counter == 0) {
+            /*
+             * The counters can be updated concurrently so we only read them once.
+             */
+            long localNotTakenCounter = notTakenCounter;
+            long sum = counter + localNotTakenCounter;
+            if (sum == 0) {
                 return -1D;
             }
-            return 1D - takenProfile();
+            return (double) localNotTakenCounter / (double) sum;
         }
 
         @Override
         public String toString() {
-            return "{BranchProfile:bci=" + bci + ", takenCounter=" + takenCounter + ", counter=" + counter + "}";
+            return "{BranchProfile:bci=" + bci + ", takenCounter=" + counter + ", notTakenCounter=" + notTakenCounter + "}";
+        }
+
+        @Override
+        public InterpreterProfile reset() {
+            return new BranchProfile(bci);
         }
     }
 
@@ -331,6 +356,11 @@ public final class MethodProfile {
             types = new ResolvedJavaType[typeProfileWidth];
             counts = new long[typeProfileWidth];
             this.ristrettoTypeSupplier = ristrettoTypeSupplier;
+        }
+
+        @Override
+        public InterpreterProfile reset() {
+            return new TypeProfile(bci, ristrettoTypeSupplier);
         }
 
         /**

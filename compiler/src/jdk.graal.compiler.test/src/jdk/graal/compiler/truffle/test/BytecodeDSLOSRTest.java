@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,9 +25,15 @@
 package jdk.graal.compiler.truffle.test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import com.oracle.truffle.api.TruffleStackTrace;
+import com.oracle.truffle.api.TruffleStackTraceElement;
+import com.oracle.truffle.api.bytecode.BytecodeLocation;
+import com.oracle.truffle.api.nodes.Node;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -101,8 +107,39 @@ public class BytecodeDSLOSRTest extends TestWithSynchronousCompiling {
         try {
             root.getCallTarget().call();
             Assert.fail("Should not reach here.");
-        } catch (BytecodeDSLOSRTestRootNode.InCompiledCodeException ex) {
-            // expected
+        } catch (BytecodeDSLOSRTestRootNode.MyException ex) {
+            // Expect a single stack trace element with combined state from regular and OSR frames.
+            List<TruffleStackTraceElement> elements = TruffleStackTrace.getStackTrace(ex);
+            assertEquals(1, elements.size());
+            TruffleStackTraceElement element = elements.getFirst();
+            assertEquals(root.getCallTarget(), element.getTarget());
+            assertNotNull(element.getLocation());
+            assertEquals("c.ThrowsInCompiledCode", BytecodeLocation.get(element).getInstruction().getName());
+        }
+    }
+
+    @Test
+    public void testInfiniteInterpreterLoopCaught() {
+        BytecodeDSLOSRTestRootNode root = parseNode(b -> {
+            b.beginRoot();
+            b.beginTryCatch();
+            b.beginWhile();
+            b.emitLoadConstant(true);
+            b.emitThrowsInCompiledCode();
+            b.endWhile();
+
+            b.beginMarkExceptionAndRethrow();
+            b.emitLoadException();
+            b.endMarkExceptionAndRethrow();
+            b.endTryCatch();
+            b.endRoot();
+        });
+
+        try {
+            root.getCallTarget().call();
+            Assert.fail("Should not reach here.");
+        } catch (BytecodeDSLOSRTestRootNode.MyException ex) {
+            assertEquals(1, ex.catchCount);
         }
     }
 
@@ -413,30 +450,6 @@ public class BytecodeDSLOSRTest extends TestWithSynchronousCompiling {
         assertEquals(BytecodeOSRMetadata.OSR_POLL_INTERVAL * 3, cont.continueWith(null));
     }
 
-    @Test
-    public void testContinuationThenRegularFrame() {
-        BytecodeDSLOSRTestRootNodeWithYield root = BytecodeDSLOSRTestRootNodeWithYieldGen.create(LANGUAGE, BytecodeConfig.DEFAULT, badFrameParser).getNode(0);
-        // First, call it with yield, so OSR uses the continuation frame.
-        ContinuationResult cont = (ContinuationResult) root.getCallTarget().call(true, OSR_THRESHOLD * 2);
-        // OSR_THRESHOLD (interpreter) + 2*OSR_THRESHOLD (compiled)
-        assertEquals(OSR_THRESHOLD * 3, cont.continueWith(null));
-        // Then, call it regularly. OSR should compile separately for the regular frame.
-        // OSR_THRESHOLD (interpreter) + 2*(OSR_THRESHOLD + 2) (compiled)
-        assertEquals(OSR_THRESHOLD * 3 + 2, root.getCallTarget().call(false, OSR_THRESHOLD * 2 + 1));
-    }
-
-    @Test
-    public void testRegularThenContinuationFrame() {
-        BytecodeDSLOSRTestRootNodeWithYield root = BytecodeDSLOSRTestRootNodeWithYieldGen.create(LANGUAGE, BytecodeConfig.DEFAULT, badFrameParser).getNode(0);
-        // First, call it regularly, so OSR uses the regular frame.
-        // OSR_THRESHOLD (interpreter) + 2*OSR_THRESHOLD (compiled)
-        assertEquals(OSR_THRESHOLD * 3, root.getCallTarget().call(false, OSR_THRESHOLD * 2));
-        // Then, call it with yield. OSR should compile separately for the continuation frame.
-        ContinuationResult cont = (ContinuationResult) root.getCallTarget().call(true, OSR_THRESHOLD * 2 + 1);
-        // OSR_THRESHOLD (interpreter) + 2*(OSR_THRESHOLD + 2) (compiled)
-        assertEquals(OSR_THRESHOLD * 3 + 2, cont.continueWith(null));
-    }
-
     @TruffleLanguage.Registration(id = "BytecodeDSLOSRTestLanguage")
     static class BytecodeDSLOSRTestLanguage extends TruffleLanguage<Object> {
         @Override
@@ -448,8 +461,13 @@ public class BytecodeDSLOSRTest extends TestWithSynchronousCompiling {
     @GenerateBytecode(languageClass = BytecodeDSLOSRTestLanguage.class)
     public abstract static class BytecodeDSLOSRTestRootNode extends DebugBytecodeRootNode {
 
-        static class InCompiledCodeException extends AbstractTruffleException {
-            private static final long serialVersionUID = 1L;
+        @SuppressWarnings("serial")
+        static class MyException extends AbstractTruffleException {
+            int catchCount = 0;
+
+            MyException(Node location) {
+                super(location);
+            }
         }
 
         protected BytecodeDSLOSRTestRootNode(BytecodeDSLOSRTestLanguage language, FrameDescriptor fd) {
@@ -459,10 +477,25 @@ public class BytecodeDSLOSRTest extends TestWithSynchronousCompiling {
         @Operation
         static final class ThrowsInCompiledCode {
             @Specialization
-            public static void perform() {
+            public static void perform(@Bind Node location) {
                 if (CompilerDirectives.inCompiledCode()) {
-                    throw new InCompiledCodeException();
+                    doThrow(location);
                 }
+            }
+
+            @TruffleBoundary
+            private static void doThrow(Node location) {
+                // Throw behind a boundary so compilation does not insert early deopt.
+                throw new MyException(location);
+            }
+        }
+
+        @Operation
+        static final class MarkExceptionAndRethrow {
+            @Specialization
+            public static void perform(MyException ex) {
+                ex.catchCount++;
+                throw ex;
             }
         }
 

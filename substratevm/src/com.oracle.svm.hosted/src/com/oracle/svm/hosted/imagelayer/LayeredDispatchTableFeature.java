@@ -47,8 +47,7 @@ import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.objectfile.ObjectFile;
 import com.oracle.svm.core.InvalidMethodPointerHandler;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.snippets.OpenTypeWorldDispatchTableSnippets;
 import com.oracle.svm.core.hub.DynamicHub;
@@ -58,10 +57,6 @@ import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.imagelayer.LayeredImageOptions;
 import com.oracle.svm.core.meta.MethodOffset;
 import com.oracle.svm.core.meta.MethodRef;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.FeatureImpl.BeforeCompilationAccessImpl;
 import com.oracle.svm.hosted.code.FactoryMethod;
@@ -72,6 +67,11 @@ import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.meta.VTableBuilder;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.OriginalClassProvider;
 import com.oracle.svm.util.OriginalMethodProvider;
@@ -135,9 +135,9 @@ public class LayeredDispatchTableFeature implements InternalFeature {
     final BitSet addressesToPatchInHeapRelocs = new BitSet();
 
     /**
-     * Cache of builderModules. Set in {@link #beforeCompilation}.
+     * Cache of coreModules. Set in {@link #beforeCompilation}.
      */
-    private Set<ResolvedJavaModule> builderModules;
+    private Set<ResolvedJavaModule> coreModules;
 
     static final int INVALID_HOSTED_METHOD_INDEX = -1;
 
@@ -150,7 +150,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
 
     @Override
     public void beforeAnalysis(Feature.BeforeAnalysisAccess access) {
-        wordSize = ConfigurationValues.getWordSize();
+        wordSize = SubstrateTarget.getWordSize();
         if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
             var config = (FeatureImpl.BeforeAnalysisAccessImpl) access;
             getPriorVirtualCallTargets().forEach(aMethod -> {
@@ -165,7 +165,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
     public void beforeCompilation(Feature.BeforeCompilationAccess a) {
         BeforeCompilationAccessImpl access = (BeforeCompilationAccessImpl) a;
         hUniverse = access.getUniverse();
-        installBuilderModules(access.getImageClassLoader().getBuilderModules());
+        installBuilderModules(access.getImageClassLoader().getCoreModules());
     }
 
     private PriorDispatchMethod createPriorDispatchMethodInfo(int index) {
@@ -249,19 +249,19 @@ public class LayeredDispatchTableFeature implements InternalFeature {
     }
 
     void installBuilderModules(Set<ResolvedJavaModule> newCoreTypes) {
-        assert builderModules == null : builderModules;
-        builderModules = newCoreTypes;
+        assert coreModules == null : coreModules;
+        coreModules = newCoreTypes;
     }
 
     /**
      * Registers a virtual call target which will be added as a root in subsequent layers. Currently
-     * we filter our all calls either originating from or targeting a {@link #builderModules}.
+     * we filter our all calls either originating from or targeting a {@link #coreModules}.
      */
     public void recordVirtualCallTarget(HostedMethod caller, HostedMethod callee) {
         GuestAccess guestAccess = GuestAccess.get();
         ResolvedJavaModule callerModule = guestAccess.getModule(OriginalClassProvider.getOriginalType(caller.getDeclaringClass()));
         ResolvedJavaModule calleeModule = guestAccess.getModule(OriginalClassProvider.getOriginalType(callee.getDeclaringClass()));
-        if (!(builderModules.contains(callerModule) && !isFactoryMethod(caller)) && !builderModules.contains(calleeModule)) {
+        if (!(coreModules.contains(callerModule) && !isFactoryMethod(caller)) && !coreModules.contains(calleeModule)) {
             virtualCallTargets.add(callee);
         }
     }

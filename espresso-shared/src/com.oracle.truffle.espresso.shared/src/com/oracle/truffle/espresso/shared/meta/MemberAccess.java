@@ -24,12 +24,10 @@
  */
 package com.oracle.truffle.espresso.shared.meta;
 
-import java.util.function.Function;
-
 /**
  * Represents a {@link java.lang.reflect.Member}, and provides access to various runtime
  * capabilities such as {@link #accessChecks(TypeAccess, TypeAccess) access control} and
- * {@link #loadingConstraints(TypeAccess, Function) enforcing loading constraints}.
+ * {@link #loadingConstraints(TypeAccess) enforcing loading constraints}.
  *
  * @param <C> The class providing access to the VM-side java {@link Class}.
  * @param <M> The class providing access to the VM-side java {@link java.lang.reflect.Method}.
@@ -55,7 +53,6 @@ public interface MemberAccess<C extends TypeAccess<C, M, F>, M extends MethodAcc
      * Performs loading constraints checks for this member.
      *
      * @param accessingClass The class from which resolution is being performed.
-     * @param errorHandler The function that should be used to throw potential errors.
      */
-    void loadingConstraints(C accessingClass, Function<String, RuntimeException> errorHandler);
+    void loadingConstraints(C accessingClass);
 }

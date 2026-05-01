@@ -23,7 +23,6 @@
 package com.oracle.truffle.espresso.impl;
 
 import java.util.Set;
-import java.util.function.Function;
 
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -252,8 +251,8 @@ public class Field extends Member<Type> implements FieldRef, TruffleObject, Fiel
     }
 
     @Override
-    public final void checkLoadingConstraints(StaticObject loader1, StaticObject loader2, Function<String, RuntimeException> errorHandler) {
-        getDeclaringKlass().getContext().getRegistries().checkLoadingConstraint(getType(), loader1, loader2, errorHandler);
+    public final void checkLoadingConstraints(StaticObject loader1, StaticObject loader2) {
+        getDeclaringKlass().getContext().getRegistries().checkLoadingConstraint(getType(), loader1, loader2);
     }
 
     // region FieldAccess impl

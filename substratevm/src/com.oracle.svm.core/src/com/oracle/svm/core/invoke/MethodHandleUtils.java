@@ -27,10 +27,18 @@ package com.oracle.svm.core.invoke;
 import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.Executable;
 
-import com.oracle.svm.core.AlwaysInline;
+import org.graalvm.nativeimage.Platform.HOSTED_ONLY;
+import org.graalvm.nativeimage.Platforms;
+
+import com.oracle.svm.core.ForeignSupport;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
+import com.oracle.svm.core.methodhandles.MethodHandleInterpreterUtils;
+import com.oracle.svm.shared.AlwaysInline;
 
+import jdk.vm.ci.meta.JavaKind;
 import sun.invoke.util.Wrapper;
 
 public class MethodHandleUtils {
@@ -53,8 +61,20 @@ public class MethodHandleUtils {
     }
 
     @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
+    public static long longUnboxCrema(Object retVal, MethodHandle methodHandle) {
+        Target_java_lang_invoke_MemberName vmEntry = MethodHandleInterpreterUtils.extractVMEntry(methodHandle);
+        return longUnbox(retVal, vmEntry.getMethodType().returnType());
+    }
+
+    @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
     public static long longUnbox(Object retVal, Target_java_lang_invoke_MemberName memberName) {
         return longUnbox(retVal, memberName.getMethodType().returnType());
+    }
+
+    @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
+    public static long longUnboxForeign(Object retVal, Object nativeEntryPoint) {
+        MethodType methodType = ForeignSupport.singleton().getMethodTypeFromNativeEntryPoint(nativeEntryPoint);
+        return longUnbox(retVal, methodType.returnType());
     }
 
     @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
@@ -83,8 +103,20 @@ public class MethodHandleUtils {
     }
 
     @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
+    public static int intUnboxCrema(Object retVal, MethodHandle methodHandle) {
+        Target_java_lang_invoke_MemberName vmEntry = MethodHandleInterpreterUtils.extractVMEntry(methodHandle);
+        return intUnbox(retVal, vmEntry.getMethodType().returnType());
+    }
+
+    @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
     public static int intUnbox(Object retVal, Target_java_lang_invoke_MemberName memberName) {
         return intUnbox(retVal, memberName.getMethodType().returnType());
+    }
+
+    @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
+    public static int intUnboxForeign(Object retVal, Object nativeEntryPoint) {
+        MethodType methodType = ForeignSupport.singleton().getMethodTypeFromNativeEntryPoint(nativeEntryPoint);
+        return intUnbox(retVal, methodType.returnType());
     }
 
     @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
@@ -111,8 +143,20 @@ public class MethodHandleUtils {
     }
 
     @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
+    public static short shortUnboxCrema(Object retVal, MethodHandle methodHandle) {
+        Target_java_lang_invoke_MemberName vmEntry = MethodHandleInterpreterUtils.extractVMEntry(methodHandle);
+        return shortUnbox(retVal, vmEntry.getMethodType().returnType());
+    }
+
+    @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
     public static short shortUnbox(Object retVal, Target_java_lang_invoke_MemberName memberName) {
         return shortUnbox(retVal, memberName.getMethodType().returnType());
+    }
+
+    @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
+    public static short shortUnboxForeign(Object retVal, Object nativeEntryPoint) {
+        MethodType methodType = ForeignSupport.singleton().getMethodTypeFromNativeEntryPoint(nativeEntryPoint);
+        return shortUnbox(retVal, methodType.returnType());
     }
 
     @AlwaysInline("constant fold as much as possible in signature polymorphic wrappers")
@@ -138,5 +182,15 @@ public class MethodHandleUtils {
             return memberName.resolved;
         }
         return null;
+    }
+
+    @Platforms(HOSTED_ONLY.class)
+    public static Executable getUnboxMethod(JavaKind returnKind, boolean crema, Class<?>... parameterTypes) throws NoSuchMethodException {
+        return MethodHandleUtils.class.getMethod(returnKind + (crema ? "UnboxCrema" : "Unbox"), parameterTypes);
+    }
+
+    @Platforms(HOSTED_ONLY.class)
+    public static Executable getUnboxForeignMethod(JavaKind returnKind) throws NoSuchMethodException {
+        return MethodHandleUtils.class.getMethod(returnKind + "UnboxForeign", Object.class, Object.class);
     }
 }

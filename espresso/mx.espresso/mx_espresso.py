@@ -21,7 +21,6 @@
 # questions.
 #
 
-import io
 import os
 import shutil
 import signal
@@ -47,11 +46,12 @@ from import_order import verify_order, validate_format
 from mx_truffle import resolve_truffle_dist_names
 from mx_native import DefaultNativeProject
 
+from mx_sdk_shaded import ShadedLibraryProject  # pylint: disable=unused-import
+from mx_sdk_vm_ng import NativeImageLibraryProject, ThinLauncherProject, DynamicPOMDistribution, ExtractedEngineResources, StandaloneLicenses  # pylint: disable=unused-import
 _suite = mx.suite('espresso')
 
 # re-export custom mx project classes, so they can be used from suite.py
-from mx_sdk_shaded import ShadedLibraryProject  # pylint: disable=unused-import
-from mx_sdk_vm_ng import NativeImageLibraryProject, ThinLauncherProject, JavaHomeDependency, DynamicPOMDistribution, ExtractedEngineResources, DeliverableStandaloneArchive, StandaloneLicenses  # pylint: disable=unused-import
+from mx_sdk_vm_ng import JavaHomeDependency, DeliverableStandaloneArchive  # pylint: disable=unused-import
 
 # JDK compiled with the Sulong toolchain.
 espresso_llvm_java_home = mx.get_env('ESPRESSO_LLVM_JAVA_HOME') or mx.get_env('LLVM_JAVA_HOME')
@@ -198,7 +198,7 @@ def _run_verify_imports(s):
     prefix_order = []
     if prefs:
         for pref in prefs:
-            with open(pref) as f:
+            with open(pref, encoding='utf-8') as f:
                 for line in f.readlines():
                     if line.startswith('org.eclipse.jdt.ui.importorder'):
                         key_value_sep_index = line.find('=')
@@ -254,7 +254,7 @@ def _espresso_gate_runner(args, tasks):
     mokapot_header_gate_name = 'Verify consistency of mokapot headers'
     with Task(mokapot_header_gate_name, tasks, tags=[EspressoTags.verify]) as t:
         if t:
-            run_instructions = "$ mx --dynamicimports=/substratevm --native-images=lib:javavm gate --all-suites --task '{}'".format(mokapot_header_gate_name)
+            run_instructions = f"$ mx --dynamicimports=/substratevm --native-images=lib:javavm gate --all-suites --task '{mokapot_header_gate_name}'"
             errors = False
             mokapot_dir = join(mx.project('com.oracle.truffle.espresso.mokapot').dir, 'include')
             libjavavm_dir = mx.project("javavm").get_output_root()
@@ -262,21 +262,21 @@ def _espresso_gate_runner(args, tasks):
             for header in ['libjavavm_dynamic.h', 'graal_isolate_dynamic.h']:
                 committed_header = join(mokapot_dir, header)
                 if not os.path.exists(committed_header):
-                    mx.abort("Cannot locate '{}'. Was the file moved or renamed?".format(committed_header))
+                    mx.abort(f"Cannot locate '{committed_header}'. Was the file moved or renamed?")
 
                 generated_header = join(libjavavm_dir, header)
                 if not os.path.exists(generated_header):
-                    mx.abort("Cannot locate '{}'. Did you forget to build? Example:\n'mx --dynamicimports=/substratevm --native-images=lib:javavm build'".format(generated_header))
+                    mx.abort(f"Cannot locate '{generated_header}'. Did you forget to build? Example:\n'mx --dynamicimports=/substratevm --native-images=lib:javavm build'")
 
                 committed_header_copyright = []
-                with open(committed_header, 'r') as committed_header_file:
+                with open(committed_header, encoding='utf-8') as committed_header_file:
                     for line in committed_header_file.readlines():
                         if line == '/*\n' or line.startswith(' *') or line == '*/\n':
                             committed_header_copyright.append(line)
                         else:
                             break
 
-                with open(generated_header, 'r') as generated_header_file:
+                with open(generated_header, encoding='utf-8') as generated_header_file:
                     generated_header_lines = []
                     for line in generated_header_file.readlines():
                         # Ignore definitions that are not needed for Espresso
@@ -345,7 +345,7 @@ class SimpleGeneratedFileBuildTask(mx.BuildTask):
         if not exists(out_file):
             return True, out_file + " doesn't exist"
         expected = self.subject.contents()
-        with open(out_file, 'r', encoding='utf-8') as f:
+        with open(out_file, encoding='utf-8') as f:
             if f.read() != expected:
                 return True, "Outdated content"
         return False, None
@@ -356,7 +356,7 @@ class SimpleGeneratedFileBuildTask(mx.BuildTask):
 
     def build(self):
         mx_util.ensure_dir_exists(self.subject.output_dir())
-        with mx_util.SafeFileCreation(self.subject.output_file()) as sfc, io.open(sfc.tmpFd, mode='w', closefd=False, encoding='utf-8') as outfile:
+        with mx_util.SafeFileCreation(self.subject.output_file()) as sfc, open(sfc.tmpFd, mode='w', closefd=False, encoding='utf-8') as outfile:
             outfile.write(self.subject.contents())
 
 
@@ -409,7 +409,6 @@ espresso_library_config = mx_sdk_vm.LanguageLibraryConfig(
     language='java',
     jar_distributions=['espresso:LIB_JAVAVM'],
     build_args=[
-        '-Dpolyglot.java.GuestFieldOffsetStrategy=graal',
         '-R:+EnableSignalHandling',
         '-R:+InstallSegfaultHandler',
         '--enable-monitoring=threaddump',
@@ -502,7 +501,7 @@ def jvm_standalone_with_llvm():
             if espresso_llvm_java_home:
                 _jvm_standalone_with_llvm = True
             else:
-                raise mx.abort(f"JVM_STANDALONE_WITH_LLVM was requested ('{from_env}) but ESPRESSO_LLVM_JAVA_HOME was not specified")
+                mx.abort(f"JVM_STANDALONE_WITH_LLVM was requested ('{from_env}) but ESPRESSO_LLVM_JAVA_HOME was not specified")
         else:
             _jvm_standalone_with_llvm = False
     return _jvm_standalone_with_llvm
@@ -618,7 +617,7 @@ def register_espresso_runtime_resources(register_project, register_distribution,
         extra_llvm_java_homes = []
     if extra_llvm_java_homes:
         if len(extra_llvm_java_homes) != len(extra_java_homes):
-            raise mx.abort("EXTRA_ESPRESSO_LLVM_JAVA_HOMES must either be empty or contain as many elements as EXTRA_ESPRESSO_JAVA_HOMES")
+            mx.abort("EXTRA_ESPRESSO_LLVM_JAVA_HOMES must either be empty or contain as many elements as EXTRA_ESPRESSO_JAVA_HOMES")
     else:
         extra_llvm_java_homes = [None] * len(extra_java_homes)
 
@@ -626,7 +625,7 @@ def register_espresso_runtime_resources(register_project, register_distribution,
     for extra_java_home, extra_llvm_java_home in zip(extra_java_homes, extra_llvm_java_homes):
         extra_java_home_dep = JavaHomeDependency(suite, "ESPRESSO_JAVA_HOME_<version>", extra_java_home)
         if extra_java_home_dep.major_version in versions:
-            raise mx.abort("Each entry in EXTRA_ESPRESSO_JAVA_HOMES should have a different java version, and they should all be different from ESPRESSO_JAVA_HOME's version")
+            mx.abort("Each entry in EXTRA_ESPRESSO_JAVA_HOMES should have a different java version, and they should all be different from ESPRESSO_JAVA_HOME's version")
         versions.add(extra_java_home_dep.major_version)
         if extra_llvm_java_home:
             extra_llvm_java_home_dep = JavaHomeDependency(suite, "ESPRESSO_LLVM_JAVA_HOME_<version>", extra_llvm_java_home)
@@ -643,12 +642,12 @@ class CustomLibJVMLinking(DefaultNativeProject):
     def __init__(self, suite, name, deps, workingSets, **kwargs):
         subDir = kwargs.pop('subDir')
         d = join(suite.dir, subDir, kwargs.pop('dir'))
-        super(CustomLibJVMLinking, self).__init__(suite, name, subDir, [], deps, workingSets, d, 'shared_lib', **kwargs)
+        super().__init__(suite, name, subDir, [], deps, workingSets, d, 'shared_lib', **kwargs)
 
     @staticmethod
     def _extract_loaded_by_espresso():
         source_path = join(_suite.dir, 'src', 'com.oracle.truffle.espresso', 'src', 'com', 'oracle', 'truffle', 'espresso', 'ffi', 'nfi', 'NFIStaticLibNativeAccess.java')
-        with open(source_path, "r", encoding="utf-8") as f:
+        with open(source_path, encoding="utf-8") as f:
             # look for:
             #    private static final Set<String> LOADED_BY_ESPRESSO = Set.of(...);
             m = re.search(r'\bLOADED_BY_ESPRESSO\s*=\s*Set\.of\s*\(([a-z",\s]*)\)', f.read())
@@ -708,7 +707,7 @@ class CustomLibJVMLinking(DefaultNativeProject):
 
             flags.append(f'-Wl,-force_load,{os.path.join(static_lib_dir, jdk_static_lib)}')
 
-        return flags + super(CustomLibJVMLinking, self).ldflags
+        return flags + super().ldflags
 
 
 def register_espresso_runtime_resource(java_home_dep, llvm_java_home_dep, register_project, register_distribution, suite, is_main):
@@ -725,19 +724,19 @@ def register_espresso_runtime_resource(java_home_dep, llvm_java_home_dep, regist
                 if objdump:
                     objdump_out = subprocess.check_output(['objdump', '-h', libjava]).decode('utf-8')
                     if 'llvmbc' not in objdump_out:
-                        raise mx.abort(f"Cannot find LLVM bitcode in provided Espresso LLVM JAVA_HOME ({libjava})")
+                        mx.abort(f"Cannot find LLVM bitcode in provided Espresso LLVM JAVA_HOME ({libjava})")
                 elif mx.is_continuous_integration():
-                    raise mx.abort("objdump not found on the PATH. It is required to verify the Espresso LLVM JAVA_HOME")
+                    mx.abort("objdump not found on the PATH. It is required to verify the Espresso LLVM JAVA_HOME")
             elif mx.is_darwin():
                 otool = shutil.which('otool')
                 if otool:
                     otool_out = subprocess.check_output(['otool', '-l', libjava]).decode('utf-8')
                     if '__LLVM' not in otool_out:
-                        raise mx.abort(f"Cannot find LLVM bitcode in provided Espresso LLVM JAVA_HOME ({libjava})")
+                        mx.abort(f"Cannot find LLVM bitcode in provided Espresso LLVM JAVA_HOME ({libjava})")
                 elif mx.is_continuous_integration():
-                    raise mx.abort("otool not found on the PATH. It is required to verify the Espresso LLVM JAVA_HOME")
+                    mx.abort("otool not found on the PATH. It is required to verify the Espresso LLVM JAVA_HOME")
             if java_home_dep.is_ee_implementor != llvm_java_home_dep.is_ee_implementor:
-                raise mx.abort("The implementors for ESPRESSO's JAVA_HOME and LLVM JAVA_HOME don't match")
+                mx.abort("The implementors for ESPRESSO's JAVA_HOME and LLVM JAVA_HOME don't match")
         llvm_runtime_dir = {
             "source_type": "dependency",
             "dependency": llvm_java_home_dep.qualifiedName(),
@@ -881,7 +880,7 @@ class EspressoRuntimeResourceBuildTask(mx.JavaBuildTask):
         if not exists(witness_file):
             return True, witness_file + " doesn't exist"
         expected = self.witness_contents()
-        with open(witness_file, 'r', encoding='utf-8') as f:
+        with open(witness_file, encoding='utf-8') as f:
             if f.read() != expected:
                 return True, "Outdated content"
         return super().needsBuild(newestInput)
@@ -898,13 +897,13 @@ class EspressoRuntimeResourceBuildTask(mx.JavaBuildTask):
             # already collected
             return self
         # collect project files first, then extend with generated resource
-        super(EspressoRuntimeResourceBuildTask, self)._collect_files()
+        super()._collect_files()
         javafiles = self._javafiles
         prj = self.subject
         gen_src_dir = prj.source_gen_dir()
         pkg_name = prj.name
         target_file = EspressoRuntimeResourceBuildTask._target_file(gen_src_dir, pkg_name)
-        if not target_file in javafiles:
+        if target_file not in javafiles:
             bin_dir = prj.output_dir()
             target_class = join(bin_dir, relpath(target_file, gen_src_dir)[:-len('.java')] + '.class')
             javafiles[target_file] = target_class
@@ -916,7 +915,7 @@ class EspressoRuntimeResourceBuildTask(mx.JavaBuildTask):
     def build(self):
         prj = self.subject
         pkg_name = prj.name
-        with open(EspressoRuntimeResourceBuildTask._template_file(), 'r', encoding='utf-8') as f:
+        with open(EspressoRuntimeResourceBuildTask._template_file(), encoding='utf-8') as f:
             file_content = f.read()
         subst_eng = mx_subst.SubstitutionEngine()
         subst_eng.register_no_arg('package', pkg_name)
@@ -926,10 +925,10 @@ class EspressoRuntimeResourceBuildTask(mx.JavaBuildTask):
         mx_util.ensure_dir_exists(dirname(target_file))
         with mx_util.SafeFileCreation(target_file) as sfc, open(sfc.tmpPath, 'w', encoding='utf-8') as f:
             f.write(file_content)
-        super(EspressoRuntimeResourceBuildTask, self).build()
+        super().build()
         witness_file = self.witness_file()
         mx_util.ensure_dirname_exists(witness_file)
-        with mx_util.SafeFileCreation(witness_file) as sfc, io.open(sfc.tmpFd, mode='w', closefd=False, encoding='utf-8') as outfile:
+        with mx_util.SafeFileCreation(witness_file) as sfc, open(sfc.tmpFd, mode='w', closefd=False, encoding='utf-8') as outfile:
             outfile.write(self.witness_contents())
 
 
@@ -1029,7 +1028,7 @@ def _gen_option_probe_switch(options, out, ident):
             assert isinstance(next_checks, bool)
             if next_checks:
                 write_line("    case '\\0':")
-                write_line(f"        return OPTION_BOOLEAN;")
+                write_line("        return OPTION_BOOLEAN;")
             else:
                 write_line("    case '=':")
                 write_line("        return OPTION_STRING;")
@@ -1060,7 +1059,7 @@ def gen_gc_option_check(args):
         java_type, name = line.rstrip('\n').split(' ', 1)
         options.append((name, java_type == 'java.lang.Boolean'))
     if not options:
-        raise mx.abort("No option found in input file")
+        mx.abort("No option found in input file")
     options.sort(key=lambda x: x[0])
 
     sys.stdout.write("// Probing for the following options:\n")

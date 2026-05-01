@@ -40,19 +40,24 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordBase;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.pltgot.GOTAccess;
 import com.oracle.svm.core.pltgot.GOTHeapSupport;
 import com.oracle.svm.guest.staging.jdk.InternalVMMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaType;
 import com.oracle.svm.interpreter.metadata.InterpreterUniverse;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.debug.GraalError;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 @InternalVMMethod
+@SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 final class InterpreterDirectivesSupportImpl implements InterpreterDirectivesSupport {
     final Map<InterpreterResolvedJavaMethod, Long> rememberCompiledEntry = new HashMap<>();
 
@@ -72,10 +77,10 @@ final class InterpreterDirectivesSupportImpl implements InterpreterDirectivesSup
 
         /* arguments to Log methods might have side-effects */
         if (InterpreterOptions.InterpreterTraceSupport.getValue()) {
-            traceInterpreter("[forceInterpreterExecution] ").string(interpreterMethod.toString()).newline();
+            traceInterpreter().string("[forceInterpreterExecution] ").string(interpreterMethod.toString()).newline();
         }
 
-        int estOffset = ConfigurationValues.getWordSize() * interpreterMethod.getEnterStubOffset();
+        int estOffset = SubstrateTarget.getWordSize() * interpreterMethod.getEnterStubOffset();
         Pointer estBase = InterpreterStubTable.getBaseForEnterStubTable();
         UnsignedWord estEntry = estBase.add(estOffset).readWord(0);
 
@@ -129,7 +134,7 @@ final class InterpreterDirectivesSupportImpl implements InterpreterDirectivesSup
 
         /* arguments to Log methods might have side-effects */
         if (InterpreterOptions.InterpreterTraceSupport.getValue()) {
-            traceInterpreter("[ensureInterpreterExecution] ").string(interpreterMethod.toString()).newline();
+            traceInterpreter().string("[ensureInterpreterExecution] ").string(interpreterMethod.toString()).newline();
         }
 
         for (InterpreterResolvedJavaMethod inliner : interpreterMethod.getInlinedBy()) {

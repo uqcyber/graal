@@ -40,6 +40,11 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 @Platforms(Platform.HOSTED_ONLY.class)
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class EmbeddedResourcesInfo {
+    private final boolean collectEmbeddedResourcesInfo;
+
+    EmbeddedResourcesInfo(boolean collectEmbeddedResourcesInfo) {
+        this.collectEmbeddedResourcesInfo = collectEmbeddedResourcesInfo;
+    }
 
     record SourceAndOrigin(String source, Object origin) {
     }
@@ -55,7 +60,7 @@ public class EmbeddedResourcesInfo {
     }
 
     public void declareResourceAsRegistered(Module module, String resource, String source, Object origin) {
-        if (!ImageSingletons.lookup(ResourcesFeature.class).collectEmbeddedResourcesInfo()) {
+        if (!collectEmbeddedResourcesInfo) {
             return;
         }
 

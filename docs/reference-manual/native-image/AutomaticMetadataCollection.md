@@ -71,6 +71,32 @@ Conditional metadata is mainly aimed towards library maintainers with the goal o
 
 To collect conditional metadata with the agent, see [Conditional Metadata Collection](ExperimentalAgentOptions.md#generating-conditional-configuration-using-the-agent).
 
+### Conditional Metadata Collection From a Native Image
+
+To generate conditional metadata directly from a native image, build the image with metadata tracing support:
+```shell
+native-image -H:+UnlockExperimentalVMOptions -H:+MetadataTracingSupport -H:-UnlockExperimentalVMOptions ...
+```
+
+At run time, pass `-XX:TraceMetadata=path=<output-dir>` and `-XX:TraceMetadataConditionPackages=<package-1>,<package-2>`.
+This produces the most accurate conditional metadata because the traced accesses follow Native Image semantics.
+If the image is built with `-H:Preserve=all`, it should produce all metadata correctly.
+The package list uses exact package names.
+When a traced access occurs, Native Image uses the first stack frame whose class is in one of those packages as the `typeReached` condition.
+Trace events without a matching stack frame are ignored.
+
+For example:
+```shell
+./application -XX:TraceMetadata=path=metadata-output -XX:TraceMetadataConditionPackages=com.example.application
+```
+
+Run the image with inputs that cover each code path that needs conditional metadata, writing each run to a separate output directory.
+Then merge the outputs:
+```shell
+native-image-utils generate --input-dir=metadata-output-1 --input-dir=metadata-output-2 --output-dir=merged-metadata
+```
+Alternatively, the image generation and aggregation steps can be repeated in a loop until the generated metadata converges.
+
 ## Agent Advanced Usage
 
 ### Caller-based Filters

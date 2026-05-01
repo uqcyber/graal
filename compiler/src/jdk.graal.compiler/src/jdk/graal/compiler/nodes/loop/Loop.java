@@ -498,7 +498,7 @@ public class Loop {
                 assert !exits.contains(b.getBeginNode());
                 exits.add(b.getBeginNode());
             } else if (blocks.add(b.getBeginNode())) {
-                HIRBlock d = b.getDominatedSibling();
+                HIRBlock d = b.getFirstDominated();
                 while (d != null) {
                     /*
                      * if the post dominator is reachable via a branch block it means it was a merge

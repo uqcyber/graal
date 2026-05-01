@@ -26,26 +26,29 @@ package com.oracle.svm.hosted;
 
 import java.util.EnumSet;
 
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.SubstrateTargetDescription;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.aarch64.AArch64CPUFeatureAccess;
 import com.oracle.svm.core.aarch64.AArch64LibCHelper;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 import jdk.vm.ci.aarch64.AArch64;
 
 @AutomaticallyRegisteredFeature
 @Platforms(Platform.AARCH64.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 class AArch64CPUFeatureAccessFeature extends CPUFeatureAccessFeatureBase implements InternalFeature {
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess arg) {
-        var targetDescription = ImageSingletons.lookup(SubstrateTargetDescription.class);
-        var arch = (AArch64) targetDescription.arch;
+        var arch = (AArch64) SubstrateTarget.getArchitecture();
         var buildtimeCPUFeatures = arch.getFeatures();
         initializeCPUFeatureAccessData(AArch64.CPUFeature.values(), buildtimeCPUFeatures, AArch64LibCHelper.CPUFeatures.class, (FeatureImpl.BeforeAnalysisAccessImpl) arg);
     }

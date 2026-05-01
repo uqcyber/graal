@@ -34,11 +34,12 @@ import org.graalvm.nativeimage.impl.InternalPlatform;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.code.ImageCodeInfo;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.KnownOffsets;
 import com.oracle.svm.core.stack.JavaFrameAnchor;
 import com.oracle.svm.core.thread.VMThreads;
+import com.oracle.svm.core.threadlocal.VMThreadLocalOffsetProvider;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
@@ -76,7 +77,7 @@ public final class KnownOffsetsFeature implements InternalFeature {
         int javaFrameAnchorLastSPOffset = findStructOffset(access, JavaFrameAnchor.class, "getLastJavaSP");
         int javaFrameAnchorLastIPOffset = findStructOffset(access, JavaFrameAnchor.class, "getLastJavaIP");
 
-        int vmThreadStatusOffset = ImageSingletons.lookup(VMThreadFeature.class).offsetOf(VMThreads.StatusSupport.statusTL);
+        int vmThreadStatusOffset = ImageSingletons.lookup(VMThreadLocalOffsetProvider.class).offsetOf(VMThreads.StatusSupport.statusTL);
 
         int imageCodeInfoCodeStartOffset = findFieldOffset(access, ImageCodeInfo.class, "codeStart");
 

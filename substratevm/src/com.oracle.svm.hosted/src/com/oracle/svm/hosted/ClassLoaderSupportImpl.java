@@ -71,7 +71,7 @@ public class ClassLoaderSupportImpl extends ClassLoaderSupport {
 
     private final NativeImageClassLoaderSupport classLoaderSupport;
 
-    private final NativeImageClassLoader imageClassLoader;
+    private final ClassLoader imageClassLoader;
 
     private final Map<String, EconomicSet<Module>> packageToModules;
 
@@ -228,11 +228,12 @@ public class ClassLoaderSupportImpl extends ClassLoaderSupport {
     }
 
     private static List<ConditionWithOrigin> shouldIncludeEntry(Module module, ResourceCollector collector, String fileName, URI uri, boolean includeCurrent) {
+        List<ConditionWithOrigin> conditions = new ArrayList<>(collector.isIncluded(module, fileName, uri));
         if (includeCurrent && !(fileName.endsWith(".class") || fileName.endsWith(".jar"))) {
-            return Collections.singletonList(new ConditionWithOrigin(AccessCondition.unconditional(), "Include all"));
+            conditions.add(new ConditionWithOrigin(AccessCondition.unconditional(), "Include all"));
         }
 
-        return collector.isIncluded(module, fileName, uri);
+        return conditions;
     }
 
     @Override

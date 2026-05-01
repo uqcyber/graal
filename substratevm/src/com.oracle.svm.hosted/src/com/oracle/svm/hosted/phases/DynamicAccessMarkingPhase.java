@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.phases;
 
-import com.oracle.svm.hosted.DynamicAccessDetectionSupport;
+import com.oracle.svm.hosted.DynamicAccessMethodLookupSupport;
 import com.oracle.svm.hosted.InlinedCalleeTrackingNode;
 
 import jdk.graal.compiler.graph.NodeSourcePosition;
@@ -45,15 +45,15 @@ import jdk.graal.compiler.phases.BasePhase;
  * option and runs before inlining.
  */
 public class DynamicAccessMarkingPhase extends BasePhase<CoreProviders> {
-    private final DynamicAccessDetectionSupport dynamicAccessDetectionSupport;
+    private final DynamicAccessMethodLookupSupport dynamicAccessMethodLookupSupport;
 
     public DynamicAccessMarkingPhase() {
-        dynamicAccessDetectionSupport = DynamicAccessDetectionSupport.instance();
+        dynamicAccessMethodLookupSupport = DynamicAccessMethodLookupSupport.instance();
     }
 
     @Override
     protected void run(StructuredGraph graph, CoreProviders context) {
-        assert dynamicAccessDetectionSupport.lookupDynamicAccessMethod(graph.method()) != null;
+        assert dynamicAccessMethodLookupSupport.lookupDynamicAccessMethod(graph.method()) != null;
 
         InlinedCalleeTrackingNode node = graph.add(new InlinedCalleeTrackingNode());
         StartNode start = graph.start();

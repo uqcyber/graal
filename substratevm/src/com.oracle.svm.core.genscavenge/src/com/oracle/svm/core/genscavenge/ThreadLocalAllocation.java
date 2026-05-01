@@ -24,10 +24,10 @@
  */
 package com.oracle.svm.core.genscavenge;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_END_IDENTITY;
 import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_START_IDENTITY;
 import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_TOP_IDENTITY;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
@@ -45,10 +45,9 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateGCOptions;
-import com.oracle.svm.core.SubstrateUtil;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.c.BooleanPointer;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.genscavenge.UnalignedHeapChunk.UnalignedHeader;
 import com.oracle.svm.core.genscavenge.graal.GenScavengeAllocationSupport;
 import com.oracle.svm.core.genscavenge.graal.nodes.FormatArrayNode;
@@ -71,8 +70,10 @@ import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.FastThreadLocalBytes;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
-import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.replacements.AllocationSnippets.FillContent;
@@ -428,7 +429,7 @@ public final class ThreadLocalAllocation {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static void guaranteeZeroed(Pointer memory, UnsignedWord size) {
-        int wordSize = ConfigurationValues.getWordSize();
+        int wordSize = SubstrateTarget.getWordSize();
         VMError.guarantee(UnsignedUtils.isAMultiple(size, Word.unsigned(wordSize)));
 
         Pointer pos = memory;
@@ -455,7 +456,7 @@ public final class ThreadLocalAllocation {
         assert allocationStart.belowThan(allocationEnd) || (allocationStart.equal(0) && allocationEnd.equal(0));
         UnsignedWord tlabSize = allocationEnd.subtract(allocationStart);
 
-        assert UnsignedUtils.isAMultiple(tlabSize, Word.unsigned(ConfigurationValues.getObjectLayout().getAlignment()));
+        assert UnsignedUtils.isAMultiple(tlabSize, Word.unsigned(ObjectLayout.singleton().getAlignment()));
         return tlabSize;
     }
 }

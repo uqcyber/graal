@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -489,16 +489,24 @@ public abstract class BytecodeParser {
                     offset += 8;
                     break;
                 }
-                case Bytecode.CALL_INDIRECT_U8:
-                case Bytecode.CALL_REF_U8: {
+                case Bytecode.CALL_INDIRECT_U8: {
                     callNodes.add(new CallNode(originalOffset));
                     offset += 3;
                     break;
                 }
-                case Bytecode.CALL_INDIRECT_I32:
-                case Bytecode.CALL_REF_I32: {
+                case Bytecode.CALL_INDIRECT_I32: {
                     callNodes.add(new CallNode(originalOffset));
                     offset += 12;
+                    break;
+                }
+                case Bytecode.CALL_REF_U8: {
+                    callNodes.add(new CallNode(originalOffset));
+                    offset += 2;
+                    break;
+                }
+                case Bytecode.CALL_REF_I32: {
+                    callNodes.add(new CallNode(originalOffset));
+                    offset += 8;
                     break;
                 }
                 case Bytecode.SELECT:

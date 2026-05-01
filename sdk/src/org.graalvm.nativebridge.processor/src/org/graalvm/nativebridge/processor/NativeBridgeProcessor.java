@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package org.graalvm.nativebridge.processor;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.AbstractMap;
@@ -63,7 +64,6 @@ import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.Modifier;
-import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
@@ -71,7 +71,7 @@ import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 
-import org.graalvm.nativebridge.processor.AbstractBridgeParser.AbstractTypeCache;
+import org.graalvm.nativebridge.processor.AbstractBridgeParser.BaseTypeCache;
 import org.graalvm.nativebridge.processor.AbstractBridgeParser.DefinitionData;
 import org.graalvm.nativebridge.processor.AbstractFactoryParser.FactoryDefinitionData;
 import org.graalvm.nativebridge.processor.AbstractServiceParser.ServiceDefinitionData;
@@ -83,7 +83,8 @@ import org.graalvm.nativebridge.processor.AbstractServiceParser.ServiceDefinitio
                 NativeToNativeServiceParser.GENERATE_NATIVE_TO_NATIVE_ANNOTATION,
                 NativeToNativeFactoryParser.GENERATE_NATIVE_TO_NATIVE_ANNOTATION,
                 ProcessToProcessServiceParser.GENERATE_FOREIGN_PROCESS_ANNOTATION,
-                ProcessToProcessFactoryParser.GENERATE_FOREIGN_PROCESS_ANNOTATION
+                ProcessToProcessFactoryParser.GENERATE_FOREIGN_PROCESS_ANNOTATION,
+                JNIEntryPointParser.JNI_ENTRY_POINT_ANNOTATION
 })
 public final class NativeBridgeProcessor extends AbstractProcessor {
 
@@ -98,6 +99,7 @@ public final class NativeBridgeProcessor extends AbstractProcessor {
         result.put(NativeToNativeServiceParser.GENERATE_NATIVE_TO_NATIVE_ANNOTATION, NativeToNativeServiceParser::create);
         result.put(ProcessToProcessServiceParser.GENERATE_FOREIGN_PROCESS_ANNOTATION, ProcessToProcessServiceParser::create);
         result.put(NativeToHotSpotServiceParser.GENERATE_NATIVE_TO_HOTSPOT_ANNOTATION, NativeToHotSpotServiceParser::create);
+        result.put(JNIEntryPointParser.JNI_ENTRY_POINT_ANNOTATION, JNIEntryPointParser::create);
         return Collections.unmodifiableMap(result);
     }
 
@@ -111,7 +113,11 @@ public final class NativeBridgeProcessor extends AbstractProcessor {
     protected boolean doProcess(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
         Map<TypeElement, List<Entry<AbstractBridgeParser, DefinitionData>>> parsed = new HashMap<>();
         for (Entry<String, Function<NativeBridgeProcessor, AbstractBridgeParser>> e : PARSERS.entrySet()) {
-            Set<? extends Element> annotatedElements = roundEnv.getElementsAnnotatedWith(getTypeElement(e.getKey()));
+            TypeElement annotation = getOptionalTypeElement(e.getKey());
+            if (annotation == null) {
+                continue;
+            }
+            Set<? extends Element> annotatedElements = roundEnv.getElementsAnnotatedWith(annotation);
             if (!annotatedElements.isEmpty()) {
                 AbstractBridgeParser parser = e.getValue().apply(this);
                 parse(parser, annotatedElements, parsed);
@@ -149,36 +155,37 @@ public final class NativeBridgeProcessor extends AbstractProcessor {
         for (Entry<TypeElement, List<AbstractBridgeGenerator>> e : toGenerate.entrySet()) {
             TypeElement annotatedElement = e.getKey();
             List<AbstractBridgeGenerator> generators = e.getValue();
-            PackageElement owner = Utilities.getEnclosingPackageElement(annotatedElement);
             AbstractBridgeGenerator firstGenerator = generators.get(0);
-            AbstractTypeCache typeCache = firstGenerator.getTypeCache();
-            CodeBuilder builder = new CodeBuilder(owner, typeUtils(), typeCache);
-            CharSequence targetClassSimpleName = annotatedElement.getSimpleName() + "Gen";
-            builder.classStart(EnumSet.of(Modifier.FINAL), targetClassSimpleName, null, Collections.emptyList());
-            builder.indent();
-            for (AbstractBridgeGenerator generator : generators) {
-                generator.generateFields(builder, targetClassSimpleName);
-            }
-            for (AbstractBridgeGenerator generator : generators) {
-                generator.generateAPI(builder, targetClassSimpleName);
-            }
-            if (hasCustomDispatch(firstGenerator)) {
-                generateSharedCustomDispatchFactory(builder, typeCache, generators);
-            } else if (isService(firstGenerator)) {
-                generateSharedFactory(builder, typeCache, generators);
-            }
-            for (AbstractBridgeGenerator generator : generators) {
-                generator.generateImpl(builder, targetClassSimpleName);
-            }
-            builder.dedent();
-            builder.line("}");  // Enclosing class end
-            try {
-                writeSourceFile(annotatedElement, targetClassSimpleName, builder.build());
+            BaseTypeCache typeCache = firstGenerator.getTypeCache();
+            CompilationUnitFactory f = CompilationUnitFactory.select(generators);
+            try (CompilationUnit cu = f.createCompilationUnit(this, annotatedElement)) {
+                for (AbstractBridgeGenerator generator : generators) {
+                    generator.generateFields(cu.codeBuilder, cu.simpleName);
+                }
+                for (AbstractBridgeGenerator generator : generators) {
+                    generator.generateAPI(cu.codeBuilder, cu.simpleName);
+                }
+                if (hasCustomDispatch(firstGenerator)) {
+                    generateSharedCustomDispatchFactory(cu.codeBuilder, (NativeBridgeTypeCache) typeCache, generators);
+                } else if (isService(firstGenerator)) {
+                    generateSharedFactory(cu.codeBuilder, (NativeBridgeTypeCache) typeCache, generators);
+                }
+                for (AbstractBridgeGenerator generator : generators) {
+                    generator.generateImpl(cu.codeBuilder, cu.simpleName);
+                }
             } catch (IOException ioe) {
                 processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, ioe.getMessage(), annotatedElement);
             }
         }
         return true;
+    }
+
+    private TypeElement getOptionalTypeElement(String className) {
+        try {
+            return getTypeElement(className);
+        } catch (NoClassDefFoundError e) {
+            return null;
+        }
     }
 
     void emitError(Element element, AnnotationMirror mirror, String format, Object... params) {
@@ -204,7 +211,7 @@ public final class NativeBridgeProcessor extends AbstractProcessor {
                     // Parsing error
                     continue;
                 }
-                into.computeIfAbsent((TypeElement) element, (k) -> new ArrayList<>()).add(new AbstractMap.SimpleImmutableEntry<>(parser, data));
+                into.computeIfAbsent(data.annotatedElement, (k) -> new ArrayList<>()).add(new AbstractMap.SimpleImmutableEntry<>(parser, data));
             }
         } finally {
             currentCompilationUnit = null;
@@ -243,16 +250,6 @@ public final class NativeBridgeProcessor extends AbstractProcessor {
         }
     }
 
-    private void writeSourceFile(TypeElement annotatedElement, CharSequence targetClassSimpleName, String content) throws IOException {
-        String sourceFileFQN = String.format("%s.%s",
-                        Utilities.getEnclosingPackageElement(annotatedElement).getQualifiedName().toString(),
-                        targetClassSimpleName);
-        JavaFileObject sourceFile = env().getFiler().createSourceFile(sourceFileFQN, annotatedElement);
-        try (PrintWriter out = new PrintWriter(sourceFile.openWriter())) {
-            out.print(content);
-        }
-    }
-
     private static boolean hasCustomDispatch(AbstractBridgeGenerator generator) {
         DefinitionData definitionData = generator.getDefinition();
         if (definitionData instanceof ServiceDefinitionData serviceDefinitionData) {
@@ -266,7 +263,7 @@ public final class NativeBridgeProcessor extends AbstractProcessor {
         return definitionData instanceof ServiceDefinitionData;
     }
 
-    private void generateSharedCustomDispatchFactory(CodeBuilder builder, AbstractTypeCache typeCache, List<AbstractBridgeGenerator> generators) {
+    private void generateSharedCustomDispatchFactory(CodeBuilder builder, NativeBridgeTypeCache typeCache, List<AbstractBridgeGenerator> generators) {
         List<AbstractServiceGenerator> generatorsWithCommonFactory = new ArrayList<>();
         for (AbstractBridgeGenerator generator : generators) {
             AbstractServiceGenerator serviceGenerator = (AbstractServiceGenerator) generator;
@@ -298,7 +295,7 @@ public final class NativeBridgeProcessor extends AbstractProcessor {
         }
     }
 
-    private static void generateSharedFactory(CodeBuilder builder, AbstractTypeCache typeCache, List<AbstractBridgeGenerator> generators) {
+    private static void generateSharedFactory(CodeBuilder builder, NativeBridgeTypeCache typeCache, List<AbstractBridgeGenerator> generators) {
         List<AbstractServiceGenerator> generatorsWithCommonFactory = new ArrayList<>();
         for (AbstractBridgeGenerator generator : generators) {
             AbstractServiceGenerator serviceGenerator = (AbstractServiceGenerator) generator;
@@ -355,7 +352,7 @@ public final class NativeBridgeProcessor extends AbstractProcessor {
         builder.lineStart("}");
     }
 
-    private static void generateDefaultBranch(CodeBuilder builder, CharSequence typeParameter, AbstractTypeCache typeCache) {
+    private static void generateDefaultBranch(CodeBuilder builder, CharSequence typeParameter, BaseTypeCache typeCache) {
         builder.lineEnd(" else {");
         builder.indent();
         CharSequence message = new CodeBuilder(builder).invokeStatic(typeCache.string, "format",
@@ -369,5 +366,51 @@ public final class NativeBridgeProcessor extends AbstractProcessor {
     }
 
     record DSLError(Element element, String errorMessage) {
+    }
+
+    static final class CompilationUnit implements Closeable {
+
+        private final NativeBridgeProcessor processor;
+        private final TypeElement annotatedElement;
+        final CodeBuilder codeBuilder;
+        final CharSequence simpleName;
+
+        CompilationUnit(NativeBridgeProcessor processor, CodeBuilder builder, TypeElement annotatedElement, CharSequence simpleName) {
+            this.processor = processor;
+            this.codeBuilder = builder;
+            this.annotatedElement = annotatedElement;
+            this.simpleName = simpleName;
+        }
+
+        @Override
+        public void close() throws IOException {
+            codeBuilder.dedent();
+            codeBuilder.line("}");  // Enclosing class end
+            writeSourceFile(codeBuilder.build());
+        }
+
+        private void writeSourceFile(String content) throws IOException {
+            String sourceFileFQN = String.format("%s.%s",
+                            Utilities.getEnclosingPackageElement(annotatedElement).getQualifiedName(), simpleName);
+            JavaFileObject sourceFile = processor.env().getFiler().createSourceFile(sourceFileFQN, annotatedElement);
+            try (PrintWriter out = new PrintWriter(sourceFile.openWriter())) {
+                out.print(content);
+            }
+        }
+    }
+
+    interface CompilationUnitFactory {
+
+        CompilationUnit createCompilationUnit(NativeBridgeProcessor processor, TypeElement annotatedElement);
+
+        static CompilationUnitFactory select(List<AbstractBridgeGenerator> generators) {
+            CompilationUnitFactory factory = generators.get(0).getCompilationUnitFactory();
+            for (int i = 1; i < generators.size(); i++) {
+                if (generators.get(i).getCompilationUnitFactory().getClass() != factory.getClass()) {
+                    throw new AssertionError("Generators sharing the same annotated element must use the same compilation unit factory.");
+                }
+            }
+            return factory;
+        }
     }
 }

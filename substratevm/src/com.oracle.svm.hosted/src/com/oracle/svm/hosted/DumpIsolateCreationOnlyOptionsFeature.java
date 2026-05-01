@@ -34,7 +34,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 import com.oracle.svm.core.BuildArtifacts;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionKey;

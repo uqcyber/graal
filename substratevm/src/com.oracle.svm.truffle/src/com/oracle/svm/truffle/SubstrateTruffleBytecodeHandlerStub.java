@@ -44,8 +44,7 @@ import com.oracle.svm.core.SkipEpilogueSafepointCheck;
 import com.oracle.svm.core.SkipStackOverflowCheck;
 import com.oracle.svm.core.SubstrateControlFlowIntegrity;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateTargetDescription;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.graal.code.AssignedLocation;
 import com.oracle.svm.core.graal.code.CustomCallingConventionMethod;
@@ -69,10 +68,12 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.replacements.GraphKit;
 import jdk.graal.compiler.replacements.nodes.ReadRegisterNode;
-import jdk.graal.compiler.truffle.TruffleBytecodeHandlerCallsite;
-import jdk.graal.compiler.truffle.TruffleBytecodeHandlerCallsite.ArgumentInfo;
+import jdk.graal.compiler.truffle.BytecodeHandlerConfig;
+import jdk.graal.compiler.truffle.BytecodeHandlerConfig.ArgumentInfo;
 import jdk.graal.compiler.truffle.TruffleBytecodeHandlerCallsite.TruffleBytecodeHandlerTypes;
+import jdk.graal.compiler.truffle.TruffleBytecodeHandlerStubHelper;
 import jdk.graal.compiler.truffle.host.TruffleKnownHostTypes;
+import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterConfig;
 import jdk.vm.ci.meta.JavaKind;
@@ -96,22 +97,32 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod implements CustomCallingConventionMethod {
 
     private final SubstrateTruffleBytecodeHandlerStubHelper stubHolder;
-    private final TruffleBytecodeHandlerCallsite callsite;
     private final boolean threading;
     private final boolean needSafepoint;
+    /** True for the default fallback stub that returns to the interpreter dispatch loop. */
     private final boolean isDefault;
     private final ResolvedJavaMethod nextOpcodeMethod;
+    /** Declaring type that owns the interpreter. */
+    private final ResolvedJavaType interpreterHolder;
+    /** Handler configuration that defines the argument expansion. */
+    private final BytecodeHandlerConfig config;
+    /** Bytecode handler method the stub was created for; null for the default fallback stub. */
+    private final ResolvedJavaMethod targetMethod;
 
     public SubstrateTruffleBytecodeHandlerStub(SubstrateTruffleBytecodeHandlerStubHelper stubHolder, ResolvedJavaType declaringClass, String stubName,
-                    TruffleBytecodeHandlerCallsite callsite, boolean threading, ResolvedJavaMethod nextOpcodeMethod, boolean needSafepoint, boolean isDefault) {
-        super(stubName, true, declaringClass, ResolvedSignature.fromList(callsite.getArgumentTypes(),
-                        callsite.getReturnType()), declaringClass.getDeclaredConstructors(false)[0].getConstantPool());
+                    ResolvedJavaType interpreterHolder, BytecodeHandlerConfig config, boolean threading, ResolvedJavaMethod nextOpcodeMethod, boolean needSafepoint, boolean isDefault,
+                    ResolvedJavaMethod targetMethod) {
+        super(stubName, true, declaringClass, ResolvedSignature.fromList(config.getArgumentTypes(),
+                        config.getReturnType()), declaringClass.getDeclaredConstructors(false)[0].getConstantPool());
         this.stubHolder = stubHolder;
-        this.callsite = callsite;
         this.threading = threading;
         this.isDefault = isDefault;
         this.nextOpcodeMethod = nextOpcodeMethod;
         this.needSafepoint = needSafepoint;
+        this.interpreterHolder = interpreterHolder;
+        this.config = config;
+        this.targetMethod = targetMethod;
+        assert targetMethod != null || isDefault;
     }
 
     @Override
@@ -120,7 +131,7 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
         if (isDefault) {
             return createEmptyStub(kit);
         }
-        return callsite.createStub(kit, method, threading, nextOpcodeMethod, () -> stubHolder.getBytecodeHandlers(callsite.getEnclosingMethod()));
+        return TruffleBytecodeHandlerStubHelper.createStub(kit, method, 0, threading, nextOpcodeMethod, () -> stubHolder.getBytecodeHandlers(interpreterHolder, config), config, targetMethod);
     }
 
     /**
@@ -135,10 +146,10 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
         StructuredGraph graph = kit.getGraph();
         graph.getGraphState().forceDisableFrameStateVerification();
 
-        ParameterNode[] parameterNodes = callsite.collectParameterNodes(kit);
+        ParameterNode[] parameterNodes = TruffleBytecodeHandlerStubHelper.collectParameterNodes(config, kit);
         ValueNode returnResult = null;
 
-        for (ArgumentInfo argumentInfo : callsite.getArgumentInfos()) {
+        for (ArgumentInfo argumentInfo : config.getArgumentInfos()) {
             if (argumentInfo.copyFromReturn()) {
                 returnResult = parameterNodes[argumentInfo.index()];
                 break;
@@ -146,7 +157,7 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
         }
 
         if (returnResult == null) {
-            JavaKind returnKind = callsite.getReturnType().getJavaKind();
+            JavaKind returnKind = config.getReturnType().getJavaKind();
             if (returnKind != JavaKind.Void) {
                 returnResult = kit.append(new ReadRegisterNode(getReturnRegister(getRegisterConfig()), returnKind, false, true));
             }
@@ -158,10 +169,6 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
         kit.append(new ReturnNode(multiReturnNode));
         graph.getDebug().dump(DebugContext.VERBOSE_LEVEL, graph, "Initial graph for default bytecode handler stub");
         return graph;
-    }
-
-    public TruffleBytecodeHandlerCallsite getCallsite() {
-        return callsite;
     }
 
     /**
@@ -177,13 +184,13 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
     }
 
     private static RegisterConfig getRegisterConfig() {
-        SubstrateTargetDescription target = ConfigurationValues.getTarget();
+        SubstrateTarget target = SubstrateTarget.singleton();
         return SubstrateRegisterConfigFactory.singleton().newRegisterFactory(SubstrateRegisterConfig.ConfigKind.NORMAL, null, target, SubstrateOptions.PreserveFramePointer.getValue());
     }
 
     private Register getReturnRegister(RegisterConfig registerConfig) {
         Register returnRegister = null;
-        ResolvedJavaType returnType = callsite.getReturnType();
+        ResolvedJavaType returnType = config.getReturnType();
         if (returnType.getJavaKind() != JavaKind.Void) {
             returnRegister = registerConfig.getReturnRegister(returnType.getJavaKind());
             GraalError.guarantee(returnRegister != null, "Cannot allocate register for return type %s", returnType.getUnqualifiedName());
@@ -191,15 +198,19 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
         return returnRegister;
     }
 
+    private static boolean isBasePointerRegister(SubstrateTarget target, Register register) {
+        return target.arch instanceof AMD64 && register.equals(AMD64.rbp);
+    }
+
     @Override
     public SubstrateCallingConventionType getCallingConvention() {
-        SubstrateTargetDescription target = ConfigurationValues.getTarget();
+        SubstrateTarget target = SubstrateTarget.singleton();
         RegisterConfig registerConfig = getRegisterConfig();
         Register returnRegister = getReturnRegister(registerConfig);
 
         List<Register> argumentRegisters = new ArrayList<>();
 
-        for (ArgumentInfo argumentInfo : callsite.getArgumentInfos()) {
+        for (ArgumentInfo argumentInfo : config.getArgumentInfos()) {
             // For arguments configured with returnValue=true, reuse the return register as their
             // register allocation. This avoids unnecessary register moves by ensuring the handler's
             // return value is already placed into the correct argument location upon return.
@@ -208,6 +219,14 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
                 continue;
             }
 
+            /*
+             * Bytecode handler parameters cannot consume all allocatable registers. Tail call
+             * threading needs one register to hold the next handler target, so the practical
+             * parameter budget is at most MAX_REGISTERS - 1. The effective budget can be even
+             * smaller when the architecture-specific base pointer register must stay unavailable,
+             * for example because the caller or the handler needs it for frame-pointer preservation
+             * around rsp-modifying code.
+             */
             // Find next available register
             Register registerForCurrentArgument = null;
             List<Register> filteredAllocatableRegisters = registerConfig.filterAllocatableRegisters(target.arch.getPlatformKind(argumentInfo.type().getJavaKind()),
@@ -225,6 +244,14 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
                     // register is used as software CFI register
                     continue;
                 }
+                if (isBasePointerRegister(target, register)) {
+                    /*
+                     * Some bytecode interpreter callers keep the architecture-specific base pointer
+                     * register live across custom handler stub calls, so do not hand it out as part
+                     * of the handler stub ABI.
+                     */
+                    continue;
+                }
 
                 registerForCurrentArgument = register;
                 break;
@@ -234,7 +261,7 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
             argumentRegisters.add(registerForCurrentArgument);
         }
 
-        List<ResolvedJavaType> argumentTypes = callsite.getArgumentTypes();
+        List<ResolvedJavaType> argumentTypes = config.getArgumentTypes();
         AssignedLocation[] parameters = new AssignedLocation[argumentTypes.size()];
         SubstrateCallingConventionArgumentKind[] parameterKinds = new SubstrateCallingConventionArgumentKind[argumentTypes.size()];
 
@@ -242,12 +269,12 @@ public final class SubstrateTruffleBytecodeHandlerStub extends NonBytecodeMethod
             parameters[i] = AssignedLocation.forRegister(argumentRegisters.get(i), toAssignedLocationJavaKind(argumentTypes.get(i).getJavaKind()));
             // TruffleBytecodeHandlerCallsite either preserves the value or returns the updated
             // value in the same argument location
-            parameterKinds[i] = callsite.isArgumentImmutable(i) ? IMMUTABLE : VALUE_REFERENCE;
+            parameterKinds[i] = config.isArgumentImmutable(i) ? IMMUTABLE : VALUE_REFERENCE;
         }
 
         AssignedLocation[] returnLoations = AssignedLocation.EMPTY_ARRAY;
         if (returnRegister != null) {
-            returnLoations = new AssignedLocation[]{AssignedLocation.forRegister(returnRegister, toAssignedLocationJavaKind(callsite.getReturnType().getJavaKind()))};
+            returnLoations = new AssignedLocation[]{AssignedLocation.forRegister(returnRegister, toAssignedLocationJavaKind(config.getReturnType().getJavaKind()))};
         }
 
         return SubstrateCallingConventionType.makeCustom(false, parameters, returnLoations, parameterKinds, false, false);

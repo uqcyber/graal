@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -59,7 +59,9 @@ public interface UnmodifiableEconomicMap<K, V> {
 
     /**
      * Returns the value to which {@code key} is mapped, or {@code defaultValue} if this map
-     * contains no mapping for {@code key}. The {@code key} must not be {@code null}.
+     * contains no mapping for {@code key}. The {@code key} must not be {@code null}. Maps that
+     * support {code null} values, need to overwrite this method to appropriately handle the {code
+     * null} case.
      *
      * @throws UnsupportedOperationException if {@code key == null}
      * @since 19.0

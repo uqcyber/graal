@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,10 +47,10 @@ import com.oracle.svm.core.graal.stackvalue.StackValueNode;
 import com.oracle.svm.core.graal.thread.LoadVMThreadLocalNode;
 import com.oracle.svm.core.graal.thread.StoreVMThreadLocalNode;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.meta.SubstrateMethodRefStamp;
 import com.oracle.svm.core.nodes.CFunctionEpilogueNode;
 import com.oracle.svm.core.nodes.CFunctionPrologueNode;
 import com.oracle.svm.core.snippets.SnippetRuntime;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.meta.HostedArrayClass;
 import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
@@ -75,6 +75,7 @@ import com.oracle.svm.hosted.webimage.codegen.wrappers.JSEmitter;
 import com.oracle.svm.hosted.webimage.js.JSBody;
 import com.oracle.svm.hosted.webimage.js.JSKeyword;
 import com.oracle.svm.hosted.webimage.snippets.JSSnippets;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.JVMCIReflectionUtil;
 import com.oracle.svm.webimage.functionintrinsics.ImplicitExceptions;
 import com.oracle.svm.webimage.functionintrinsics.JSCallNode;
@@ -1101,40 +1102,26 @@ public class WebImageJSNodeLowerer extends NodeLowerer {
     @Override
     protected void lower(ReadNode node) {
         AddressNode location = node.getAddress();
-        CodeBuffer masm = codeGenTool.getCodeBuffer();
 
-        if (location instanceof AMD64AddressNode) {
-            ValueNode object = location.getBase();
-
-            HostedType objectType = (HostedType) object.stamp(NodeView.DEFAULT).javaType(codeGenTool.getProviders().getMetaAccess());
-
-            if (objectType.isArray()) {
-                codeGenTool.genArrayLoad(location, object);
-            } else {
-                //
-                // We have a read on an object, this read can be modelled as accessing the field of
-                // the object at the given index, where the index accesses the field offset table to
-                // query the field name for a given type.
-                // The table maps offsets to lambdas that perform the field reads.
-                codeGenTool.genPropertyAccess(Emitter.of(object), Emitter.of("constructor[CM]." + ClassMetadataLowerer.FIELD_TABLE_NAME));
-                masm.emitKeyword(JSKeyword.LBRACK);
-                lowerValue(location);
-                masm.emitKeyword(JSKeyword.RBRACK);
-                masm.emitKeyword(JSKeyword.LPAR);
-                lowerValue(object);
-                masm.emitKeyword(JSKeyword.RPAR);
-            }
-        } else if (location instanceof OffsetAddressNode) {
+        if (location instanceof OffsetAddressNode) {
             OffsetAddressNode address = (OffsetAddressNode) node.getAddress();
             Emitter base = Emitter.of(node.getAddress().getBase());
             Emitter offset = Emitter.of(address.getOffset());
-            MetaAccessProvider metaAccess = codeGenTool.getProviders().getMetaAccess();
-            JavaKind kind = node.getAccessStamp(NodeView.DEFAULT).javaType(metaAccess).getJavaKind();
+            JavaKind kind = getMemoryKind(node.getAccessStamp(NodeView.DEFAULT));
             Emitter type = Emitter.of(JSBootImageHeapLowerer.getKindNum(kind));
             Runtime.UNSAFE_LOAD_RUNTIME.emitCall(codeGenTool, base, offset, type);
         } else {
             JVMCIError.shouldNotReachHere("Method " + location.graph().method().toString() + " contains node " + location);
         }
+    }
+
+    private JavaKind getMemoryKind(Stamp accessStamp) {
+        if (accessStamp instanceof SubstrateMethodRefStamp) {
+            return codeGenTool.getProviders().getWordTypes().getWordKind();
+        }
+
+        MetaAccessProvider metaAccess = codeGenTool.getProviders().getMetaAccess();
+        return accessStamp.javaType(metaAccess).getJavaKind();
     }
 
     @Override

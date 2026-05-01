@@ -63,6 +63,8 @@ import static org.graalvm.wasm.nodes.WasmFrame.pushLong;
 import static org.graalvm.wasm.nodes.WasmFrame.pushReference;
 import static org.graalvm.wasm.nodes.WasmFrame.pushVector128;
 
+import com.oracle.truffle.api.impl.FrameWithoutBoxing;
+import com.oracle.truffle.api.nodes.ControlFlowException;
 import org.graalvm.wasm.BinaryStreamParser;
 import org.graalvm.wasm.GlobalRegistry;
 import org.graalvm.wasm.WasmArguments;
@@ -108,6 +110,8 @@ import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.CompilerDirectives.EarlyInline;
+import com.oracle.truffle.api.CompilerDirectives.EarlyEscapeAnalysis;
 import com.oracle.truffle.api.ExactMath;
 import com.oracle.truffle.api.HostCompilerDirectives;
 import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterSwitch;
@@ -119,6 +123,12 @@ import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.LoopNode;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.staticobject.StaticProperty;
+import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterHandler;
+import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterFetchOpcode;
+import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterHandlerConfig;
+import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterHandlerConfig.Argument;
+
+import java.io.Serial;
 
 /**
  * This node represents the function body of a WebAssembly function. It executes the instruction
@@ -191,12 +201,16 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         this.notifyFunction = notifyFunction;
     }
 
-    private void enterErrorBranch() {
+    private static void enterErrorBranch(WasmCodeEntry codeEntry) {
         codeEntry.errorBranch();
     }
 
     private WasmMemory memory(WasmInstance instance, int index) {
         return instance.memory(index).checkSize(memoryLib(index), module.memoryInitialSize(index));
+    }
+
+    private static WasmMemory memory(WasmInstance instance, WasmMemoryLibrary[] memoryLibs, WasmModule module, int index) {
+        return instance.memory(index).checkSize(memoryLibs[index], module.memoryInitialSize(index));
     }
 
     private WasmMemoryLibrary memoryLib(int memoryIndex) {
@@ -273,10 +287,68 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         executeBodyFromOffset(instance, frame, bytecodeStartOffset, codeEntry.localCount(), -1);
     }
 
+    private static final class VirtualState {
+
+        @EarlyInline
+        VirtualState(int stackPointer) {
+            this.stackPointer = stackPointer;
+        }
+
+        int stackPointer;
+    }
+
+    private static final class State {
+
+        @EarlyInline
+        State(WasmFunctionNode<?> thiz, BackEdgeCounter backEdgeCounter, int interpreterBackEdgeCounter, byte[] bytecode, int lineIndex, WasmMemory zeroMemory, WasmMemoryLibrary zeroMemoryLib,
+                        int localCount, WasmInstance instance) {
+            this.thiz = thiz;
+            this.backEdgeCounter = backEdgeCounter;
+            this.interpreterBackEdgeCounter = interpreterBackEdgeCounter;
+            this.bytecode = bytecode;
+            this.lineIndex = lineIndex;
+            this.zeroMemory = zeroMemory;
+            this.zeroMemoryLib = zeroMemoryLib;
+            this.localCount = localCount;
+            this.instance = instance;
+            this.module = thiz.module;
+            this.language = WasmLanguage.get(thiz);
+            this.memoryLibs = thiz.memoryLibs;
+            this.notifyFunction = thiz.notifyFunction;
+            this.exceptionOffset = 0;
+        }
+
+        final WasmFunctionNode<?> thiz;
+        final byte[] bytecode;
+        int lineIndex;
+        final int localCount;
+        int interpreterBackEdgeCounter;
+        final BackEdgeCounter backEdgeCounter;
+        final WasmMemory zeroMemory;
+        final WasmMemoryLibrary zeroMemoryLib;
+        final WasmInstance instance;
+        final WasmModule module;
+        final WasmLanguage language;
+        final WasmMemoryLibrary[] memoryLibs;
+        final WasmNotifyFunction notifyFunction;
+        /**
+         * Used for communicating the current offset (bci) in case of an exception. Should be set
+         * before calls (and unset after) and at throws and unset if caught.
+         */
+        int exceptionOffset;
+    }
+
     @BytecodeInterpreterSwitch
     @ExplodeLoop(kind = ExplodeLoop.LoopExplosionKind.MERGE_EXPLODE)
     @SuppressWarnings({"UnusedAssignment", "hiding"})
-    public Object executeBodyFromOffset(WasmInstance instance, VirtualFrame frame, int startOffset, int startStackPointer, int startLineIndex) {
+    @EarlyEscapeAnalysis
+    @BytecodeInterpreterHandlerConfig(maximumOperationCode = 0xFF, arguments = {
+                    @Argument(returnValue = true),
+                    @Argument(expand = Argument.ExpansionKind.MATERIALIZED, fields = {@Argument.Field(name = "bytecode")}),
+                    @Argument(expand = Argument.ExpansionKind.VIRTUAL),
+                    @Argument(expand = Argument.ExpansionKind.MATERIALIZED, fields = {@Argument.Field(name = "indexedLocals"), @Argument.Field(name = "indexedPrimitiveLocals")})})
+    public Object executeBodyFromOffset(WasmInstance instance, VirtualFrame virtualFrame, int startOffset, int startStackPointer, int startLineIndex) {
+        FrameWithoutBoxing frame = (FrameWithoutBoxing) virtualFrame;
         final int localCount = codeEntry.localCount();
         final byte[] bytecode = this.bytecode;
 
@@ -284,11 +356,12 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         // interpret this as a constant value in every loop iteration. This would prevent the
         // compiler form merging branches, since every change to the back edge count would generate
         // a new unique state.
-        final BackEdgeCounter backEdgeCounter = new BackEdgeCounter();
+        BackEdgeCounter backEdgeCounter = null;
+        if (CompilerDirectives.hasNextTier() && CompilerDirectives.inCompiledCode()) {
+            backEdgeCounter = new BackEdgeCounter();
+        }
 
         int offset = startOffset;
-        int stackPointer = startStackPointer;
-        int lineIndex = startLineIndex;
 
         // Note: The module may not have any memories.
         final WasmMemory zeroMemory = !codeEntry.usesMemoryZero() ? null : memory(instance, 0);
@@ -296,1427 +369,1067 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
 
         check(bytecode.length, (1 << 31) - 1);
 
-        final int end = bytecodeEndOffset;
+        final State state = new State(this, backEdgeCounter, 0, bytecode, startLineIndex, zeroMemory, zeroMemoryLib, localCount, instance);
+        final VirtualState virtualState = new VirtualState(startStackPointer);
 
         int opcode = Bytecode.UNREACHABLE;
-        loop: while (offset < end) {
+        loop: while (true) {
             try {
-                opcode = rawPeekU8(bytecode, offset);
-                offset++;
+                opcode = nextOpcode(offset, state, virtualState, frame);
                 CompilerAsserts.partialEvaluationConstant(offset);
                 switch (HostCompilerDirectives.markThreadedSwitch(opcode)) {
-                    case Bytecode.UNREACHABLE:
-                        enterErrorBranch();
+                    case Bytecode.UNREACHABLE: {
+                        offset++;
+                        enterErrorBranch(codeEntry);
                         throw WasmException.create(Failure.UNREACHABLE, this);
-                    case Bytecode.NOP:
+                    }
+                    case Bytecode.NOP: {
+                        offset = nopHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.SKIP_LABEL_U8:
-                    case Bytecode.SKIP_LABEL_U16:
-                    case Bytecode.SKIP_LABEL_I32:
-                        offset += opcode;
+                    }
+                    case Bytecode.SKIP_LABEL_U8: {
+                        offset = skipLabelU8Handler(offset, state, virtualState, frame);
                         break;
+                    }
+                    case Bytecode.SKIP_LABEL_U16: {
+                        offset = skipLabelU16Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.SKIP_LABEL_I32: {
+                        offset = skipLabelI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
                     case Bytecode.RETURN: {
+                        offset++;
+                        if (offset >= bytecodeEndOffset) {
+                            return WasmConstant.RETURN_VALUE;
+                        }
                         // A return statement causes the termination of the current function, i.e.
                         // causes the execution to resume after the instruction that invoked
                         // the current frame.
                         if (CompilerDirectives.hasNextTier()) {
-                            int backEdgeCount = backEdgeCounter.count;
+                            int backEdgeCount = CompilerDirectives.inCompiledCode() ? backEdgeCounter.count : state.interpreterBackEdgeCounter;
                             if (backEdgeCount > 0) {
                                 LoopNode.reportLoopCount(this, backEdgeCount);
                             }
                         }
                         final int resultCount = codeEntry.resultCount();
-                        unwindStack(frame, stackPointer, localCount, resultCount);
-                        dropStack(frame, stackPointer, localCount + resultCount);
+                        unwindStack(frame, virtualState.stackPointer, localCount, resultCount);
+                        dropStack(frame, virtualState.stackPointer, localCount + resultCount);
                         return WasmConstant.RETURN_VALUE;
                     }
                     case Bytecode.LABEL_U8: {
-                        final int value = rawPeekU8(bytecode, offset);
-                        offset++;
-                        final int stackSize = (value & BytecodeBitEncoding.LABEL_U8_STACK_VALUE);
-                        final int targetStackPointer = stackSize + localCount;
-                        switch ((value & BytecodeBitEncoding.LABEL_U8_RESULT_MASK)) {
-                            case BytecodeBitEncoding.LABEL_U8_RESULT_NUM:
-                                WasmFrame.copyPrimitive(frame, stackPointer - 1, targetStackPointer);
-                                dropStack(frame, stackPointer, targetStackPointer + 1);
-                                stackPointer = targetStackPointer + 1;
-                                break;
-                            case BytecodeBitEncoding.LABEL_U8_RESULT_OBJ:
-                                WasmFrame.copyObject(frame, stackPointer - 1, targetStackPointer);
-                                dropStack(frame, stackPointer, targetStackPointer + 1);
-                                stackPointer = targetStackPointer + 1;
-                                break;
-                            default:
-                                dropStack(frame, stackPointer, targetStackPointer);
-                                stackPointer = targetStackPointer;
-                                break;
-                        }
+                        offset = labelU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LABEL_U16: {
-                        final int value = rawPeekU8(bytecode, offset);
-                        final int stackSize = rawPeekU8(bytecode, offset + 1);
-                        offset += 2;
-                        final int resultCount = (value & BytecodeBitEncoding.LABEL_U16_RESULT_VALUE);
-                        final int resultType = (value & BytecodeBitEncoding.LABEL_U16_RESULT_TYPE_MASK);
-                        final int targetStackPointer = stackSize + localCount;
-                        switch (resultType) {
-                            case BytecodeBitEncoding.LABEL_U16_RESULT_TYPE_NUM:
-                                unwindPrimitiveStack(frame, stackPointer, targetStackPointer, resultCount);
-                                break;
-                            case BytecodeBitEncoding.LABEL_U16_RESULT_TYPE_OBJ:
-                                unwindObjectStack(frame, stackPointer, targetStackPointer, resultCount);
-                                break;
-                            case BytecodeBitEncoding.LABEL_U16_RESULT_TYPE_MIX:
-                                unwindStack(frame, stackPointer, targetStackPointer, resultCount);
-                                break;
-                        }
-                        dropStack(frame, stackPointer, targetStackPointer + resultCount);
-                        stackPointer = targetStackPointer + resultCount;
+                        offset = labelU16Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LABEL_I32: {
-                        final int resultType = rawPeekU8(bytecode, offset);
-                        final int resultCount = rawPeekI32(bytecode, offset + 1);
-                        final int stackSize = rawPeekI32(bytecode, offset + 5);
-                        offset += 9;
-                        final int targetStackPointer = stackSize + localCount;
-                        switch (resultType) {
-                            case BytecodeBitEncoding.LABEL_RESULT_TYPE_NUM:
-                                unwindPrimitiveStack(frame, stackPointer, targetStackPointer, resultCount);
-                                break;
-                            case BytecodeBitEncoding.LABEL_RESULT_TYPE_OBJ:
-                                unwindObjectStack(frame, stackPointer, targetStackPointer, resultCount);
-                                break;
-                            case BytecodeBitEncoding.LABEL_RESULT_TYPE_MIX:
-                                unwindStack(frame, stackPointer, targetStackPointer, resultCount);
-                                break;
-                        }
-                        dropStack(frame, stackPointer, targetStackPointer + resultCount);
-                        stackPointer = targetStackPointer + resultCount;
+                        offset = labelI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOOP: {
-                        TruffleSafepoint.poll(this);
-                        if (CompilerDirectives.hasNextTier() && ++backEdgeCounter.count >= REPORT_LOOP_STRIDE) {
-                            LoopNode.reportLoopCount(this, REPORT_LOOP_STRIDE);
-                            if (CompilerDirectives.inInterpreter() && BytecodeOSRNode.pollOSRBackEdge(this, REPORT_LOOP_STRIDE)) {
-                                Object result = BytecodeOSRNode.tryOSR(this, offset | ((long) stackPointer << 32), lineIndex, null, frame);
-                                if (result != null) {
-                                    return result;
-                                }
-                            }
-                            backEdgeCounter.count = 0;
-                        }
+                        offset = loopHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.IF: {
-                        stackPointer--;
-                        if (profileCondition(bytecode, offset + 4, popBoolean(frame, stackPointer))) {
-                            offset += 6;
-                        } else {
-                            final int offsetDelta = rawPeekI32(bytecode, offset);
-                            offset += offsetDelta;
-                        }
+                        offset = ifHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.BR_U8: {
-                        final int offsetDelta = rawPeekU8(bytecode, offset);
-                        /*
-                         * BR_U8 encodes the back jump value as a positive byte value. BR_U8 can
-                         * never perform a forward jump.
-                         */
-                        offset -= offsetDelta;
+                        offset = brU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.BR_I32: {
-                        final int offsetDelta = rawPeekI32(bytecode, offset);
-                        offset += offsetDelta;
+                        offset = brI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.BR_IF_U8: {
-                        stackPointer--;
-                        if (profileCondition(bytecode, offset + 1, popBoolean(frame, stackPointer))) {
-                            final int offsetDelta = rawPeekU8(bytecode, offset);
-                            /*
-                             * BR_IF_U8 encodes the back jump value as a positive byte value.
-                             * BR_IF_U8 can never perform a forward jump.
-                             */
-                            offset -= offsetDelta;
-                        } else {
-                            offset += 3;
-                        }
+                        offset = brIfU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.BR_IF_I32: {
-                        stackPointer--;
-                        if (profileCondition(bytecode, offset + 4, popBoolean(frame, stackPointer))) {
-                            final int offsetDelta = rawPeekI32(bytecode, offset);
-                            offset += offsetDelta;
-                        } else {
-                            offset += 6;
-                        }
+                        offset = brIfI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.BR_TABLE_U8: {
-                        stackPointer--;
-                        int index = popInt(frame, stackPointer);
-                        final int size = rawPeekU8(bytecode, offset);
-                        final int counterOffset = offset + 1;
-
-                        if (HostCompilerDirectives.inInterpreterFastPath()) {
-                            if (index < 0 || index >= size) {
-                                // If unsigned index is larger or equal to the table size use the
-                                // default (last) index.
-                                index = size - 1;
-                            }
-
-                            final int indexOffset = offset + 3 + index * 6;
-                            updateBranchTableProfile(bytecode, counterOffset, indexOffset + 4);
-                            final int offsetDelta = rawPeekI32(bytecode, indexOffset);
-                            offset = indexOffset + offsetDelta;
-                            break;
-                        } else {
-                            /*
-                             * This loop is implemented to create a separate path for every index.
-                             * This guarantees that all values inside the if statement are treated
-                             * as compile time constants, since the loop is unrolled.
-                             *
-                             * We keep track of the sum of the preceding profiles to adjust the
-                             * independent probabilities to conditional ones. This gets explained in
-                             * profileBranchTable().
-                             */
-                            int precedingSum = 0;
-                            for (int i = 0; i < size; i++) {
-                                final int indexOffset = offset + 3 + i * 6;
-                                int profile = rawPeekU16(bytecode, indexOffset + 4);
-                                if (profileBranchTable(bytecode, counterOffset, profile, precedingSum, i == index || i == size - 1)) {
-                                    final int offsetDelta = rawPeekI32(bytecode, indexOffset);
-                                    offset = indexOffset + offsetDelta;
-                                    continue loop;
-                                }
-                                precedingSum += profile;
-                            }
-                            throw CompilerDirectives.shouldNotReachHere("br_table");
-                        }
-                    }
-                    case Bytecode.BR_TABLE_I32: {
-                        stackPointer--;
-                        int index = popInt(frame, stackPointer);
-                        final int size = rawPeekI32(bytecode, offset);
-                        final int counterOffset = offset + 4;
-
-                        if (HostCompilerDirectives.inInterpreterFastPath()) {
-                            if (index < 0 || index >= size) {
-                                // If unsigned index is larger or equal to the table size use the
-                                // default (last) index.
-                                index = size - 1;
-                            }
-
-                            final int indexOffset = offset + 6 + index * 6;
-                            updateBranchTableProfile(bytecode, counterOffset, indexOffset + 4);
-                            final int offsetDelta = rawPeekI32(bytecode, indexOffset);
-                            offset = indexOffset + offsetDelta;
-                            break;
-                        } else {
-                            /*
-                             * This loop is implemented to create a separate path for every index.
-                             * This guarantees that all values inside the if statement are treated
-                             * as compile time constants, since the loop is unrolled.
-                             */
-                            int precedingSum = 0;
-                            for (int i = 0; i < size; i++) {
-                                final int indexOffset = offset + 6 + i * 6;
-                                int profile = rawPeekU16(bytecode, indexOffset + 4);
-                                if (profileBranchTable(bytecode, counterOffset, profile, precedingSum, i == index || i == size - 1)) {
-                                    final int offsetDelta = rawPeekI32(bytecode, indexOffset);
-                                    offset = indexOffset + offsetDelta;
-                                    continue loop;
-                                }
-                                precedingSum += profile;
-                            }
-                            throw CompilerDirectives.shouldNotReachHere("br_table");
-                        }
-                    }
-                    case Bytecode.CALL_U8:
-                    case Bytecode.CALL_I32: {
-                        final int callNodeIndex;
-                        final int functionIndex;
-                        if (opcode == Bytecode.CALL_U8) {
-                            callNodeIndex = rawPeekU8(bytecode, offset);
-                            functionIndex = rawPeekU8(bytecode, offset + 1);
-                            offset += 2;
-                        } else {
-                            callNodeIndex = rawPeekI32(bytecode, offset);
-                            functionIndex = rawPeekI32(bytecode, offset + 4);
-                            offset += 8;
-                        }
-
-                        WasmFunction function = module.symbolTable().function(functionIndex);
-                        int paramCount = function.paramCount();
-
-                        Object[] args = createArgumentsForCall(frame, function.typeIndex(), paramCount, stackPointer);
-                        stackPointer -= paramCount;
-
-                        stackPointer = executeDirectCall(frame, stackPointer, instance, callNodeIndex, function, args);
-                        CompilerAsserts.partialEvaluationConstant(stackPointer);
+                        offset = brTableU8Handler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.CALL_INDIRECT_U8:
-                    case Bytecode.CALL_INDIRECT_I32:
-                    case Bytecode.CALL_REF_U8:
+                    case Bytecode.BR_TABLE_I32: {
+                        offset = brTableI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.CALL_U8: {
+                        offset = callU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.CALL_I32: {
+                        offset = callI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.CALL_INDIRECT_U8: {
+                        offset = callIndirectU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.CALL_INDIRECT_I32: {
+                        offset = callIndirectI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.CALL_REF_U8: {
+                        offset = callRefU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
                     case Bytecode.CALL_REF_I32: {
-                        final int callNodeIndex;
-                        final int expectedFunctionTypeIndex;
-                        final int tableIndex;
-                        if (opcode == Bytecode.CALL_INDIRECT_U8) {
-                            callNodeIndex = rawPeekU8(bytecode, offset);
-                            expectedFunctionTypeIndex = rawPeekU8(bytecode, offset + 1);
-                            tableIndex = rawPeekU8(bytecode, offset + 2);
-                            offset += 3;
-                        } else if (opcode == Bytecode.CALL_INDIRECT_I32) {
-                            callNodeIndex = rawPeekI32(bytecode, offset);
-                            expectedFunctionTypeIndex = rawPeekI32(bytecode, offset + 4);
-                            tableIndex = rawPeekI32(bytecode, offset + 8);
-                            offset += 12;
-                        } else if (opcode == Bytecode.CALL_REF_U8) {
-                            callNodeIndex = rawPeekU8(bytecode, offset);
-                            expectedFunctionTypeIndex = rawPeekU8(bytecode, offset + 1);
-                            tableIndex = -1;
-                            offset += 2;
-                        } else {
-                            assert opcode == Bytecode.CALL_REF_I32;
-                            callNodeIndex = rawPeekI32(bytecode, offset);
-                            expectedFunctionTypeIndex = rawPeekI32(bytecode, offset + 4);
-                            tableIndex = -1;
-                            offset += 8;
-                        }
-
-                        // Extract the function object.
-                        final Object functionCandidate;
-                        final int elementIndex;
-                        if (opcode == Bytecode.CALL_INDIRECT_U8 || opcode == Bytecode.CALL_INDIRECT_I32) {
-                            final WasmTable table = instance.table(tableIndex);
-                            final Object[] elements = table.elements();
-                            elementIndex = popInt(frame, --stackPointer);
-                            if (elementIndex < 0 || elementIndex >= elements.length) {
-                                enterErrorBranch();
-                                throw WasmException.format(Failure.UNDEFINED_ELEMENT, this, "Element index '%d' out of table bounds.", elementIndex);
-                            }
-                            // Currently, table elements may only be functions.
-                            // We can add a check here when this changes in the future.
-                            functionCandidate = elements[elementIndex];
-                        } else {
-                            assert opcode == Bytecode.CALL_REF_U8 || opcode == Bytecode.CALL_REF_I32;
-                            functionCandidate = popReference(frame, --stackPointer);
-                            elementIndex = -1;
-                        }
-
-                        if (!(functionCandidate instanceof WasmFunctionInstance functionInstance)) {
-                            throw callIndirectNotAFunctionError(opcode, functionCandidate, elementIndex);
-                        }
-
-                        final WasmFunction function = functionInstance.function();
-                        final CallTarget target = functionInstance.target();
-                        final WasmContext functionInstanceContext = functionInstance.context();
-
-                        // Target function instance must be from the same context.
-                        assert functionInstanceContext == WasmContext.get(this);
-
-                        if (opcode == Bytecode.CALL_INDIRECT_U8 || opcode == Bytecode.CALL_INDIRECT_I32) {
-                            // Validate that the target function type matches the expected type of
-                            // the indirect call.
-                            if (!runTimeConcreteTypeCheck(expectedFunctionTypeIndex, functionInstance)) {
-                                enterErrorBranch();
-                                failFunctionTypeCheck(function, expectedFunctionTypeIndex);
-                            }
-                        }
-
-                        // Invoke the resolved function.
-                        int paramCount = module.symbolTable().functionTypeParamCount(expectedFunctionTypeIndex);
-                        Object[] args = createArgumentsForCall(frame, expectedFunctionTypeIndex, paramCount, stackPointer);
-                        stackPointer -= paramCount;
-                        WasmArguments.setModuleInstance(args, functionInstance.moduleInstance());
-
-                        final Object result = executeIndirectCallNode(callNodeIndex, target, args);
-                        stackPointer = pushIndirectCallResult(frame, stackPointer, expectedFunctionTypeIndex, result, WasmLanguage.get(this));
-                        CompilerAsserts.partialEvaluationConstant(stackPointer);
+                        offset = callRefI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.DROP: {
-                        stackPointer--;
-                        dropPrimitive(frame, stackPointer);
+                        offset = dropHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.DROP_OBJ: {
-                        stackPointer--;
-                        dropObject(frame, stackPointer);
+                        offset = dropObjHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.SELECT: {
-                        if (profileCondition(bytecode, offset, popBoolean(frame, stackPointer - 1))) {
-                            drop(frame, stackPointer - 2);
-                        } else {
-                            WasmFrame.copyPrimitive(frame, stackPointer - 2, stackPointer - 3);
-                            dropPrimitive(frame, stackPointer - 2);
-                        }
-                        offset += 2;
-                        stackPointer -= 2;
+                        offset = selectHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.SELECT_OBJ: {
-                        if (profileCondition(bytecode, offset, popBoolean(frame, stackPointer - 1))) {
-                            dropObject(frame, stackPointer - 2);
-                        } else {
-                            WasmFrame.copyObject(frame, stackPointer - 2, stackPointer - 3);
-                            dropObject(frame, stackPointer - 2);
-                        }
-                        offset += 2;
-                        stackPointer -= 2;
+                        offset = selectObjHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_GET_U8: {
-                        final int index = rawPeekU8(bytecode, offset);
-                        offset++;
-                        local_get(frame, stackPointer, index);
-                        stackPointer++;
+                        offset = localGetU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_GET_I32: {
-                        final int index = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        local_get(frame, stackPointer, index);
-                        stackPointer++;
+                        offset = localGetI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_GET_OBJ_U8: {
-                        final int index = rawPeekU8(bytecode, offset);
-                        offset++;
-                        local_get_obj(frame, stackPointer, index);
-                        stackPointer++;
+                        offset = localGetObjU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_GET_OBJ_I32: {
-                        final int index = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        local_get_obj(frame, stackPointer, index);
-                        stackPointer++;
+                        offset = localGetObjI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_SET_U8: {
-                        final int index = rawPeekU8(bytecode, offset);
-                        offset++;
-                        stackPointer--;
-                        local_set(frame, stackPointer, index);
+                        offset = localSetU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_SET_I32: {
-                        final int index = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        stackPointer--;
-                        local_set(frame, stackPointer, index);
+                        offset = localSetI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_SET_OBJ_U8: {
-                        final int index = rawPeekU8(bytecode, offset);
-                        offset++;
-                        stackPointer--;
-                        local_set_obj(frame, stackPointer, index);
+                        offset = localSetObjU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_SET_OBJ_I32: {
-                        final int index = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        stackPointer--;
-                        local_set_obj(frame, stackPointer, index);
+                        offset = localSetObjI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_TEE_U8: {
-                        final int index = rawPeekU8(bytecode, offset);
-                        offset++;
-                        local_tee(frame, stackPointer - 1, index);
+                        offset = localTeeU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_TEE_I32: {
-                        final int index = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        local_tee(frame, stackPointer - 1, index);
+                        offset = localTeeI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_TEE_OBJ_U8: {
-                        final int index = rawPeekU8(bytecode, offset);
-                        offset++;
-                        local_tee_obj(frame, stackPointer - 1, index);
+                        offset = localTeeObjU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.LOCAL_TEE_OBJ_I32: {
-                        final int index = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        local_tee_obj(frame, stackPointer - 1, index);
+                        offset = localTeeObjI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.GLOBAL_GET_U8: {
-                        final int index = rawPeekU8(bytecode, offset);
-                        offset++;
-                        global_get(instance, frame, stackPointer, index);
-                        stackPointer++;
+                        offset = globalGetU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.GLOBAL_GET_I32: {
-                        final int index = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        global_get(instance, frame, stackPointer, index);
-                        stackPointer++;
+                        offset = globalGetI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.GLOBAL_SET_U8: {
-                        final int index = rawPeekU8(bytecode, offset);
-                        offset++;
-                        stackPointer--;
-                        global_set(instance, frame, stackPointer, index);
+                        offset = globalSetU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.GLOBAL_SET_I32: {
-                        final int index = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        stackPointer--;
-                        global_set(instance, frame, stackPointer, index);
+                        offset = globalSetI32Handler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.I32_LOAD:
-                    case Bytecode.I64_LOAD:
-                    case Bytecode.F32_LOAD:
-                    case Bytecode.F64_LOAD:
-                    case Bytecode.I32_LOAD8_S:
-                    case Bytecode.I32_LOAD8_U:
-                    case Bytecode.I32_LOAD16_S:
-                    case Bytecode.I32_LOAD16_U:
-                    case Bytecode.I64_LOAD8_S:
-                    case Bytecode.I64_LOAD8_U:
-                    case Bytecode.I64_LOAD16_S:
-                    case Bytecode.I64_LOAD16_U:
-                    case Bytecode.I64_LOAD32_S:
+                    case Bytecode.I32_LOAD: {
+                        offset = i32LoadHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD: {
+                        offset = i64LoadHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_LOAD: {
+                        offset = f32LoadHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_LOAD: {
+                        offset = f64LoadHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD8_S: {
+                        offset = i32Load8SHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD8_U: {
+                        offset = i32Load8UHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD16_S: {
+                        offset = i32Load16SHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD16_U: {
+                        offset = i32Load16UHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD8_S: {
+                        offset = i64Load8SHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD8_U: {
+                        offset = i64Load8UHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD16_S: {
+                        offset = i64Load16SHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD16_U: {
+                        offset = i64Load16UHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD32_S: {
+                        offset = i64Load32SHandler(offset, state, virtualState, frame);
+                        break;
+                    }
                     case Bytecode.I64_LOAD32_U: {
-                        final int encoding = rawPeekU8(bytecode, offset);
-                        offset++;
-                        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
-                        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
-                        final int memoryIndex = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        final long memOffset;
-                        switch (offsetLength) {
-                            case BytecodeBitEncoding.MEMORY_OFFSET_U8:
-                                memOffset = rawPeekU8(bytecode, offset);
-                                offset++;
-                                break;
-                            case BytecodeBitEncoding.MEMORY_OFFSET_U32:
-                                memOffset = rawPeekU32(bytecode, offset);
-                                offset += 4;
-                                break;
-                            case BytecodeBitEncoding.MEMORY_OFFSET_I64:
-                                memOffset = rawPeekI64(bytecode, offset);
-                                offset += 8;
-                                break;
-                            default:
-                                throw CompilerDirectives.shouldNotReachHere();
-                        }
-                        final long baseAddress;
-                        if (indexType64 == 0) {
-                            baseAddress = Integer.toUnsignedLong(popInt(frame, stackPointer - 1));
-                        } else {
-                            baseAddress = popLong(frame, stackPointer - 1);
-                        }
-                        final long address = effectiveMemoryAddress64(memOffset, baseAddress);
-                        final WasmMemory memory = memory(instance, memoryIndex);
-                        load(memory, memoryLib(memoryIndex), frame, stackPointer - 1, opcode, address);
+                        offset = i64Load32UHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.I32_LOAD_U8: {
-                        final int memOffset = rawPeekU8(bytecode, offset);
-                        offset++;
-
-                        int baseAddress = popInt(frame, stackPointer - 1);
-                        final long address = effectiveMemoryAddress(memOffset, baseAddress);
-
-                        int value = zeroMemoryLib.load_i32(zeroMemory, this, address);
-                        pushInt(frame, stackPointer - 1, value);
+                        offset = i32LoadU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.I32_LOAD_I32: {
-                        final int memOffset = rawPeekI32(bytecode, offset);
-                        offset += 4;
-
-                        int baseAddress = popInt(frame, stackPointer - 1);
-                        final long address = effectiveMemoryAddress(memOffset, baseAddress);
-
-                        int value = zeroMemoryLib.load_i32(zeroMemory, this, address);
-                        pushInt(frame, stackPointer - 1, value);
+                        offset = i32LoadI32Handler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.I64_LOAD_U8:
-                    case Bytecode.F32_LOAD_U8:
-                    case Bytecode.F64_LOAD_U8:
-                    case Bytecode.I32_LOAD8_S_U8:
-                    case Bytecode.I32_LOAD8_U_U8:
-                    case Bytecode.I32_LOAD16_S_U8:
-                    case Bytecode.I32_LOAD16_U_U8:
-                    case Bytecode.I64_LOAD8_S_U8:
-                    case Bytecode.I64_LOAD8_U_U8:
-                    case Bytecode.I64_LOAD16_S_U8:
-                    case Bytecode.I64_LOAD16_U_U8:
-                    case Bytecode.I64_LOAD32_S_U8:
+                    case Bytecode.I64_LOAD_U8: {
+                        offset = i64LoadU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_LOAD_U8: {
+                        offset = f32LoadU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_LOAD_U8: {
+                        offset = f64LoadU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD8_S_U8: {
+                        offset = i32Load8SU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD8_U_U8: {
+                        offset = i32Load8UU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD16_S_U8: {
+                        offset = i32Load16SU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD16_U_U8: {
+                        offset = i32Load16UU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD8_S_U8: {
+                        offset = i64Load8SU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD8_U_U8: {
+                        offset = i64Load8UU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD16_S_U8: {
+                        offset = i64Load16SU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD16_U_U8: {
+                        offset = i64Load16UU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD32_S_U8: {
+                        offset = i64Load32SU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
                     case Bytecode.I64_LOAD32_U_U8: {
-                        final int memOffset = rawPeekU8(bytecode, offset);
-                        offset++;
-
-                        final int baseAddress = popInt(frame, stackPointer - 1);
-                        final long address = effectiveMemoryAddress(memOffset, baseAddress);
-
-                        load(zeroMemory, zeroMemoryLib, frame, stackPointer - 1, opcode, address);
+                        offset = i64Load32UU8Handler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.I64_LOAD_I32:
-                    case Bytecode.F32_LOAD_I32:
-                    case Bytecode.F64_LOAD_I32:
-                    case Bytecode.I32_LOAD8_S_I32:
-                    case Bytecode.I32_LOAD8_U_I32:
-                    case Bytecode.I32_LOAD16_S_I32:
-                    case Bytecode.I32_LOAD16_U_I32:
-                    case Bytecode.I64_LOAD8_S_I32:
-                    case Bytecode.I64_LOAD8_U_I32:
-                    case Bytecode.I64_LOAD16_S_I32:
-                    case Bytecode.I64_LOAD16_U_I32:
-                    case Bytecode.I64_LOAD32_S_I32:
+                    case Bytecode.I64_LOAD_I32: {
+                        offset = i64LoadI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_LOAD_I32: {
+                        offset = f32LoadI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_LOAD_I32: {
+                        offset = f64LoadI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD8_S_I32: {
+                        offset = i32Load8SI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD8_U_I32: {
+                        offset = i32Load8UI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD16_S_I32: {
+                        offset = i32Load16SI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LOAD16_U_I32: {
+                        offset = i32Load16UI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD8_S_I32: {
+                        offset = i64Load8SI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD8_U_I32: {
+                        offset = i64Load8UI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD16_S_I32: {
+                        offset = i64Load16SI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD16_U_I32: {
+                        offset = i64Load16UI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LOAD32_S_I32: {
+                        offset = i64Load32SI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
                     case Bytecode.I64_LOAD32_U_I32: {
-                        final int memOffset = rawPeekI32(bytecode, offset);
-                        offset += 4;
-
-                        final int baseAddress = popInt(frame, stackPointer - 1);
-                        final long address = effectiveMemoryAddress(memOffset, baseAddress);
-
-                        load(zeroMemory, zeroMemoryLib, frame, stackPointer - 1, opcode, address);
+                        offset = i64Load32UI32Handler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.I32_STORE:
-                    case Bytecode.I64_STORE:
-                    case Bytecode.F32_STORE:
-                    case Bytecode.F64_STORE:
-                    case Bytecode.I32_STORE_8:
-                    case Bytecode.I32_STORE_16:
-                    case Bytecode.I64_STORE_8:
-                    case Bytecode.I64_STORE_16:
+                    case Bytecode.I32_STORE: {
+                        offset = i32StoreHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_STORE: {
+                        offset = i64StoreHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_STORE: {
+                        offset = f32StoreHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_STORE: {
+                        offset = f64StoreHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_STORE_8: {
+                        offset = i32Store8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_STORE_16: {
+                        offset = i32Store16Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_STORE_8: {
+                        offset = i64Store8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_STORE_16: {
+                        offset = i64Store16Handler(offset, state, virtualState, frame);
+                        break;
+                    }
                     case Bytecode.I64_STORE_32: {
-                        final int flags = rawPeekU8(bytecode, offset);
-                        offset++;
-                        final int indexType64 = flags & BytecodeBitEncoding.MEMORY_64_FLAG;
-                        final int offsetEncoding = flags & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
-                        final int memoryIndex = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        final long memOffset;
-                        switch (offsetEncoding) {
-                            case BytecodeBitEncoding.MEMORY_OFFSET_U8:
-                                memOffset = rawPeekU8(bytecode, offset);
-                                offset++;
-                                break;
-                            case BytecodeBitEncoding.MEMORY_OFFSET_U32:
-                                memOffset = rawPeekU32(bytecode, offset);
-                                offset += 4;
-                                break;
-                            case BytecodeBitEncoding.MEMORY_OFFSET_I64:
-                                memOffset = rawPeekI64(bytecode, offset);
-                                offset += 8;
-                                break;
-                            default:
-                                throw CompilerDirectives.shouldNotReachHere();
-                        }
-                        final long baseAddress;
-                        if (indexType64 == 0) {
-                            baseAddress = Integer.toUnsignedLong(popInt(frame, stackPointer - 2));
-                        } else {
-                            baseAddress = popLong(frame, stackPointer - 2);
-                        }
-                        final long address = effectiveMemoryAddress64(memOffset, baseAddress);
-                        final WasmMemory memory = memory(instance, memoryIndex);
-                        store(memory, memoryLib(memoryIndex), frame, stackPointer - 1, opcode, address);
-                        stackPointer -= 2;
+                        offset = i64Store32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.I32_STORE_U8: {
-                        final int memOffset = rawPeekU8(bytecode, offset);
-                        offset++;
-
-                        final int baseAddress = popInt(frame, stackPointer - 2);
-                        final long address = effectiveMemoryAddress(memOffset, baseAddress);
-
-                        final int value = popInt(frame, stackPointer - 1);
-                        zeroMemoryLib.store_i32(zeroMemory, this, address, value);
-                        stackPointer -= 2;
+                        offset = i32StoreU8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.I32_STORE_I32: {
-                        final int memOffset = rawPeekI32(bytecode, offset);
-                        offset += 4;
-
-                        final int baseAddress = popInt(frame, stackPointer - 2);
-                        final long address = effectiveMemoryAddress(memOffset, baseAddress);
-
-                        final int value = popInt(frame, stackPointer - 1);
-                        zeroMemoryLib.store_i32(zeroMemory, this, address, value);
-                        stackPointer -= 2;
+                        offset = i32StoreI32Handler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.I64_STORE_U8:
-                    case Bytecode.F32_STORE_U8:
-                    case Bytecode.F64_STORE_U8:
-                    case Bytecode.I32_STORE_8_U8:
-                    case Bytecode.I32_STORE_16_U8:
-                    case Bytecode.I64_STORE_8_U8:
-                    case Bytecode.I64_STORE_16_U8:
+                    case Bytecode.I64_STORE_U8: {
+                        offset = i64StoreU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_STORE_U8: {
+                        offset = f32StoreU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_STORE_U8: {
+                        offset = f64StoreU8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_STORE_8_U8: {
+                        offset = i32Store8U8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_STORE_16_U8: {
+                        offset = i32Store16U8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_STORE_8_U8: {
+                        offset = i64Store8U8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_STORE_16_U8: {
+                        offset = i64Store16U8Handler(offset, state, virtualState, frame);
+                        break;
+                    }
                     case Bytecode.I64_STORE_32_U8: {
-                        final int memOffset = rawPeekU8(bytecode, offset);
-                        offset++;
-
-                        final int baseAddress = popInt(frame, stackPointer - 2);
-                        final long address = effectiveMemoryAddress(memOffset, baseAddress);
-
-                        store(zeroMemory, zeroMemoryLib, frame, stackPointer - 1, opcode, address);
-                        stackPointer -= 2;
-
+                        offset = i64Store32U8Handler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.I64_STORE_I32:
-                    case Bytecode.F32_STORE_I32:
-                    case Bytecode.F64_STORE_I32:
-                    case Bytecode.I32_STORE_8_I32:
-                    case Bytecode.I32_STORE_16_I32:
-                    case Bytecode.I64_STORE_8_I32:
-                    case Bytecode.I64_STORE_16_I32:
+                    case Bytecode.I64_STORE_I32: {
+                        offset = i64StoreI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_STORE_I32: {
+                        offset = f32StoreI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_STORE_I32: {
+                        offset = f64StoreI32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_STORE_8_I32: {
+                        offset = i32Store8I32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_STORE_16_I32: {
+                        offset = i32Store16I32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_STORE_8_I32: {
+                        offset = i64Store8I32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_STORE_16_I32: {
+                        offset = i64Store16I32Handler(offset, state, virtualState, frame);
+                        break;
+                    }
                     case Bytecode.I64_STORE_32_I32: {
-                        final int memOffset = rawPeekI32(bytecode, offset);
-                        offset += 4;
-
-                        final int baseAddress = popInt(frame, stackPointer - 2);
-                        final long address = effectiveMemoryAddress(memOffset, baseAddress);
-
-                        store(zeroMemory, zeroMemoryLib, frame, stackPointer - 1, opcode, address);
-                        stackPointer -= 2;
-
+                        offset = i64Store32I32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.MEMORY_SIZE: {
-                        final int memoryIndex = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        final WasmMemory memory = memory(instance, memoryIndex);
-                        int pageSize = (int) memoryLib(memoryIndex).size(memory);
-                        pushInt(frame, stackPointer, pageSize);
-                        stackPointer++;
+                        offset = memorySizeHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.MEMORY_GROW: {
-                        final int memoryIndex = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        final WasmMemory memory = memory(instance, memoryIndex);
-                        int extraSize = popInt(frame, stackPointer - 1);
-                        int previousSize = (int) memoryLib(memoryIndex).grow(memory, extraSize);
-                        pushInt(frame, stackPointer - 1, previousSize);
+                        offset = memoryGrowHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.I32_CONST_I8: {
-                        final int value = rawPeekI8(bytecode, offset);
-                        offset++;
-
-                        pushInt(frame, stackPointer, value);
-                        stackPointer++;
+                        offset = i32ConstI8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.I32_CONST_I32: {
-                        final int value = rawPeekI32(bytecode, offset);
-                        offset += 4;
-
-                        pushInt(frame, stackPointer, value);
-                        stackPointer++;
+                        offset = i32ConstI32Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.I64_CONST_I8: {
-                        final long value = rawPeekI8(bytecode, offset);
-                        offset++;
-                        // endregion
-                        pushLong(frame, stackPointer, value);
-                        stackPointer++;
+                        offset = i64ConstI8Handler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.I64_CONST_I64: {
-                        final long value = rawPeekI64(bytecode, offset);
-                        offset += 8;
-                        // endregion
-                        pushLong(frame, stackPointer, value);
-                        stackPointer++;
+                        offset = i64ConstI64Handler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.I32_EQZ:
-                        i32_eqz(frame, stackPointer);
+                    case Bytecode.I32_EQZ: {
+                        offset = i32EqzHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_EQ: {
+                        offset = i32EqHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_NE: {
+                        offset = i32NeHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LT_S: {
+                        offset = i32LtSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LT_U: {
+                        offset = i32LtUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_GT_S: {
+                        offset = i32GtSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_GT_U: {
+                        offset = i32GtUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LE_S: {
+                        offset = i32LeSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_LE_U: {
+                        offset = i32LeUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_GE_S: {
+                        offset = i32GeSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_GE_U: {
+                        offset = i32GeUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_EQZ: {
+                        offset = i64EqzHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_EQ: {
+                        offset = i64EqHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_NE: {
+                        offset = i64NeHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LT_S: {
+                        offset = i64LtSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LT_U: {
+                        offset = i64LtUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_GT_S: {
+                        offset = i64GtSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_GT_U: {
+                        offset = i64GtUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LE_S: {
+                        offset = i64LeSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_LE_U: {
+                        offset = i64LeUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_GE_S: {
+                        offset = i64GeSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I64_GE_U: {
+                        offset = i64GeUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_EQ: {
+                        offset = f32EqHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_NE: {
+                        offset = f32NeHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_LT: {
+                        offset = f32LtHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_GT: {
+                        offset = f32GtHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_LE: {
+                        offset = f32LeHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F32_GE: {
+                        offset = f32GeHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_EQ: {
+                        offset = f64EqHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_NE: {
+                        offset = f64NeHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_LT: {
+                        offset = f64LtHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_GT: {
+                        offset = f64GtHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_LE: {
+                        offset = f64LeHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.F64_GE: {
+                        offset = f64GeHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_CLZ: {
+                        offset = i32ClzHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_CTZ: {
+                        offset = i32CtzHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_POPCNT: {
+                        offset = i32PopcntHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_ADD: {
+                        offset = i32AddHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_SUB: {
+                        offset = i32SubHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_MUL: {
+                        offset = i32MulHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_DIV_S: {
+                        offset = i32DivSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_DIV_U: {
+                        offset = i32DivUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_REM_S: {
+                        offset = i32RemSHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_REM_U: {
+                        offset = i32RemUHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_AND: {
+                        offset = i32AndHandler(offset, state, virtualState, frame);
+                        break;
+                    }
+                    case Bytecode.I32_OR: {
+                        offset = i32OrHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_EQ:
-                        i32_eq(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I32_XOR: {
+                        offset = i32XorHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_NE:
-                        i32_ne(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I32_SHL: {
+                        offset = i32ShlHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_LT_S:
-                        i32_lt_s(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I32_SHR_S: {
+                        offset = i32ShrSHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_LT_U:
-                        i32_lt_u(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I32_SHR_U: {
+                        offset = i32ShrUHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_GT_S:
-                        i32_gt_s(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I32_ROTL: {
+                        offset = i32RotlHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_GT_U:
-                        i32_gt_u(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I32_ROTR: {
+                        offset = i32RotrHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_LE_S:
-                        i32_le_s(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_CLZ: {
+                        offset = i64ClzHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_LE_U:
-                        i32_le_u(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_CTZ: {
+                        offset = i64CtzHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_GE_S:
-                        i32_ge_s(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_POPCNT: {
+                        offset = i64PopcntHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_GE_U:
-                        i32_ge_u(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_ADD: {
+                        offset = i64AddHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_EQZ:
-                        i64_eqz(frame, stackPointer);
+                    }
+                    case Bytecode.I64_SUB: {
+                        offset = i64SubHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_EQ:
-                        i64_eq(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_MUL: {
+                        offset = i64MulHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_NE:
-                        i64_ne(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_DIV_S: {
+                        offset = i64DivSHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_LT_S:
-                        i64_lt_s(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_DIV_U: {
+                        offset = i64DivUHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_LT_U:
-                        i64_lt_u(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_REM_S: {
+                        offset = i64RemSHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_GT_S:
-                        i64_gt_s(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_REM_U: {
+                        offset = i64RemUHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_GT_U:
-                        i64_gt_u(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_AND: {
+                        offset = i64AndHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_LE_S:
-                        i64_le_s(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_OR: {
+                        offset = i64OrHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_LE_U:
-                        i64_le_u(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_XOR: {
+                        offset = i64XorHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_GE_S:
-                        i64_ge_s(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_SHL: {
+                        offset = i64ShlHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_GE_U:
-                        i64_ge_u(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_SHR_S: {
+                        offset = i64ShrSHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_EQ:
-                        f32_eq(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_SHR_U: {
+                        offset = i64ShrUHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_NE:
-                        f32_ne(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_ROTL: {
+                        offset = i64RotlHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_LT:
-                        f32_lt(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.I64_ROTR: {
+                        offset = i64RotrHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_GT:
-                        f32_gt(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.F32_LE:
-                        f32_le(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.F32_GE:
-                        f32_ge(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.F64_EQ:
-                        f64_eq(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.F64_NE:
-                        f64_ne(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.F64_LT:
-                        f64_lt(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.F64_GT:
-                        f64_gt(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.F64_LE:
-                        f64_le(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.F64_GE:
-                        f64_ge(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_CLZ:
-                        i32_clz(frame, stackPointer);
-                        break;
-                    case Bytecode.I32_CTZ:
-                        i32_ctz(frame, stackPointer);
-                        break;
-                    case Bytecode.I32_POPCNT:
-                        i32_popcnt(frame, stackPointer);
-                        break;
-                    case Bytecode.I32_ADD:
-                        i32_add(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_SUB:
-                        i32_sub(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_MUL:
-                        i32_mul(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_DIV_S:
-                        i32_div_s(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_DIV_U:
-                        i32_div_u(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_REM_S:
-                        i32_rem_s(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_REM_U:
-                        i32_rem_u(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_AND:
-                        i32_and(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_OR:
-                        i32_or(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_XOR:
-                        i32_xor(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_SHL:
-                        i32_shl(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_SHR_S:
-                        i32_shr_s(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_SHR_U:
-                        i32_shr_u(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_ROTL:
-                        i32_rotl(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I32_ROTR:
-                        i32_rotr(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_CLZ:
-                        i64_clz(frame, stackPointer);
-                        break;
-                    case Bytecode.I64_CTZ:
-                        i64_ctz(frame, stackPointer);
-                        break;
-                    case Bytecode.I64_POPCNT:
-                        i64_popcnt(frame, stackPointer);
-                        break;
-                    case Bytecode.I64_ADD:
-                        i64_add(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_SUB:
-                        i64_sub(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_MUL:
-                        i64_mul(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_DIV_S:
-                        i64_div_s(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_DIV_U:
-                        i64_div_u(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_REM_S:
-                        i64_rem_s(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_REM_U:
-                        i64_rem_u(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_AND:
-                        i64_and(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_OR:
-                        i64_or(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_XOR:
-                        i64_xor(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_SHL:
-                        i64_shl(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_SHR_S:
-                        i64_shr_s(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_SHR_U:
-                        i64_shr_u(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_ROTL:
-                        i64_rotl(frame, stackPointer);
-                        stackPointer--;
-                        break;
-                    case Bytecode.I64_ROTR:
-                        i64_rotr(frame, stackPointer);
-                        stackPointer--;
-                        break;
+                    }
                     case Bytecode.F32_CONST: {
-                        float value = Float.intBitsToFloat(rawPeekI32(bytecode, offset));
-                        offset += 4;
-                        pushFloat(frame, stackPointer, value);
-                        stackPointer++;
+                        offset = f32ConstHandler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.F32_ABS:
-                        f32_abs(frame, stackPointer);
+                    case Bytecode.F32_ABS: {
+                        offset = f32AbsHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_NEG:
-                        f32_neg(frame, stackPointer);
+                    }
+                    case Bytecode.F32_NEG: {
+                        offset = f32NegHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_CEIL:
-                        f32_ceil(frame, stackPointer);
+                    }
+                    case Bytecode.F32_CEIL: {
+                        offset = f32CeilHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_FLOOR:
-                        f32_floor(frame, stackPointer);
+                    }
+                    case Bytecode.F32_FLOOR: {
+                        offset = f32FloorHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_TRUNC:
-                        f32_trunc(frame, stackPointer);
+                    }
+                    case Bytecode.F32_TRUNC: {
+                        offset = f32TruncHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_NEAREST:
-                        f32_nearest(frame, stackPointer);
+                    }
+                    case Bytecode.F32_NEAREST: {
+                        offset = f32NearestHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_SQRT:
-                        f32_sqrt(frame, stackPointer);
+                    }
+                    case Bytecode.F32_SQRT: {
+                        offset = f32SqrtHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_ADD:
-                        f32_add(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F32_ADD: {
+                        offset = f32AddHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_SUB:
-                        f32_sub(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F32_SUB: {
+                        offset = f32SubHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_MUL:
-                        f32_mul(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F32_MUL: {
+                        offset = f32MulHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_DIV:
-                        f32_div(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F32_DIV: {
+                        offset = f32DivHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_MIN:
-                        f32_min(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F32_MIN: {
+                        offset = f32MinHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_MAX:
-                        f32_max(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F32_MAX: {
+                        offset = f32MaxHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_COPYSIGN:
-                        f32_copysign(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F32_COPYSIGN: {
+                        offset = f32CopysignHandler(offset, state, virtualState, frame);
                         break;
+                    }
                     case Bytecode.F64_CONST: {
-                        double value = Double.longBitsToDouble(BinaryStreamParser.rawPeekI64(bytecode, offset));
-                        offset += 8;
-                        pushDouble(frame, stackPointer, value);
-                        stackPointer++;
+                        offset = f64ConstHandler(offset, state, virtualState, frame);
                         break;
                     }
-                    case Bytecode.F64_ABS:
-                        f64_abs(frame, stackPointer);
+                    case Bytecode.F64_ABS: {
+                        offset = f64AbsHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_NEG:
-                        f64_neg(frame, stackPointer);
+                    }
+                    case Bytecode.F64_NEG: {
+                        offset = f64NegHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_CEIL:
-                        f64_ceil(frame, stackPointer);
+                    }
+                    case Bytecode.F64_CEIL: {
+                        offset = f64CeilHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_FLOOR:
-                        f64_floor(frame, stackPointer);
+                    }
+                    case Bytecode.F64_FLOOR: {
+                        offset = f64FloorHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_TRUNC:
-                        f64_trunc(frame, stackPointer);
+                    }
+                    case Bytecode.F64_TRUNC: {
+                        offset = f64TruncHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_NEAREST:
-                        f64_nearest(frame, stackPointer);
+                    }
+                    case Bytecode.F64_NEAREST: {
+                        offset = f64NearestHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_SQRT:
-                        f64_sqrt(frame, stackPointer);
+                    }
+                    case Bytecode.F64_SQRT: {
+                        offset = f64SqrtHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_ADD:
-                        f64_add(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F64_ADD: {
+                        offset = f64AddHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_SUB:
-                        f64_sub(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F64_SUB: {
+                        offset = f64SubHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_MUL:
-                        f64_mul(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F64_MUL: {
+                        offset = f64MulHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_DIV:
-                        f64_div(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F64_DIV: {
+                        offset = f64DivHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_MIN:
-                        f64_min(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F64_MIN: {
+                        offset = f64MinHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_MAX:
-                        f64_max(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F64_MAX: {
+                        offset = f64MaxHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_COPYSIGN:
-                        f64_copysign(frame, stackPointer);
-                        stackPointer--;
+                    }
+                    case Bytecode.F64_COPYSIGN: {
+                        offset = f64CopysignHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_WRAP_I64:
-                        i32_wrap_i64(frame, stackPointer);
+                    }
+                    case Bytecode.I32_WRAP_I64: {
+                        offset = i32WrapI64Handler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_TRUNC_F32_S:
-                        i32_trunc_f32_s(frame, stackPointer);
+                    }
+                    case Bytecode.I32_TRUNC_F32_S: {
+                        offset = i32TruncF32SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_TRUNC_F32_U:
-                        i32_trunc_f32_u(frame, stackPointer);
+                    }
+                    case Bytecode.I32_TRUNC_F32_U: {
+                        offset = i32TruncF32UHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_TRUNC_F64_S:
-                        i32_trunc_f64_s(frame, stackPointer);
+                    }
+                    case Bytecode.I32_TRUNC_F64_S: {
+                        offset = i32TruncF64SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_TRUNC_F64_U:
-                        i32_trunc_f64_u(frame, stackPointer);
+                    }
+                    case Bytecode.I32_TRUNC_F64_U: {
+                        offset = i32TruncF64UHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_EXTEND_I32_S:
-                        i64_extend_i32_s(frame, stackPointer);
+                    }
+                    case Bytecode.I64_EXTEND_I32_S: {
+                        offset = i64ExtendI32SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_EXTEND_I32_U:
-                        i64_extend_i32_u(frame, stackPointer);
+                    }
+                    case Bytecode.I64_EXTEND_I32_U: {
+                        offset = i64ExtendI32UHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_TRUNC_F32_S:
-                        i64_trunc_f32_s(frame, stackPointer);
+                    }
+                    case Bytecode.I64_TRUNC_F32_S: {
+                        offset = i64TruncF32SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_TRUNC_F32_U:
-                        i64_trunc_f32_u(frame, stackPointer);
+                    }
+                    case Bytecode.I64_TRUNC_F32_U: {
+                        offset = i64TruncF32UHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_TRUNC_F64_S:
-                        i64_trunc_f64_s(frame, stackPointer);
+                    }
+                    case Bytecode.I64_TRUNC_F64_S: {
+                        offset = i64TruncF64SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_TRUNC_F64_U:
-                        i64_trunc_f64_u(frame, stackPointer);
+                    }
+                    case Bytecode.I64_TRUNC_F64_U: {
+                        offset = i64TruncF64UHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_CONVERT_I32_S:
-                        f32_convert_i32_s(frame, stackPointer);
+                    }
+                    case Bytecode.F32_CONVERT_I32_S: {
+                        offset = f32ConvertI32SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_CONVERT_I32_U:
-                        f32_convert_i32_u(frame, stackPointer);
+                    }
+                    case Bytecode.F32_CONVERT_I32_U: {
+                        offset = f32ConvertI32UHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_CONVERT_I64_S:
-                        f32_convert_i64_s(frame, stackPointer);
+                    }
+                    case Bytecode.F32_CONVERT_I64_S: {
+                        offset = f32ConvertI64SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_CONVERT_I64_U:
-                        f32_convert_i64_u(frame, stackPointer);
+                    }
+                    case Bytecode.F32_CONVERT_I64_U: {
+                        offset = f32ConvertI64UHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_DEMOTE_F64:
-                        f32_demote_f64(frame, stackPointer);
+                    }
+                    case Bytecode.F32_DEMOTE_F64: {
+                        offset = f32DemoteF64Handler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_CONVERT_I32_S:
-                        f64_convert_i32_s(frame, stackPointer);
+                    }
+                    case Bytecode.F64_CONVERT_I32_S: {
+                        offset = f64ConvertI32SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_CONVERT_I32_U:
-                        f64_convert_i32_u(frame, stackPointer);
+                    }
+                    case Bytecode.F64_CONVERT_I32_U: {
+                        offset = f64ConvertI32UHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_CONVERT_I64_S:
-                        f64_convert_i64_s(frame, stackPointer);
+                    }
+                    case Bytecode.F64_CONVERT_I64_S: {
+                        offset = f64ConvertI64SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_CONVERT_I64_U:
-                        f64_convert_i64_u(frame, stackPointer);
+                    }
+                    case Bytecode.F64_CONVERT_I64_U: {
+                        offset = f64ConvertI64UHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_PROMOTE_F32:
-                        f64_promote_f32(frame, stackPointer);
+                    }
+                    case Bytecode.F64_PROMOTE_F32: {
+                        offset = f64PromoteF32Handler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_REINTERPRET_F32:
-                        i32_reinterpret_f32(frame, stackPointer);
+                    }
+                    case Bytecode.I32_REINTERPRET_F32: {
+                        offset = i32ReinterpretF32Handler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_REINTERPRET_F64:
-                        i64_reinterpret_f64(frame, stackPointer);
+                    }
+                    case Bytecode.I64_REINTERPRET_F64: {
+                        offset = i64ReinterpretF64Handler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F32_REINTERPRET_I32:
-                        f32_reinterpret_i32(frame, stackPointer);
+                    }
+                    case Bytecode.F32_REINTERPRET_I32: {
+                        offset = f32ReinterpretI32Handler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.F64_REINTERPRET_I64:
-                        f64_reinterpret_i64(frame, stackPointer);
+                    }
+                    case Bytecode.F64_REINTERPRET_I64: {
+                        offset = f64ReinterpretI64Handler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_EXTEND8_S:
-                        i32_extend8_s(frame, stackPointer);
+                    }
+                    case Bytecode.I32_EXTEND8_S: {
+                        offset = i32Extend8SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I32_EXTEND16_S:
-                        i32_extend16_s(frame, stackPointer);
+                    }
+                    case Bytecode.I32_EXTEND16_S: {
+                        offset = i32Extend16SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_EXTEND8_S:
-                        i64_extend8_s(frame, stackPointer);
+                    }
+                    case Bytecode.I64_EXTEND8_S: {
+                        offset = i64Extend8SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_EXTEND16_S:
-                        i64_extend16_s(frame, stackPointer);
+                    }
+                    case Bytecode.I64_EXTEND16_S: {
+                        offset = i64Extend16SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.I64_EXTEND32_S:
-                        i64_extend32_s(frame, stackPointer);
+                    }
+                    case Bytecode.I64_EXTEND32_S: {
+                        offset = i64Extend32SHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.REF_NULL:
-                        pushReference(frame, stackPointer, WasmConstant.NULL);
-                        stackPointer++;
+                    }
+                    case Bytecode.REF_NULL: {
+                        offset = refNullHandler(offset, state, virtualState, frame);
                         break;
-                    case Bytecode.REF_IS_NULL:
-                        final Object refType = popReference(frame, stackPointer - 1);
-                        pushInt(frame, stackPointer - 1, refType == WasmConstant.NULL ? 1 : 0);
+                    }
+                    case Bytecode.REF_IS_NULL: {
+                        offset = refIsNullHandler(offset, state, virtualState, frame);
                         break;
+                    }
                     case Bytecode.REF_FUNC: {
-                        final int functionIndex = rawPeekI32(bytecode, offset);
-                        final WasmFunction function = module.symbolTable().function(functionIndex);
-                        final WasmFunctionInstance functionInstance = instance.functionInstance(function);
-                        pushReference(frame, stackPointer, functionInstance);
-                        stackPointer++;
-                        offset += 4;
+                        offset = refFuncHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.AGGREGATE: {
-                        final int aggregateOpcode = rawPeekU8(bytecode, offset);
-                        offset++;
-                        CompilerAsserts.partialEvaluationConstant(aggregateOpcode);
-                        switch (aggregateOpcode) {
-                            case Bytecode.STRUCT_NEW: {
-                                final int structTypeIdx = rawPeekI32(bytecode, offset);
-                                offset += 4;
-
-                                final WasmStructAccess structAccess = module.structTypeAccess(structTypeIdx);
-                                final int numFields = module.structTypeFieldCount(structTypeIdx);
-
-                                WasmStruct struct = structAccess.shape().getFactory().create(module.closedTypeAt(structTypeIdx));
-                                popStructFields(frame, structTypeIdx, struct, structAccess, numFields, stackPointer);
-                                stackPointer -= numFields;
-                                WasmFrame.pushReference(frame, stackPointer++, struct);
-                                break;
-                            }
-                            case Bytecode.ARRAY_NEW_FIXED: {
-                                final int arrayTypeIdx = rawPeekI32(bytecode, offset);
-                                final int length = rawPeekI32(bytecode, offset + 4);
-                                offset += 8;
-
-                                final DefinedType arrayType = module.closedTypeAt(arrayTypeIdx);
-                                final int elemType = module.arrayTypeElemType(arrayTypeIdx);
-
-                                WasmArray array = popArrayElements(frame, arrayType, elemType, length, stackPointer);
-                                stackPointer -= length;
-                                WasmFrame.pushReference(frame, stackPointer++, array);
-                                break;
-                            }
-                            default: {
-                                offset = executeAggregate(instance, frame, offset, stackPointer, aggregateOpcode);
-                                stackPointer += StackEffects.getAggregateOpStackEffect(aggregateOpcode);
-                                break;
-                            }
-                        }
+                        offset = aggregateHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.MISC: {
-                        final int miscOpcode = rawPeekU8(bytecode, offset);
-                        offset++;
-                        CompilerAsserts.partialEvaluationConstant(miscOpcode);
-                        switch (miscOpcode) {
-                            case Bytecode.THROW: {
-                                codeEntry.exceptionBranch();
-                                final int tagIndex = rawPeekI32(bytecode, offset);
-                                final int functionTypeIndex = module.tagTypeIndex(tagIndex);
-                                final int numFields = module.functionTypeParamCount(functionTypeIndex);
-                                final Object[] fields = createFieldsForException(frame, functionTypeIndex, numFields, stackPointer);
-                                stackPointer -= numFields;
-                                offset += 4;
-                                throw createException(instance.tag(tagIndex), fields);
-                            }
-                            case Bytecode.THROW_REF: {
-                                codeEntry.exceptionBranch();
-                                final Object exception = popReference(frame, stackPointer - 1);
-                                stackPointer--;
-                                assert exception != null : "Exception object has to be a valid exception or wasm null";
-                                if (exception == WasmConstant.NULL) {
-                                    throw WasmException.create(Failure.NULL_REFERENCE);
-                                }
-                                assert exception instanceof WasmRuntimeException : "Only wasm exceptions can be thrown by throw_ref";
-                                throw (WasmRuntimeException) exception;
-                            }
-                            case Bytecode.BR_ON_NULL_U8: {
-                                Object reference = popReference(frame, --stackPointer);
-                                if (profileCondition(bytecode, offset + 1, reference == WasmConstant.NULL)) {
-                                    final int offsetDelta = rawPeekU8(bytecode, offset);
-                                    // BR_ON_NULL_U8 encodes the back jump value as a positive byte
-                                    // value. BR_ON_NULL_U8 can never perform a forward jump.
-                                    offset -= offsetDelta;
-                                } else {
-                                    offset += 3;
-                                    pushReference(frame, stackPointer++, reference);
-                                }
-                                break;
-                            }
-                            case Bytecode.BR_ON_NULL_I32: {
-                                Object reference = popReference(frame, --stackPointer);
-                                if (profileCondition(bytecode, offset + 4, reference == WasmConstant.NULL)) {
-                                    final int offsetDelta = rawPeekI32(bytecode, offset);
-                                    offset += offsetDelta;
-                                } else {
-                                    offset += 6;
-                                    pushReference(frame, stackPointer++, reference);
-                                }
-                                break;
-                            }
-                            case Bytecode.BR_ON_NON_NULL_U8: {
-                                Object reference = popReference(frame, --stackPointer);
-                                if (profileCondition(bytecode, offset + 1, reference != WasmConstant.NULL)) {
-                                    final int offsetDelta = rawPeekU8(bytecode, offset);
-                                    // BR_ON_NULL_U8 encodes the back jump value as a positive byte
-                                    // value. BR_ON_NULL_U8
-                                    // can never perform a forward jump.
-                                    offset -= offsetDelta;
-                                    pushReference(frame, stackPointer++, reference);
-                                } else {
-                                    offset += 3;
-                                }
-                                break;
-                            }
-                            case Bytecode.BR_ON_NON_NULL_I32: {
-                                Object reference = popReference(frame, --stackPointer);
-                                if (profileCondition(bytecode, offset + 4, reference != WasmConstant.NULL)) {
-                                    final int offsetDelta = rawPeekI32(bytecode, offset);
-                                    offset += offsetDelta;
-                                    pushReference(frame, stackPointer++, reference);
-                                } else {
-                                    offset += 6;
-                                }
-                                break;
-                            }
-                            default: {
-                                offset = executeMisc(instance, frame, offset, stackPointer, miscOpcode);
-                                stackPointer += StackEffects.getMiscOpStackEffect(miscOpcode);
-                                break;
-                            }
-                        }
+                        offset = miscHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.ATOMIC: {
-                        final int atomicOpcode = rawPeekU8(bytecode, offset);
-                        offset++;
-                        CompilerAsserts.partialEvaluationConstant(atomicOpcode);
-                        if (atomicOpcode == Bytecode.ATOMIC_FENCE) {
-                            break;
-                        }
-
-                        final int encoding = rawPeekU8(bytecode, offset);
-                        offset++;
-                        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
-                        final int memoryIndex = rawPeekI32(bytecode, offset);
-                        offset += 4;
-                        final long memOffset;
-                        if (indexType64 == 0) {
-                            memOffset = rawPeekU32(bytecode, offset);
-                            offset += 4;
-                        } else {
-                            memOffset = rawPeekI64(bytecode, offset);
-                            offset += 8;
-                        }
-
-                        final WasmMemory memory = memory(instance, memoryIndex);
-                        final int stackPointerDecrement = executeAtomic(frame, stackPointer, atomicOpcode, memory, memoryLib(memoryIndex), memOffset, indexType64);
-                        stackPointer -= stackPointerDecrement;
+                        offset = atomicHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.VECTOR: {
-                        final int vectorOpcode = rawPeekU8(bytecode, offset);
-                        offset++;
-                        CompilerAsserts.partialEvaluationConstant(vectorOpcode);
-                        offset = executeVector(instance, frame, offset, stackPointer, vectorOpcode);
-                        stackPointer += StackEffects.getVectorOpStackEffect(vectorOpcode);
+                        offset = vectorHandler(offset, state, virtualState, frame);
                         break;
                     }
                     case Bytecode.NOTIFY: {
-                        final int nextLineIndex = rawPeekI32(bytecode, offset);
-                        final int sourceCodeLocation = rawPeekI32(bytecode, offset + 4);
-                        offset += 8;
-                        assert notifyFunction != null;
-                        notifyFunction.notifyLine(frame, lineIndex, nextLineIndex, sourceCodeLocation);
-                        lineIndex = nextLineIndex;
+                        offset = notifyHandler(offset, state, virtualState, frame);
                         break;
                     }
                     default:
                         throw CompilerDirectives.shouldNotReachHere();
                 }
+            } catch (WasmOSRException osrExc) {
+                return osrExc.osrResult;
             } catch (WasmRuntimeException e) {
+                assert state.exceptionOffset != 0 : "exceptionOffset not properly set up. Must be non-0.";
+
                 codeEntry.exceptionBranch();
-                CompilerAsserts.partialEvaluationConstant(stackPointer);
+                CompilerAsserts.partialEvaluationConstant(virtualState.stackPointer);
                 CompilerAsserts.partialEvaluationConstant(offset);
+                CompilerAsserts.partialEvaluationConstant(state.exceptionOffset);
 
                 int exceptionTableOffset = this.exceptionTableOffset;
 
@@ -1760,7 +1473,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                      * offset is the source of the exception, i.e., the throw or throw_ref raising
                      * the exception or the call that forwarded the exception.
                      */
-                    if (from < offset && offset <= to) {
+                    if (from < state.exceptionOffset && state.exceptionOffset <= to) {
                         final int catchType = rawPeekU8(bytecode, exceptionTableOffset);
                         exceptionTableOffset++;
                         final int tagIndex;
@@ -1778,7 +1491,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                             tagIndex = -1;
                             exceptionTableOffset += 4;
                         }
-                        stackPointer = pushExceptionFieldsAndReference(frame, e, stackPointer, catchType, tagIndex);
+                        virtualState.stackPointer = pushExceptionFieldsAndReference(frame, e, virtualState.stackPointer, catchType, tagIndex);
                         // load target
                         offset = rawPeekI32(bytecode, exceptionTableOffset);
                         continue loop;
@@ -1790,7 +1503,3156 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 throw e;
             }
         }
-        return WasmConstant.RETURN_VALUE;
+    }
+
+    @SuppressWarnings("serial")
+    private static class WasmOSRException extends ControlFlowException {
+
+        @Serial private static final long serialVersionUID = 171629579745510728L;
+
+        private final Object osrResult;
+
+        WasmOSRException(Object osrResult) {
+            this.osrResult = osrResult;
+        }
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOOP}, safepoint = true)
+    private static int loopHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        if (CompilerDirectives.hasNextTier()) {
+            int count = CompilerDirectives.inCompiledCode() ? ++state.backEdgeCounter.count : ++state.interpreterBackEdgeCounter;
+            if (CompilerDirectives.injectBranchProbability(0.001, count >= REPORT_LOOP_STRIDE)) {
+                TruffleSafepoint.poll(state.thiz);
+                LoopNode.reportLoopCount(state.thiz, REPORT_LOOP_STRIDE);
+                if (CompilerDirectives.inInterpreter() && BytecodeOSRNode.pollOSRBackEdge(state.thiz, REPORT_LOOP_STRIDE)) {
+                    Object result = BytecodeOSRNode.tryOSR(state.thiz, offset + 1 | ((long) virtualState.stackPointer << 32), state.lineIndex, null, frame);
+                    if (result != null) {
+                        throw new WasmOSRException(result);
+                    }
+                }
+                if (CompilerDirectives.inInterpreter()) {
+                    state.interpreterBackEdgeCounter = 0;
+                } else {
+                    state.backEdgeCounter.count = 0;
+                }
+            }
+        }
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.IF}, safepoint = false)
+    private static int ifHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        virtualState.stackPointer--;
+        if (profileCondition(state.bytecode, offset + 5, popBoolean(frame, virtualState.stackPointer))) {
+            return offset + 7;
+        }
+        final int offsetDelta = rawPeekI32(state.bytecode, offset + 1);
+        return offset + 1 + offsetDelta;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.BR_U8}, safepoint = false)
+    private static int brU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int offsetDelta = rawPeekU8(state.bytecode, offset + 1);
+        /*
+         * BR_U8 encodes the back jump value as a positive byte value. BR_U8 can never perform a
+         * forward jump.
+         */
+        return offset + 1 - offsetDelta;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.BR_I32}, safepoint = false)
+    private static int brI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int offsetDelta = rawPeekI32(state.bytecode, offset + 1);
+        return offset + 1 + offsetDelta;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.BR_IF_U8}, safepoint = false)
+    private static int brIfU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        virtualState.stackPointer--;
+        if (profileCondition(state.bytecode, offset + 2, popBoolean(frame, virtualState.stackPointer))) {
+            final int offsetDelta = rawPeekU8(state.bytecode, offset + 1);
+            /*
+             * BR_IF_U8 encodes the back jump value as a positive byte value. BR_IF_U8 can never
+             * perform a forward jump.
+             */
+            return offset + 1 - offsetDelta;
+        }
+        return offset + 4;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.BR_IF_I32}, safepoint = false)
+    private static int brIfI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        virtualState.stackPointer--;
+        if (profileCondition(state.bytecode, offset + 5, popBoolean(frame, virtualState.stackPointer))) {
+            final int offsetDelta = rawPeekI32(state.bytecode, offset + 1);
+            return offset + 1 + offsetDelta;
+        }
+        return offset + 7;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.BR_TABLE_U8}, safepoint = false)
+    private static int brTableU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        virtualState.stackPointer--;
+        int index = popInt(frame, virtualState.stackPointer);
+        final int size = rawPeekU8(state.bytecode, offset + 1);
+        final int counterOffset = offset + 2;
+        if (HostCompilerDirectives.inInterpreterFastPath()) {
+            if (index < 0 || index >= size) {
+                // If unsigned index is larger or equal to the table size use the
+                // default (last) index.
+                index = size - 1;
+            }
+            final int indexOffset = offset + 4 + index * 6;
+            updateBranchTableProfile(state.bytecode, counterOffset, indexOffset + 4);
+            final int offsetDelta = rawPeekI32(state.bytecode, indexOffset);
+            return indexOffset + offsetDelta;
+        } else {
+            /*
+             * This loop is implemented to create a separate path for every index. This guarantees
+             * that all values inside the if statement are treated as compile time constants, since
+             * the loop is unrolled.
+             *
+             * We keep track of the sum of the preceding profiles to adjust the independent
+             * probabilities to conditional ones. This gets explained in profileBranchTable().
+             */
+            int precedingSum = 0;
+            for (int i = 0; i < size; i++) {
+                final int indexOffset = offset + 4 + i * 6;
+                int profile = rawPeekU16(state.bytecode, indexOffset + 4);
+                if (profileBranchTable(state.bytecode, counterOffset, profile, precedingSum, i == index || i == size - 1)) {
+                    final int offsetDelta = rawPeekI32(state.bytecode, indexOffset);
+                    return indexOffset + offsetDelta;
+                }
+                precedingSum += profile;
+            }
+            throw CompilerDirectives.shouldNotReachHere("br_table");
+        }
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.BR_TABLE_I32}, safepoint = false)
+    private static int brTableI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        virtualState.stackPointer--;
+        int index = popInt(frame, virtualState.stackPointer);
+        final int size = rawPeekI32(state.bytecode, offset + 1);
+        final int counterOffset = offset + 5;
+        if (HostCompilerDirectives.inInterpreterFastPath()) {
+            if (index < 0 || index >= size) {
+                // If unsigned index is larger or equal to the table size use the
+                // default (last) index.
+                index = size - 1;
+            }
+            final int indexOffset = offset + 7 + index * 6;
+            updateBranchTableProfile(state.bytecode, counterOffset, indexOffset + 4);
+            final int offsetDelta = rawPeekI32(state.bytecode, indexOffset);
+            return indexOffset + offsetDelta;
+        } else {
+            /*
+             * This loop is implemented to create a separate path for every index. This guarantees
+             * that all values inside the if statement are treated as compile time constants, since
+             * the loop is unrolled.
+             */
+            int precedingSum = 0;
+            for (int i = 0; i < size; i++) {
+                final int indexOffset = offset + 7 + i * 6;
+                int profile = rawPeekU16(state.bytecode, indexOffset + 4);
+                if (profileBranchTable(state.bytecode, counterOffset, profile, precedingSum, i == index || i == size - 1)) {
+                    final int offsetDelta = rawPeekI32(state.bytecode, indexOffset);
+                    return indexOffset + offsetDelta;
+                }
+                precedingSum += profile;
+            }
+            throw CompilerDirectives.shouldNotReachHere("br_table");
+        }
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.CALL_U8}, safepoint = false)
+    private static int callU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int callNodeIndex = rawPeekU8(state.bytecode, offset + 1);
+        final int functionIndex = rawPeekU8(state.bytecode, offset + 2);
+        WasmFunction function = state.module.symbolTable().function(functionIndex);
+        int paramCount = function.paramCount();
+        Object[] args = state.thiz.createArgumentsForCall(frame, function.typeIndex(), paramCount, virtualState.stackPointer);
+        virtualState.stackPointer -= paramCount;
+        state.exceptionOffset = offset + 3;
+        virtualState.stackPointer = state.thiz.executeDirectCall(frame, virtualState.stackPointer, state.instance, callNodeIndex, function, args);
+        state.exceptionOffset = 0;
+        CompilerAsserts.partialEvaluationConstant(virtualState.stackPointer);
+        return offset + 3;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.CALL_I32}, safepoint = false)
+    private static int callI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int callNodeIndex = rawPeekI32(state.bytecode, offset + 1);
+        final int functionIndex = rawPeekI32(state.bytecode, offset + 5);
+        WasmFunction function = state.module.symbolTable().function(functionIndex);
+        int paramCount = function.paramCount();
+        Object[] args = state.thiz.createArgumentsForCall(frame, function.typeIndex(), paramCount, virtualState.stackPointer);
+        virtualState.stackPointer -= paramCount;
+        state.exceptionOffset = offset + 9;
+        virtualState.stackPointer = state.thiz.executeDirectCall(frame, virtualState.stackPointer, state.instance, callNodeIndex, function, args);
+        state.exceptionOffset = 0;
+        CompilerAsserts.partialEvaluationConstant(virtualState.stackPointer);
+        return offset + 9;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.CALL_INDIRECT_U8}, safepoint = false)
+    private static int callIndirectU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int callNodeIndex = rawPeekU8(state.bytecode, offset + 1);
+        final int expectedFunctionTypeIndex = rawPeekU8(state.bytecode, offset + 2);
+        final int tableIndex = rawPeekU8(state.bytecode, offset + 3);
+        final WasmTable table = state.instance.table(tableIndex);
+        final Object[] elements = table.elements();
+        final int elementIndex = popInt(frame, --virtualState.stackPointer);
+        if (elementIndex < 0 || elementIndex >= elements.length) {
+            enterErrorBranch(state.thiz.codeEntry);
+            throw WasmException.format(Failure.UNDEFINED_ELEMENT, state.thiz, "Element index '%d' out of table bounds.", elementIndex);
+        }
+        // Currently, table elements may only be functions.
+        // We can add a check here when this changes in the future.
+        final Object functionCandidate = elements[elementIndex];
+        if (!(functionCandidate instanceof WasmFunctionInstance functionInstance)) {
+            throw state.thiz.callIndirectNotAFunctionError(functionCandidate, elementIndex);
+        }
+        final WasmFunction function = functionInstance.function();
+        final CallTarget target = functionInstance.target();
+        final WasmContext functionInstanceContext = functionInstance.context();
+        // Target function instance must be from the same context.
+        assert functionInstanceContext == WasmContext.get(state.thiz);
+        // Validate that the target function type matches the expected type of
+        // the indirect call.
+        if (!state.thiz.runTimeConcreteTypeCheck(expectedFunctionTypeIndex, functionInstance)) {
+            enterErrorBranch(state.thiz.codeEntry);
+            state.thiz.failFunctionTypeCheck(function, expectedFunctionTypeIndex);
+        }
+        // Invoke the resolved function.
+        int paramCount = state.module.symbolTable().functionTypeParamCount(expectedFunctionTypeIndex);
+        Object[] args = state.thiz.createArgumentsForCall(frame, expectedFunctionTypeIndex, paramCount, virtualState.stackPointer);
+        virtualState.stackPointer -= paramCount;
+        WasmArguments.setModuleInstance(args, functionInstance.moduleInstance());
+        state.exceptionOffset = offset + 4;
+        final Object result = state.thiz.executeIndirectCallNode(callNodeIndex, target, args);
+        state.exceptionOffset = 0;
+        virtualState.stackPointer = state.thiz.pushIndirectCallResult(frame, virtualState.stackPointer, expectedFunctionTypeIndex, result, state.language);
+        CompilerAsserts.partialEvaluationConstant(virtualState.stackPointer);
+        return offset + 4;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.CALL_INDIRECT_I32}, safepoint = false)
+    private static int callIndirectI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int callNodeIndex = rawPeekI32(state.bytecode, offset + 1);
+        final int expectedFunctionTypeIndex = rawPeekI32(state.bytecode, offset + 5);
+        final int tableIndex = rawPeekI32(state.bytecode, offset + 9);
+        final WasmTable table = state.instance.table(tableIndex);
+        final Object[] elements = table.elements();
+        final int elementIndex = popInt(frame, --virtualState.stackPointer);
+        if (elementIndex < 0 || elementIndex >= elements.length) {
+            enterErrorBranch(state.thiz.codeEntry);
+            throw WasmException.format(Failure.UNDEFINED_ELEMENT, state.thiz, "Element index '%d' out of table bounds.", elementIndex);
+        }
+        // Currently, table elements may only be functions.
+        // We can add a check here when this changes in the future.
+        final Object functionCandidate = elements[elementIndex];
+        if (!(functionCandidate instanceof WasmFunctionInstance functionInstance)) {
+            throw state.thiz.callIndirectNotAFunctionError(functionCandidate, elementIndex);
+        }
+        final WasmFunction function = functionInstance.function();
+        final CallTarget target = functionInstance.target();
+        final WasmContext functionInstanceContext = functionInstance.context();
+        // Target function instance must be from the same context.
+        assert functionInstanceContext == WasmContext.get(state.thiz);
+        // Validate that the target function type matches the expected type of
+        // the indirect call.
+        if (!state.thiz.runTimeConcreteTypeCheck(expectedFunctionTypeIndex, functionInstance)) {
+            enterErrorBranch(state.thiz.codeEntry);
+            state.thiz.failFunctionTypeCheck(function, expectedFunctionTypeIndex);
+        }
+        // Invoke the resolved function.
+        int paramCount = state.module.symbolTable().functionTypeParamCount(expectedFunctionTypeIndex);
+        Object[] args = state.thiz.createArgumentsForCall(frame, expectedFunctionTypeIndex, paramCount, virtualState.stackPointer);
+        virtualState.stackPointer -= paramCount;
+        WasmArguments.setModuleInstance(args, functionInstance.moduleInstance());
+        state.exceptionOffset = offset + 13;
+        final Object result = state.thiz.executeIndirectCallNode(callNodeIndex, target, args);
+        state.exceptionOffset = 0;
+        virtualState.stackPointer = state.thiz.pushIndirectCallResult(frame, virtualState.stackPointer, expectedFunctionTypeIndex, result, state.language);
+        CompilerAsserts.partialEvaluationConstant(virtualState.stackPointer);
+        return offset + 13;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.CALL_REF_U8}, safepoint = false)
+    private static int callRefU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int callNodeIndex = rawPeekU8(state.bytecode, offset + 1);
+        final int expectedFunctionTypeIndex = rawPeekU8(state.bytecode, offset + 2);
+        final Object functionCandidate = popReference(frame, --virtualState.stackPointer);
+        if (!(functionCandidate instanceof WasmFunctionInstance functionInstance)) {
+            throw state.thiz.callRefNotAFunctionError(functionCandidate);
+        }
+        final CallTarget target = functionInstance.target();
+        final WasmContext functionInstanceContext = functionInstance.context();
+        // Target function instance must be from the same context.
+        assert functionInstanceContext == WasmContext.get(state.thiz);
+        // Invoke the resolved function.
+        int paramCount = state.module.symbolTable().functionTypeParamCount(expectedFunctionTypeIndex);
+        Object[] args = state.thiz.createArgumentsForCall(frame, expectedFunctionTypeIndex, paramCount, virtualState.stackPointer);
+        virtualState.stackPointer -= paramCount;
+        WasmArguments.setModuleInstance(args, functionInstance.moduleInstance());
+        state.exceptionOffset = offset + 3;
+        final Object result = state.thiz.executeIndirectCallNode(callNodeIndex, target, args);
+        state.exceptionOffset = 0;
+        virtualState.stackPointer = state.thiz.pushIndirectCallResult(frame, virtualState.stackPointer, expectedFunctionTypeIndex, result, state.language);
+        CompilerAsserts.partialEvaluationConstant(virtualState.stackPointer);
+        return offset + 3;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.CALL_REF_I32}, safepoint = false)
+    private static int callRefI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int callNodeIndex = rawPeekI32(state.bytecode, offset + 1);
+        final int expectedFunctionTypeIndex = rawPeekI32(state.bytecode, offset + 5);
+        final Object functionCandidate = popReference(frame, --virtualState.stackPointer);
+        if (!(functionCandidate instanceof WasmFunctionInstance functionInstance)) {
+            throw state.thiz.callRefNotAFunctionError(functionCandidate);
+        }
+        final CallTarget target = functionInstance.target();
+        final WasmContext functionInstanceContext = functionInstance.context();
+        // Target function instance must be from the same context.
+        assert functionInstanceContext == WasmContext.get(state.thiz);
+        // Invoke the resolved function.
+        int paramCount = state.module.symbolTable().functionTypeParamCount(expectedFunctionTypeIndex);
+        Object[] args = state.thiz.createArgumentsForCall(frame, expectedFunctionTypeIndex, paramCount, virtualState.stackPointer);
+        virtualState.stackPointer -= paramCount;
+        WasmArguments.setModuleInstance(args, functionInstance.moduleInstance());
+        state.exceptionOffset = offset + 9;
+        final Object result = state.thiz.executeIndirectCallNode(callNodeIndex, target, args);
+        state.exceptionOffset = 0;
+        virtualState.stackPointer = state.thiz.pushIndirectCallResult(frame, virtualState.stackPointer, expectedFunctionTypeIndex, result, state.language);
+        CompilerAsserts.partialEvaluationConstant(virtualState.stackPointer);
+        return offset + 9;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LABEL_I32}, safepoint = false)
+    private static int labelI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int resultType = rawPeekU8(state.bytecode, offset + 1);
+        final int resultCount = rawPeekI32(state.bytecode, offset + 2);
+        final int stackSize = rawPeekI32(state.bytecode, offset + 6);
+        final int targetStackPointer = stackSize + state.localCount;
+        switch (resultType) {
+            case BytecodeBitEncoding.LABEL_RESULT_TYPE_NUM:
+                unwindPrimitiveStack(frame, virtualState.stackPointer, targetStackPointer, resultCount);
+                break;
+            case BytecodeBitEncoding.LABEL_RESULT_TYPE_OBJ:
+                unwindObjectStack(frame, virtualState.stackPointer, targetStackPointer, resultCount);
+                break;
+            case BytecodeBitEncoding.LABEL_RESULT_TYPE_MIX:
+                unwindStack(frame, virtualState.stackPointer, targetStackPointer, resultCount);
+                break;
+        }
+        dropStack(frame, virtualState.stackPointer, targetStackPointer + resultCount);
+        virtualState.stackPointer = targetStackPointer + resultCount;
+        return offset + 10;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LABEL_U16}, safepoint = false)
+    private static int labelU16Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int value = rawPeekU8(state.bytecode, offset + 1);
+        final int stackSize = rawPeekU8(state.bytecode, offset + 2);
+        final int resultCount = (value & BytecodeBitEncoding.LABEL_U16_RESULT_VALUE);
+        final int resultType = (value & BytecodeBitEncoding.LABEL_U16_RESULT_TYPE_MASK);
+        final int targetStackPointer = stackSize + state.localCount;
+        switch (resultType) {
+            case BytecodeBitEncoding.LABEL_U16_RESULT_TYPE_NUM:
+                unwindPrimitiveStack(frame, virtualState.stackPointer, targetStackPointer, resultCount);
+                break;
+            case BytecodeBitEncoding.LABEL_U16_RESULT_TYPE_OBJ:
+                unwindObjectStack(frame, virtualState.stackPointer, targetStackPointer, resultCount);
+                break;
+            case BytecodeBitEncoding.LABEL_U16_RESULT_TYPE_MIX:
+                unwindStack(frame, virtualState.stackPointer, targetStackPointer, resultCount);
+                break;
+        }
+        dropStack(frame, virtualState.stackPointer, targetStackPointer + resultCount);
+        virtualState.stackPointer = targetStackPointer + resultCount;
+        return offset + 3;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LABEL_U8}, safepoint = false)
+    private static int labelU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int value = rawPeekU8(state.bytecode, offset + 1);
+        final int stackSize = (value & BytecodeBitEncoding.LABEL_U8_STACK_VALUE);
+        final int targetStackPointer = stackSize + state.localCount;
+        switch ((value & BytecodeBitEncoding.LABEL_U8_RESULT_MASK)) {
+            case BytecodeBitEncoding.LABEL_U8_RESULT_NUM:
+                WasmFrame.copyPrimitive(frame, virtualState.stackPointer - 1, targetStackPointer);
+                dropStack(frame, virtualState.stackPointer, targetStackPointer + 1);
+                virtualState.stackPointer = targetStackPointer + 1;
+                break;
+            case BytecodeBitEncoding.LABEL_U8_RESULT_OBJ:
+                WasmFrame.copyObject(frame, virtualState.stackPointer - 1, targetStackPointer);
+                dropStack(frame, virtualState.stackPointer, targetStackPointer + 1);
+                virtualState.stackPointer = targetStackPointer + 1;
+                break;
+            default:
+                dropStack(frame, virtualState.stackPointer, targetStackPointer);
+                virtualState.stackPointer = targetStackPointer;
+                break;
+        }
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("all")
+    @BytecodeInterpreterFetchOpcode
+    private static int nextOpcode(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        assert offset < state.thiz.bytecodeEndOffset;
+        return rawPeekU8(state.bytecode, offset);
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_CONST_I8}, safepoint = false)
+    private static int i32ConstI8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int value = rawPeekI8(state.bytecode, offset + 1);
+        pushInt(frame, virtualState.stackPointer, value);
+        virtualState.stackPointer++;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_CONST_I32}, safepoint = false)
+    private static int i32ConstI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int value = rawPeekI32(state.bytecode, offset + 1);
+        pushInt(frame, virtualState.stackPointer, value);
+        virtualState.stackPointer++;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_GET_I32}, safepoint = false)
+    private static int localGetI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekI32(state.bytecode, offset + 1);
+        local_get(frame, virtualState.stackPointer, index);
+        virtualState.stackPointer++;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_GET_U8}, safepoint = false)
+    private static int localGetU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekU8(state.bytecode, offset + 1);
+        local_get(frame, virtualState.stackPointer, index);
+        virtualState.stackPointer++;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.SKIP_LABEL_U8}, safepoint = false)
+    private static int skipLabelU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        return offset + 1 + Bytecode.SKIP_LABEL_U8;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.SKIP_LABEL_U16}, safepoint = false)
+    private static int skipLabelU16Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        return offset + 1 + Bytecode.SKIP_LABEL_U16;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.SKIP_LABEL_I32}, safepoint = false)
+    private static int skipLabelI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        return offset + 1 + Bytecode.SKIP_LABEL_I32;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.NOP}, safepoint = false)
+    private static int nopHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_EQZ}, safepoint = false)
+    private static int i32EqzHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_eqz(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_EQ}, safepoint = false)
+    private static int i32EqHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_eq(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_NE}, safepoint = false)
+    private static int i32NeHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_ne(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LT_S}, safepoint = false)
+    private static int i32LtSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_lt_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LT_U}, safepoint = false)
+    private static int i32LtUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_lt_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_GT_S}, safepoint = false)
+    private static int i32GtSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_gt_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_GT_U}, safepoint = false)
+    private static int i32GtUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_gt_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LE_S}, safepoint = false)
+    private static int i32LeSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_le_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LE_U}, safepoint = false)
+    private static int i32LeUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_le_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_GE_S}, safepoint = false)
+    private static int i32GeSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_ge_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_GE_U}, safepoint = false)
+    private static int i32GeUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_ge_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_EQZ}, safepoint = false)
+    private static int i64EqzHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_eqz(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_EQ}, safepoint = false)
+    private static int i64EqHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_eq(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_NE}, safepoint = false)
+    private static int i64NeHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_ne(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LT_S}, safepoint = false)
+    private static int i64LtSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_lt_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LT_U}, safepoint = false)
+    private static int i64LtUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_lt_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_GT_S}, safepoint = false)
+    private static int i64GtSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_gt_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_GT_U}, safepoint = false)
+    private static int i64GtUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_gt_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LE_S}, safepoint = false)
+    private static int i64LeSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_le_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LE_U}, safepoint = false)
+    private static int i64LeUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_le_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_GE_S}, safepoint = false)
+    private static int i64GeSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_ge_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_GE_U}, safepoint = false)
+    private static int i64GeUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_ge_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_EQ}, safepoint = false)
+    private static int f32EqHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_eq(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_NE}, safepoint = false)
+    private static int f32NeHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_ne(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_LT}, safepoint = false)
+    private static int f32LtHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_lt(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_GT}, safepoint = false)
+    private static int f32GtHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_gt(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_LE}, safepoint = false)
+    private static int f32LeHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_le(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_GE}, safepoint = false)
+    private static int f32GeHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_ge(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_EQ}, safepoint = false)
+    private static int f64EqHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_eq(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_NE}, safepoint = false)
+    private static int f64NeHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_ne(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_LT}, safepoint = false)
+    private static int f64LtHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_lt(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_GT}, safepoint = false)
+    private static int f64GtHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_gt(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_LE}, safepoint = false)
+    private static int f64LeHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_le(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_GE}, safepoint = false)
+    private static int f64GeHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_ge(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_ADD}, safepoint = false)
+    private static int i32AddHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_add(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_SUB}, safepoint = false)
+    private static int i32SubHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_sub(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_MUL}, safepoint = false)
+    private static int i32MulHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_mul(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_DIV_S}, safepoint = false)
+    private static int i32DivSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i32_div_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_DIV_U}, safepoint = false)
+    private static int i32DivUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i32_div_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_REM_S}, safepoint = false)
+    private static int i32RemSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i32_rem_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_REM_U}, safepoint = false)
+    private static int i32RemUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i32_rem_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_AND}, safepoint = false)
+    private static int i32AndHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_and(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_OR}, safepoint = false)
+    private static int i32OrHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_or(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_XOR}, safepoint = false)
+    private static int i32XorHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_xor(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_SHL}, safepoint = false)
+    private static int i32ShlHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_shl(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_SHR_S}, safepoint = false)
+    private static int i32ShrSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_shr_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_SHR_U}, safepoint = false)
+    private static int i32ShrUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_shr_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_ROTL}, safepoint = false)
+    private static int i32RotlHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_rotl(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_ROTR}, safepoint = false)
+    private static int i32RotrHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_rotr(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.DROP}, safepoint = false)
+    private static int dropHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        virtualState.stackPointer--;
+        dropPrimitive(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.DROP_OBJ}, safepoint = false)
+    private static int dropObjHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        virtualState.stackPointer--;
+        dropObject(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.SELECT}, safepoint = false)
+    private static int selectHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        if (profileCondition(state.bytecode, offset + 1, popBoolean(frame, virtualState.stackPointer - 1))) {
+            drop(frame, virtualState.stackPointer - 2);
+        } else {
+            WasmFrame.copyPrimitive(frame, virtualState.stackPointer - 2, virtualState.stackPointer - 3);
+            dropPrimitive(frame, virtualState.stackPointer - 2);
+        }
+        virtualState.stackPointer -= 2;
+        return offset + 3;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.SELECT_OBJ}, safepoint = false)
+    private static int selectObjHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        if (profileCondition(state.bytecode, offset + 1, popBoolean(frame, virtualState.stackPointer - 1))) {
+            dropObject(frame, virtualState.stackPointer - 2);
+        } else {
+            WasmFrame.copyObject(frame, virtualState.stackPointer - 2, virtualState.stackPointer - 3);
+            dropObject(frame, virtualState.stackPointer - 2);
+        }
+        virtualState.stackPointer -= 2;
+        return offset + 3;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_GET_OBJ_U8}, safepoint = false)
+    private static int localGetObjU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekU8(state.bytecode, offset + 1);
+        local_get_obj(frame, virtualState.stackPointer, index);
+        virtualState.stackPointer++;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_GET_OBJ_I32}, safepoint = false)
+    private static int localGetObjI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekI32(state.bytecode, offset + 1);
+        local_get_obj(frame, virtualState.stackPointer, index);
+        virtualState.stackPointer++;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_SET_U8}, safepoint = false)
+    private static int localSetU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekU8(state.bytecode, offset + 1);
+        virtualState.stackPointer--;
+        local_set(frame, virtualState.stackPointer, index);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_SET_I32}, safepoint = false)
+    private static int localSetI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekI32(state.bytecode, offset + 1);
+        virtualState.stackPointer--;
+        local_set(frame, virtualState.stackPointer, index);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_SET_OBJ_U8}, safepoint = false)
+    private static int localSetObjU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekU8(state.bytecode, offset + 1);
+        virtualState.stackPointer--;
+        local_set_obj(frame, virtualState.stackPointer, index);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_SET_OBJ_I32}, safepoint = false)
+    private static int localSetObjI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekI32(state.bytecode, offset + 1);
+        virtualState.stackPointer--;
+        local_set_obj(frame, virtualState.stackPointer, index);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_TEE_U8}, safepoint = false)
+    private static int localTeeU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekU8(state.bytecode, offset + 1);
+        local_tee(frame, virtualState.stackPointer - 1, index);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_TEE_I32}, safepoint = false)
+    private static int localTeeI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekI32(state.bytecode, offset + 1);
+        local_tee(frame, virtualState.stackPointer - 1, index);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_TEE_OBJ_U8}, safepoint = false)
+    private static int localTeeObjU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekU8(state.bytecode, offset + 1);
+        local_tee_obj(frame, virtualState.stackPointer - 1, index);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.LOCAL_TEE_OBJ_I32}, safepoint = false)
+    private static int localTeeObjI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekI32(state.bytecode, offset + 1);
+        local_tee_obj(frame, virtualState.stackPointer - 1, index);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.GLOBAL_GET_U8}, safepoint = false)
+    private static int globalGetU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekU8(state.bytecode, offset + 1);
+        final WasmInstance instance = state.instance;
+        state.thiz.global_get(instance, frame, virtualState.stackPointer, index);
+        virtualState.stackPointer++;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.GLOBAL_GET_I32}, safepoint = false)
+    private static int globalGetI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekI32(state.bytecode, offset + 1);
+        final WasmInstance instance = state.instance;
+        state.thiz.global_get(instance, frame, virtualState.stackPointer, index);
+        virtualState.stackPointer++;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.GLOBAL_SET_U8}, safepoint = false)
+    private static int globalSetU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekU8(state.bytecode, offset + 1);
+        virtualState.stackPointer--;
+        final WasmInstance instance = state.instance;
+        state.thiz.global_set(instance, frame, virtualState.stackPointer, index);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.GLOBAL_SET_I32}, safepoint = false)
+    private static int globalSetI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int index = rawPeekI32(state.bytecode, offset + 1);
+        virtualState.stackPointer--;
+        final WasmInstance instance = state.instance;
+        state.thiz.global_set(instance, frame, virtualState.stackPointer, index);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_CONST_I8}, safepoint = false)
+    private static int i64ConstI8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final long value = rawPeekI8(state.bytecode, offset + 1);
+        pushLong(frame, virtualState.stackPointer, value);
+        virtualState.stackPointer++;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_CONST_I64}, safepoint = false)
+    private static int i64ConstI64Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final long value = rawPeekI64(state.bytecode, offset + 1);
+        pushLong(frame, virtualState.stackPointer, value);
+        virtualState.stackPointer++;
+        return offset + 9;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_CLZ}, safepoint = false)
+    private static int i64ClzHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_clz(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_CTZ}, safepoint = false)
+    private static int i64CtzHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_ctz(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_POPCNT}, safepoint = false)
+    private static int i64PopcntHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_popcnt(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_ADD}, safepoint = false)
+    private static int i64AddHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_add(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_SUB}, safepoint = false)
+    private static int i64SubHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_sub(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_MUL}, safepoint = false)
+    private static int i64MulHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_mul(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_DIV_S}, safepoint = false)
+    private static int i64DivSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i64_div_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_DIV_U}, safepoint = false)
+    private static int i64DivUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i64_div_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_REM_S}, safepoint = false)
+    private static int i64RemSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i64_rem_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_REM_U}, safepoint = false)
+    private static int i64RemUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i64_rem_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_AND}, safepoint = false)
+    private static int i64AndHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_and(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_OR}, safepoint = false)
+    private static int i64OrHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_or(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_XOR}, safepoint = false)
+    private static int i64XorHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_xor(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_SHL}, safepoint = false)
+    private static int i64ShlHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_shl(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_SHR_S}, safepoint = false)
+    private static int i64ShrSHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_shr_s(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_SHR_U}, safepoint = false)
+    private static int i64ShrUHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_shr_u(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_ROTL}, safepoint = false)
+    private static int i64RotlHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_rotl(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_ROTR}, safepoint = false)
+    private static int i64RotrHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_rotr(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_CONST}, safepoint = false)
+    private static int f32ConstHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        float value = Float.intBitsToFloat(rawPeekI32(state.bytecode, offset + 1));
+        pushFloat(frame, virtualState.stackPointer, value);
+        virtualState.stackPointer++;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_CONST}, safepoint = false)
+    private static int f64ConstHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        double value = Double.longBitsToDouble(BinaryStreamParser.rawPeekI64(state.bytecode, offset + 1));
+        pushDouble(frame, virtualState.stackPointer, value);
+        virtualState.stackPointer++;
+        return offset + 9;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD_U8}, safepoint = false)
+    private static int i32LoadU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        int value = state.zeroMemoryLib.load_i32(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD_U8}, safepoint = false)
+    private static int i64LoadU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_LOAD_U8}, safepoint = false)
+    private static int f32LoadU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final float value = state.zeroMemoryLib.load_f32(state.zeroMemory, state.thiz, address);
+        pushFloat(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_LOAD_U8}, safepoint = false)
+    private static int f64LoadU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final double value = state.zeroMemoryLib.load_f64(state.zeroMemory, state.thiz, address);
+        pushDouble(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD8_S_U8}, safepoint = false)
+    private static int i32Load8SU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = state.zeroMemoryLib.load_i32_8s(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD8_U_U8}, safepoint = false)
+    private static int i32Load8UU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = state.zeroMemoryLib.load_i32_8u(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD16_S_U8}, safepoint = false)
+    private static int i32Load16SU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = state.zeroMemoryLib.load_i32_16s(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD16_U_U8}, safepoint = false)
+    private static int i32Load16UU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = state.zeroMemoryLib.load_i32_16u(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD8_S_U8}, safepoint = false)
+    private static int i64Load8SU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_8s(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD8_U_U8}, safepoint = false)
+    private static int i64Load8UU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_8u(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD16_S_U8}, safepoint = false)
+    private static int i64Load16SU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_16s(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD16_U_U8}, safepoint = false)
+    private static int i64Load16UU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_16u(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD32_S_U8}, safepoint = false)
+    private static int i64Load32SU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_32s(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD32_U_U8}, safepoint = false)
+    private static int i64Load32UU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_32u(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD_I32}, safepoint = false)
+    private static int i32LoadI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        int value = state.zeroMemoryLib.load_i32(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD_I32}, safepoint = false)
+    private static int i64LoadI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_LOAD_I32}, safepoint = false)
+    private static int f32LoadI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final float value = state.zeroMemoryLib.load_f32(state.zeroMemory, state.thiz, address);
+        pushFloat(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_LOAD_I32}, safepoint = false)
+    private static int f64LoadI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final double value = state.zeroMemoryLib.load_f64(state.zeroMemory, state.thiz, address);
+        pushDouble(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD8_S_I32}, safepoint = false)
+    private static int i32Load8SI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = state.zeroMemoryLib.load_i32_8s(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD8_U_I32}, safepoint = false)
+    private static int i32Load8UI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = state.zeroMemoryLib.load_i32_8u(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD16_S_I32}, safepoint = false)
+    private static int i32Load16SI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = state.zeroMemoryLib.load_i32_16s(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD16_U_I32}, safepoint = false)
+    private static int i32Load16UI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = state.zeroMemoryLib.load_i32_16u(state.zeroMemory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD8_S_I32}, safepoint = false)
+    private static int i64Load8SI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_8s(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD8_U_I32}, safepoint = false)
+    private static int i64Load8UI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_8u(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD16_S_I32}, safepoint = false)
+    private static int i64Load16SI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_16s(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD16_U_I32}, safepoint = false)
+    private static int i64Load16UI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_16u(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD32_S_I32}, safepoint = false)
+    private static int i64Load32SI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_32s(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD32_U_I32}, safepoint = false)
+    private static int i64Load32UI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 1);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = state.zeroMemoryLib.load_i64_32u(state.zeroMemory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_STORE_U8}, safepoint = false)
+    private static int i32StoreU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = popInt(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i32(state.zeroMemory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_U8}, safepoint = false)
+    private static int i64StoreU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i64(state.zeroMemory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_STORE_U8}, safepoint = false)
+    private static int f32StoreU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final float value = popFloat(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_f32(state.zeroMemory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_STORE_U8}, safepoint = false)
+    private static int f64StoreU8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final double value = popDouble(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_f64(state.zeroMemory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_STORE_8_U8}, safepoint = false)
+    private static int i32Store8U8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = popInt(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i32_8(state.zeroMemory, state.thiz, address, (byte) value);
+        virtualState.stackPointer -= 2;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_STORE_16_U8}, safepoint = false)
+    private static int i32Store16U8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = popInt(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i32_16(state.zeroMemory, state.thiz, address, (short) value);
+        virtualState.stackPointer -= 2;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_8_U8}, safepoint = false)
+    private static int i64Store8U8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i64_8(state.zeroMemory, state.thiz, address, (byte) value);
+        virtualState.stackPointer -= 2;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_16_U8}, safepoint = false)
+    private static int i64Store16U8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i64_16(state.zeroMemory, state.thiz, address, (short) value);
+        virtualState.stackPointer -= 2;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_32_U8}, safepoint = false)
+    private static int i64Store32U8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekU8(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i64_32(state.zeroMemory, state.thiz, address, (int) value);
+        virtualState.stackPointer -= 2;
+        return offset + 2;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_STORE_I32}, safepoint = false)
+    private static int i32StoreI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = popInt(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i32(state.zeroMemory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.MEMORY_SIZE}, safepoint = false)
+    private static int memorySizeHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 1);
+        final WasmInstance instance = state.instance;
+        final WasmMemory memory = memory(instance, state.memoryLibs, state.module, memoryIndex);
+        int pageSize = (int) state.memoryLibs[memoryIndex].size(memory);
+        pushInt(frame, virtualState.stackPointer, pageSize);
+        virtualState.stackPointer++;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.MEMORY_GROW}, safepoint = false)
+    private static int memoryGrowHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 1);
+        final WasmInstance instance = state.instance;
+        final WasmMemory memory = memory(instance, state.memoryLibs, state.module, memoryIndex);
+        int extraSize = popInt(frame, virtualState.stackPointer - 1);
+        int previousSize = (int) state.memoryLibs[memoryIndex].grow(memory, extraSize);
+        pushInt(frame, virtualState.stackPointer - 1, previousSize);
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_I32}, safepoint = false)
+    private static int i64StoreI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i64(state.zeroMemory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_STORE_I32}, safepoint = false)
+    private static int f32StoreI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final float value = popFloat(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_f32(state.zeroMemory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_STORE_I32}, safepoint = false)
+    private static int f64StoreI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final double value = popDouble(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_f64(state.zeroMemory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_STORE_8_I32}, safepoint = false)
+    private static int i32Store8I32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = popInt(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i32_8(state.zeroMemory, state.thiz, address, (byte) value);
+        virtualState.stackPointer -= 2;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_STORE_16_I32}, safepoint = false)
+    private static int i32Store16I32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final int value = popInt(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i32_16(state.zeroMemory, state.thiz, address, (short) value);
+        virtualState.stackPointer -= 2;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_8_I32}, safepoint = false)
+    private static int i64Store8I32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i64_8(state.zeroMemory, state.thiz, address, (byte) value);
+        virtualState.stackPointer -= 2;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_16_I32}, safepoint = false)
+    private static int i64Store16I32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i64_16(state.zeroMemory, state.thiz, address, (short) value);
+        virtualState.stackPointer -= 2;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_32_I32}, safepoint = false)
+    private static int i64Store32I32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int memOffset = rawPeekI32(state.bytecode, offset + 1);
+        final int baseAddress = popInt(frame, virtualState.stackPointer - 2);
+        final long address = effectiveMemoryAddress(memOffset, baseAddress);
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        state.zeroMemoryLib.store_i64_32(state.zeroMemory, state.thiz, address, (int) value);
+        virtualState.stackPointer -= 2;
+        return offset + 5;
+    }
+
+    private static long getBaseAddress(int stackPointer, FrameWithoutBoxing frame, int indexType64) {
+        if (indexType64 == 0) {
+            return Integer.toUnsignedLong(popInt(frame, stackPointer));
+        } else {
+            return popLong(frame, stackPointer);
+        }
+    }
+
+    private static long getMemOffset(int offset, byte[] bytecode, int offsetLength) {
+        return switch (offsetLength) {
+            case BytecodeBitEncoding.MEMORY_OFFSET_U8 -> rawPeekU8(bytecode, offset);
+            case BytecodeBitEncoding.MEMORY_OFFSET_U32 -> rawPeekU32(bytecode, offset);
+            case BytecodeBitEncoding.MEMORY_OFFSET_I64 -> rawPeekI64(bytecode, offset);
+            default -> throw CompilerDirectives.shouldNotReachHere();
+        };
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD}, safepoint = false)
+    private static int i32LoadHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final int value = memoryLib.load_i32(memory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD}, safepoint = false)
+    private static int i64LoadHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = memoryLib.load_i64(memory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_LOAD}, safepoint = false)
+    private static int f32LoadHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final float value = memoryLib.load_f32(memory, state.thiz, address);
+        pushFloat(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_LOAD}, safepoint = false)
+    private static int f64LoadHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final double value = memoryLib.load_f64(memory, state.thiz, address);
+        pushDouble(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD8_S}, safepoint = false)
+    private static int i32Load8SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final int value = memoryLib.load_i32_8s(memory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD8_U}, safepoint = false)
+    private static int i32Load8UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final int value = memoryLib.load_i32_8u(memory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD16_S}, safepoint = false)
+    private static int i32Load16SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final int value = memoryLib.load_i32_16s(memory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_LOAD16_U}, safepoint = false)
+    private static int i32Load16UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final int value = memoryLib.load_i32_16u(memory, state.thiz, address);
+        pushInt(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD8_S}, safepoint = false)
+    private static int i64Load8SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = memoryLib.load_i64_8s(memory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD8_U}, safepoint = false)
+    private static int i64Load8UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = memoryLib.load_i64_8u(memory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD16_S}, safepoint = false)
+    private static int i64Load16SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = memoryLib.load_i64_16s(memory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD16_U}, safepoint = false)
+    private static int i64Load16UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = memoryLib.load_i64_16u(memory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD32_S}, safepoint = false)
+    private static int i64Load32SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = memoryLib.load_i64_32s(memory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_LOAD32_U}, safepoint = false)
+    private static int i64Load32UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 1, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = memoryLib.load_i64_32u(memory, state.thiz, address);
+        pushLong(frame, virtualState.stackPointer - 1, value);
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_STORE}, safepoint = false)
+    private static int i32StoreHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 2, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final int value = popInt(frame, virtualState.stackPointer - 1);
+        memoryLib.store_i32(memory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE}, safepoint = false)
+    private static int i64StoreHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 2, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        memoryLib.store_i64(memory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_STORE}, safepoint = false)
+    private static int f32StoreHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 2, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final float value = popFloat(frame, virtualState.stackPointer - 1);
+        memoryLib.store_f32(memory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_STORE}, safepoint = false)
+    private static int f64StoreHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 2, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final double value = popDouble(frame, virtualState.stackPointer - 1);
+        memoryLib.store_f64(memory, state.thiz, address, value);
+        virtualState.stackPointer -= 2;
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_STORE_8}, safepoint = false)
+    private static int i32Store8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 2, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final int value = popInt(frame, virtualState.stackPointer - 1);
+        memoryLib.store_i32_8(memory, state.thiz, address, (byte) value);
+        virtualState.stackPointer -= 2;
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_STORE_16}, safepoint = false)
+    private static int i32Store16Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 2, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final int value = popInt(frame, virtualState.stackPointer - 1);
+        memoryLib.store_i32_16(memory, state.thiz, address, (short) value);
+        virtualState.stackPointer -= 2;
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_8}, safepoint = false)
+    private static int i64Store8Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 2, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        memoryLib.store_i64_8(memory, state.thiz, address, (byte) value);
+        virtualState.stackPointer -= 2;
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_16}, safepoint = false)
+    private static int i64Store16Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 2, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        memoryLib.store_i64_16(memory, state.thiz, address, (short) value);
+        virtualState.stackPointer -= 2;
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_STORE_32}, safepoint = false)
+    private static int i64Store32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int encoding = rawPeekU8(state.bytecode, offset + 1);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int offsetLength = encoding & BytecodeBitEncoding.MEMORY_OFFSET_MASK;
+
+        final long memOffset = getMemOffset(offset + 6, state.bytecode, offsetLength);
+        final long baseAddress = getBaseAddress(virtualState.stackPointer - 2, frame, indexType64);
+        final long address = effectiveMemoryAddress64(memOffset, baseAddress, state.thiz);
+
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 2);
+        final WasmMemory memory = memory(state.instance, state.memoryLibs, state.module, memoryIndex);
+        final WasmMemoryLibrary memoryLib = state.memoryLibs[memoryIndex];
+
+        final long value = popLong(frame, virtualState.stackPointer - 1);
+        memoryLib.store_i64_32(memory, state.thiz, address, (int) value);
+        virtualState.stackPointer -= 2;
+        return offset + 6 + offsetLength;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_CLZ}, safepoint = false)
+    private static int i32ClzHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_clz(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_CTZ}, safepoint = false)
+    private static int i32CtzHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_ctz(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_POPCNT}, safepoint = false)
+    private static int i32PopcntHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_popcnt(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_ABS}, safepoint = false)
+    private static int f32AbsHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_abs(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_NEG}, safepoint = false)
+    private static int f32NegHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_neg(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_CEIL}, safepoint = false)
+    private static int f32CeilHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_ceil(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_FLOOR}, safepoint = false)
+    private static int f32FloorHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_floor(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_TRUNC}, safepoint = false)
+    private static int f32TruncHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_trunc(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_NEAREST}, safepoint = false)
+    private static int f32NearestHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_nearest(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_SQRT}, safepoint = false)
+    private static int f32SqrtHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_sqrt(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_ADD}, safepoint = false)
+    private static int f32AddHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_add(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_SUB}, safepoint = false)
+    private static int f32SubHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_sub(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_MUL}, safepoint = false)
+    private static int f32MulHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_mul(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_DIV}, safepoint = false)
+    private static int f32DivHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_div(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_MIN}, safepoint = false)
+    private static int f32MinHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_min(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_MAX}, safepoint = false)
+    private static int f32MaxHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_max(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_COPYSIGN}, safepoint = false)
+    private static int f32CopysignHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_copysign(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_ABS}, safepoint = false)
+    private static int f64AbsHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_abs(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_NEG}, safepoint = false)
+    private static int f64NegHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_neg(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_CEIL}, safepoint = false)
+    private static int f64CeilHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_ceil(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_FLOOR}, safepoint = false)
+    private static int f64FloorHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_floor(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_TRUNC}, safepoint = false)
+    private static int f64TruncHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_trunc(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_NEAREST}, safepoint = false)
+    private static int f64NearestHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_nearest(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_SQRT}, safepoint = false)
+    private static int f64SqrtHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_sqrt(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_ADD}, safepoint = false)
+    private static int f64AddHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_add(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_SUB}, safepoint = false)
+    private static int f64SubHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_sub(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_MUL}, safepoint = false)
+    private static int f64MulHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_mul(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_DIV}, safepoint = false)
+    private static int f64DivHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_div(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_MIN}, safepoint = false)
+    private static int f64MinHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_min(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_MAX}, safepoint = false)
+    private static int f64MaxHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_max(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_COPYSIGN}, safepoint = false)
+    private static int f64CopysignHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_copysign(frame, virtualState.stackPointer);
+        virtualState.stackPointer--;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_WRAP_I64}, safepoint = false)
+    private static int i32WrapI64Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_wrap_i64(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_TRUNC_F32_S}, safepoint = false)
+    private static int i32TruncF32SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i32_trunc_f32_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_TRUNC_F32_U}, safepoint = false)
+    private static int i32TruncF32UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i32_trunc_f32_u(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_TRUNC_F64_S}, safepoint = false)
+    private static int i32TruncF64SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i32_trunc_f64_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_TRUNC_F64_U}, safepoint = false)
+    private static int i32TruncF64UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i32_trunc_f64_u(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_EXTEND_I32_S}, safepoint = false)
+    private static int i64ExtendI32SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_extend_i32_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_EXTEND_I32_U}, safepoint = false)
+    private static int i64ExtendI32UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_extend_i32_u(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_TRUNC_F32_S}, safepoint = false)
+    private static int i64TruncF32SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i64_trunc_f32_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_TRUNC_F32_U}, safepoint = false)
+    private static int i64TruncF32UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i64_trunc_f32_u(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_TRUNC_F64_S}, safepoint = false)
+    private static int i64TruncF64SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i64_trunc_f64_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_TRUNC_F64_U}, safepoint = false)
+    private static int i64TruncF64UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        state.thiz.i64_trunc_f64_u(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_CONVERT_I32_S}, safepoint = false)
+    private static int f32ConvertI32SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_convert_i32_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_CONVERT_I32_U}, safepoint = false)
+    private static int f32ConvertI32UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_convert_i32_u(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_CONVERT_I64_S}, safepoint = false)
+    private static int f32ConvertI64SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_convert_i64_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_CONVERT_I64_U}, safepoint = false)
+    private static int f32ConvertI64UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_convert_i64_u(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_DEMOTE_F64}, safepoint = false)
+    private static int f32DemoteF64Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_demote_f64(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_CONVERT_I32_S}, safepoint = false)
+    private static int f64ConvertI32SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_convert_i32_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_CONVERT_I32_U}, safepoint = false)
+    private static int f64ConvertI32UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_convert_i32_u(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_CONVERT_I64_S}, safepoint = false)
+    private static int f64ConvertI64SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_convert_i64_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_CONVERT_I64_U}, safepoint = false)
+    private static int f64ConvertI64UHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_convert_i64_u(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_PROMOTE_F32}, safepoint = false)
+    private static int f64PromoteF32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_promote_f32(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_REINTERPRET_F32}, safepoint = false)
+    private static int i32ReinterpretF32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_reinterpret_f32(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_REINTERPRET_F64}, safepoint = false)
+    private static int i64ReinterpretF64Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_reinterpret_f64(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F32_REINTERPRET_I32}, safepoint = false)
+    private static int f32ReinterpretI32Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f32_reinterpret_i32(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.F64_REINTERPRET_I64}, safepoint = false)
+    private static int f64ReinterpretI64Handler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        f64_reinterpret_i64(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_EXTEND8_S}, safepoint = false)
+    private static int i32Extend8SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_extend8_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I32_EXTEND16_S}, safepoint = false)
+    private static int i32Extend16SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i32_extend16_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_EXTEND8_S}, safepoint = false)
+    private static int i64Extend8SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_extend8_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_EXTEND16_S}, safepoint = false)
+    private static int i64Extend16SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_extend16_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.I64_EXTEND32_S}, safepoint = false)
+    private static int i64Extend32SHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        i64_extend32_s(frame, virtualState.stackPointer);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.REF_NULL}, safepoint = false)
+    private static int refNullHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        pushReference(frame, virtualState.stackPointer, WasmConstant.NULL);
+        virtualState.stackPointer++;
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.REF_IS_NULL}, safepoint = false)
+    private static int refIsNullHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final Object refType = popReference(frame, virtualState.stackPointer - 1);
+        pushInt(frame, virtualState.stackPointer - 1, refType == WasmConstant.NULL ? 1 : 0);
+        return offset + 1;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.REF_FUNC}, safepoint = false)
+    private static int refFuncHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int functionIndex = rawPeekI32(state.bytecode, offset + 1);
+        final WasmFunction function = state.module.symbolTable().function(functionIndex);
+        final WasmInstance instance = state.instance;
+        final WasmFunctionInstance functionInstance = instance.functionInstance(function);
+        pushReference(frame, virtualState.stackPointer, functionInstance);
+        virtualState.stackPointer++;
+        return offset + 5;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.AGGREGATE}, safepoint = false)
+    private static int aggregateHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int aggregateOpcode = rawPeekU8(state.bytecode, offset + 1);
+        CompilerAsserts.partialEvaluationConstant(aggregateOpcode);
+        final int nextOffset;
+        switch (aggregateOpcode) {
+            case Bytecode.STRUCT_NEW: {
+                final int structTypeIdx = rawPeekI32(state.bytecode, offset + 2);
+                nextOffset = offset + 6;
+
+                final WasmStructAccess structAccess = state.module.structTypeAccess(structTypeIdx);
+                final int numFields = state.module.structTypeFieldCount(structTypeIdx);
+
+                WasmStruct struct = structAccess.shape().getFactory().create(state.module.closedTypeAt(structTypeIdx));
+                state.thiz.popStructFields(frame, structTypeIdx, struct, structAccess, numFields, virtualState.stackPointer);
+                virtualState.stackPointer -= numFields;
+                WasmFrame.pushReference(frame, virtualState.stackPointer++, struct);
+                break;
+            }
+            case Bytecode.ARRAY_NEW_FIXED: {
+                final int arrayTypeIdx = rawPeekI32(state.bytecode, offset + 2);
+                final int length = rawPeekI32(state.bytecode, offset + 6);
+                nextOffset = offset + 10;
+
+                final DefinedType arrayType = state.module.closedTypeAt(arrayTypeIdx);
+                final int elemType = state.module.arrayTypeElemType(arrayTypeIdx);
+
+                WasmArray array = state.thiz.popArrayElements(frame, arrayType, elemType, length, virtualState.stackPointer);
+                virtualState.stackPointer -= length;
+                WasmFrame.pushReference(frame, virtualState.stackPointer++, array);
+                break;
+            }
+            default: {
+                nextOffset = state.thiz.executeAggregate(state.instance, frame, offset + 2, virtualState.stackPointer, aggregateOpcode);
+                virtualState.stackPointer += StackEffects.getAggregateOpStackEffect(aggregateOpcode);
+                break;
+            }
+        }
+        return nextOffset;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.MISC}, safepoint = true)
+    private static int miscHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int miscOpcode = rawPeekU8(state.bytecode, offset + 1);
+        CompilerAsserts.partialEvaluationConstant(miscOpcode);
+        final int nextOffset;
+        switch (miscOpcode) {
+            case Bytecode.THROW: {
+                state.thiz.codeEntry.exceptionBranch();
+                final int tagIndex = rawPeekI32(state.bytecode, offset + 2);
+                final int functionTypeIndex = state.module.tagTypeIndex(tagIndex);
+                final int numFields = state.module.functionTypeParamCount(functionTypeIndex);
+                final Object[] fields = state.thiz.createFieldsForException(frame, functionTypeIndex, numFields, virtualState.stackPointer);
+                virtualState.stackPointer -= numFields;
+                state.exceptionOffset = offset + 6;
+                throw state.thiz.createException(state.instance.tag(tagIndex), fields);
+            }
+            case Bytecode.THROW_REF: {
+                state.thiz.codeEntry.exceptionBranch();
+                final Object exception = popReference(frame, virtualState.stackPointer - 1);
+                virtualState.stackPointer--;
+                assert exception != null : "Exception object has to be a valid exception or wasm null";
+                if (exception == WasmConstant.NULL) {
+                    throw WasmException.create(Failure.NULL_REFERENCE);
+                }
+                assert exception instanceof WasmRuntimeException : "Only wasm exceptions can be thrown by throw_ref";
+                state.exceptionOffset = offset + 2;
+                throw (WasmRuntimeException) exception;
+            }
+            case Bytecode.BR_ON_NULL_U8: {
+                Object reference = popReference(frame, --virtualState.stackPointer);
+                if (profileCondition(state.bytecode, offset + 3, reference == WasmConstant.NULL)) {
+                    final int offsetDelta = rawPeekU8(state.bytecode, offset + 2);
+                    // BR_ON_NULL_U8 encodes the back jump value as a positive byte
+                    // value. BR_ON_NULL_U8 can never perform a forward jump.
+                    nextOffset = offset + 2 - offsetDelta;
+                } else {
+                    nextOffset = offset + 5;
+                    pushReference(frame, virtualState.stackPointer++, reference);
+                }
+                break;
+            }
+            case Bytecode.BR_ON_NULL_I32: {
+                Object reference = popReference(frame, --virtualState.stackPointer);
+                if (profileCondition(state.bytecode, offset + 6, reference == WasmConstant.NULL)) {
+                    final int offsetDelta = rawPeekI32(state.bytecode, offset + 2);
+                    nextOffset = offset + 2 + offsetDelta;
+                } else {
+                    nextOffset = offset + 8;
+                    pushReference(frame, virtualState.stackPointer++, reference);
+                }
+                break;
+            }
+            case Bytecode.BR_ON_NON_NULL_U8: {
+                Object reference = popReference(frame, --virtualState.stackPointer);
+                if (profileCondition(state.bytecode, offset + 3, reference != WasmConstant.NULL)) {
+                    final int offsetDelta = rawPeekU8(state.bytecode, offset + 2);
+                    // BR_ON_NULL_U8 encodes the back jump value as a positive byte
+                    // value. BR_ON_NULL_U8
+                    // can never perform a forward jump.
+                    nextOffset = offset + 2 - offsetDelta;
+                    pushReference(frame, virtualState.stackPointer++, reference);
+                } else {
+                    nextOffset = offset + 5;
+                }
+                break;
+            }
+            case Bytecode.BR_ON_NON_NULL_I32: {
+                Object reference = popReference(frame, --virtualState.stackPointer);
+                if (profileCondition(state.bytecode, offset + 6, reference != WasmConstant.NULL)) {
+                    final int offsetDelta = rawPeekI32(state.bytecode, offset + 2);
+                    nextOffset = offset + 2 + offsetDelta;
+                    pushReference(frame, virtualState.stackPointer++, reference);
+                } else {
+                    nextOffset = offset + 8;
+                }
+                break;
+            }
+            default: {
+                nextOffset = state.thiz.executeMisc(state.instance, frame, offset + 2, virtualState.stackPointer, miscOpcode);
+                virtualState.stackPointer += StackEffects.getMiscOpStackEffect(miscOpcode);
+                break;
+            }
+        }
+        return nextOffset;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.ATOMIC}, safepoint = false)
+    private static int atomicHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int atomicOpcode = rawPeekU8(state.bytecode, offset + 1);
+        CompilerAsserts.partialEvaluationConstant(atomicOpcode);
+        if (atomicOpcode == Bytecode.ATOMIC_FENCE) {
+            return offset + 2;
+        }
+        final int encoding = rawPeekU8(state.bytecode, offset + 2);
+        final int indexType64 = encoding & BytecodeBitEncoding.MEMORY_64_FLAG;
+        final int memoryIndex = rawPeekI32(state.bytecode, offset + 3);
+        final int nextOffset;
+        final long memOffset;
+        if (indexType64 == 0) {
+            memOffset = rawPeekU32(state.bytecode, offset + 7);
+            nextOffset = offset + 11;
+        } else {
+            memOffset = rawPeekI64(state.bytecode, offset + 7);
+            nextOffset = offset + 15;
+        }
+        final WasmInstance instance = state.instance;
+        final WasmMemory memory = memory(instance, state.memoryLibs, state.module, memoryIndex);
+        final int stackPointerDecrement = state.thiz.executeAtomic(frame, virtualState.stackPointer, atomicOpcode, memory,
+                        state.memoryLibs[memoryIndex],
+                        memOffset, indexType64);
+        virtualState.stackPointer -= stackPointerDecrement;
+        return nextOffset;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.VECTOR}, safepoint = false)
+    private static int vectorHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int vectorOpcode = rawPeekU8(state.bytecode, offset + 1);
+        CompilerAsserts.partialEvaluationConstant(vectorOpcode);
+        final WasmInstance instance = state.instance;
+        final int nextOffset = state.thiz.executeVector(instance, frame, offset + 2, virtualState.stackPointer, vectorOpcode);
+        virtualState.stackPointer += StackEffects.getVectorOpStackEffect(vectorOpcode);
+        return nextOffset;
+    }
+
+    @EarlyInline
+    @SuppressWarnings("unused")
+    @BytecodeInterpreterHandler(value = {Bytecode.NOTIFY}, safepoint = false)
+    private static int notifyHandler(int offset, State state, VirtualState virtualState, FrameWithoutBoxing frame) {
+        final int nextLineIndex = rawPeekI32(state.bytecode, offset + 1);
+        final int sourceCodeLocation = rawPeekI32(state.bytecode, offset + 5);
+        assert state.notifyFunction != null;
+        state.notifyFunction.notifyLine(frame, state.lineIndex, nextLineIndex, sourceCodeLocation);
+        state.lineIndex = nextLineIndex;
+        return offset + 9;
     }
 
     private int pushExceptionFieldsAndReference(VirtualFrame frame, WasmRuntimeException e, int sourceStackPointer, int catchType, int tagIndex) {
@@ -1819,22 +4681,22 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
     }
 
     @HostCompilerDirectives.InliningCutoff
-    private WasmException callIndirectNotAFunctionError(int opcode, Object functionCandidate, int elementIndex) {
-        enterErrorBranch();
+    private WasmException callIndirectNotAFunctionError(Object functionCandidate, int elementIndex) {
+        enterErrorBranch(codeEntry);
         if (functionCandidate == WasmConstant.NULL) {
-            if (opcode == Bytecode.CALL_INDIRECT_U8 || opcode == Bytecode.CALL_INDIRECT_I32) {
-                throw WasmException.format(Failure.UNINITIALIZED_ELEMENT, this, "Table element at index %d is uninitialized.", elementIndex);
-            } else {
-                assert opcode == Bytecode.CALL_REF_U8 || opcode == Bytecode.CALL_REF_I32;
-                throw WasmException.format(Failure.NULL_FUNCTION_REFERENCE, this, "Function reference is null");
-            }
+            throw WasmException.format(Failure.UNINITIALIZED_ELEMENT, this, "Table element at index %d is uninitialized.", elementIndex);
         } else {
-            if (opcode == Bytecode.CALL_INDIRECT_U8 || opcode == Bytecode.CALL_INDIRECT_I32) {
-                throw WasmException.format(Failure.UNSPECIFIED_TRAP, this, "Unknown table element type: %s", functionCandidate);
-            } else {
-                assert opcode == Bytecode.CALL_REF_U8 || opcode == Bytecode.CALL_REF_I32;
-                throw WasmException.format(Failure.UNSPECIFIED_TRAP, this, "Unknown function object: %s", functionCandidate);
-            }
+            throw WasmException.format(Failure.UNSPECIFIED_TRAP, this, "Unknown table element type: %s", functionCandidate);
+        }
+    }
+
+    @HostCompilerDirectives.InliningCutoff
+    private WasmException callRefNotAFunctionError(Object functionCandidate) {
+        enterErrorBranch(codeEntry);
+        if (functionCandidate == WasmConstant.NULL) {
+            throw WasmException.format(Failure.NULL_FUNCTION_REFERENCE, this, "Function reference is null");
+        } else {
+            throw WasmException.format(Failure.UNSPECIFIED_TRAP, this, "Unknown function object: %s", functionCandidate);
         }
     }
 
@@ -1898,187 +4760,12 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
      * The static address offset (u64) is added to the dynamic address (u64) operand, yielding a
      * 65-bit effective address that is the zero-based index at which the memory is accessed.
      */
-    private long effectiveMemoryAddress64(long staticAddressOffset, long dynamicAddress) {
+    private static long effectiveMemoryAddress64(long staticAddressOffset, long dynamicAddress, WasmFunctionNode<?> thiz) {
         try {
             return Math.addExact(dynamicAddress, staticAddressOffset);
         } catch (ArithmeticException e) {
-            enterErrorBranch();
+            enterErrorBranch(thiz.codeEntry);
             throw WasmException.create(Failure.UNSPECIFIED_TRAP, "Memory address too large");
-        }
-    }
-
-    private void load(WasmMemory memory, WasmMemoryLibrary memoryLib, VirtualFrame frame, int stackPointer, int opcode, long address) {
-        switch (opcode) {
-            case Bytecode.I32_LOAD:
-            case Bytecode.I32_LOAD_U8:
-            case Bytecode.I32_LOAD_I32: {
-                final int value = memoryLib.load_i32(memory, this, address);
-                pushInt(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I64_LOAD:
-            case Bytecode.I64_LOAD_U8:
-            case Bytecode.I64_LOAD_I32: {
-                final long value = memoryLib.load_i64(memory, this, address);
-                pushLong(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.F32_LOAD:
-            case Bytecode.F32_LOAD_U8:
-            case Bytecode.F32_LOAD_I32: {
-                final float value = memoryLib.load_f32(memory, this, address);
-                pushFloat(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.F64_LOAD:
-            case Bytecode.F64_LOAD_U8:
-            case Bytecode.F64_LOAD_I32: {
-                final double value = memoryLib.load_f64(memory, this, address);
-                pushDouble(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I32_LOAD8_S:
-            case Bytecode.I32_LOAD8_S_U8:
-            case Bytecode.I32_LOAD8_S_I32: {
-                final int value = memoryLib.load_i32_8s(memory, this, address);
-                pushInt(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I32_LOAD8_U:
-            case Bytecode.I32_LOAD8_U_U8:
-            case Bytecode.I32_LOAD8_U_I32: {
-                final int value = memoryLib.load_i32_8u(memory, this, address);
-                pushInt(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I32_LOAD16_S:
-            case Bytecode.I32_LOAD16_S_U8:
-            case Bytecode.I32_LOAD16_S_I32: {
-                final int value = memoryLib.load_i32_16s(memory, this, address);
-                pushInt(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I32_LOAD16_U:
-            case Bytecode.I32_LOAD16_U_U8:
-            case Bytecode.I32_LOAD16_U_I32: {
-                final int value = memoryLib.load_i32_16u(memory, this, address);
-                pushInt(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I64_LOAD8_S:
-            case Bytecode.I64_LOAD8_S_U8:
-            case Bytecode.I64_LOAD8_S_I32: {
-                final long value = memoryLib.load_i64_8s(memory, this, address);
-                pushLong(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I64_LOAD8_U:
-            case Bytecode.I64_LOAD8_U_U8:
-            case Bytecode.I64_LOAD8_U_I32: {
-                final long value = memoryLib.load_i64_8u(memory, this, address);
-                pushLong(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I64_LOAD16_S:
-            case Bytecode.I64_LOAD16_S_U8:
-            case Bytecode.I64_LOAD16_S_I32: {
-                final long value = memoryLib.load_i64_16s(memory, this, address);
-                pushLong(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I64_LOAD16_U:
-            case Bytecode.I64_LOAD16_U_U8:
-            case Bytecode.I64_LOAD16_U_I32: {
-                final long value = memoryLib.load_i64_16u(memory, this, address);
-                pushLong(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I64_LOAD32_S:
-            case Bytecode.I64_LOAD32_S_U8:
-            case Bytecode.I64_LOAD32_S_I32: {
-                final long value = memoryLib.load_i64_32s(memory, this, address);
-                pushLong(frame, stackPointer, value);
-                break;
-            }
-            case Bytecode.I64_LOAD32_U:
-            case Bytecode.I64_LOAD32_U_U8:
-            case Bytecode.I64_LOAD32_U_I32: {
-                final long value = memoryLib.load_i64_32u(memory, this, address);
-                pushLong(frame, stackPointer, value);
-                break;
-            }
-            default:
-                throw CompilerDirectives.shouldNotReachHere();
-        }
-    }
-
-    private void store(WasmMemory memory, WasmMemoryLibrary memoryLib, VirtualFrame frame, int stackPointer, int opcode, long address) {
-        switch (opcode) {
-            case Bytecode.I32_STORE:
-            case Bytecode.I32_STORE_U8:
-            case Bytecode.I32_STORE_I32: {
-                final int value = popInt(frame, stackPointer);
-                memoryLib.store_i32(memory, this, address, value);
-                break;
-            }
-            case Bytecode.I64_STORE:
-            case Bytecode.I64_STORE_U8:
-            case Bytecode.I64_STORE_I32: {
-                final long value = popLong(frame, stackPointer);
-                memoryLib.store_i64(memory, this, address, value);
-                break;
-            }
-            case Bytecode.F32_STORE:
-            case Bytecode.F32_STORE_U8:
-            case Bytecode.F32_STORE_I32: {
-                final float value = popFloat(frame, stackPointer);
-                memoryLib.store_f32(memory, this, address, value);
-                break;
-            }
-            case Bytecode.F64_STORE:
-            case Bytecode.F64_STORE_U8:
-            case Bytecode.F64_STORE_I32: {
-                final double value = popDouble(frame, stackPointer);
-                memoryLib.store_f64(memory, this, address, value);
-                break;
-            }
-            case Bytecode.I32_STORE_8:
-            case Bytecode.I32_STORE_8_U8:
-            case Bytecode.I32_STORE_8_I32: {
-                final int value = popInt(frame, stackPointer);
-                memoryLib.store_i32_8(memory, this, address, (byte) value);
-                break;
-            }
-            case Bytecode.I32_STORE_16:
-            case Bytecode.I32_STORE_16_U8:
-            case Bytecode.I32_STORE_16_I32: {
-                final int value = popInt(frame, stackPointer);
-                memoryLib.store_i32_16(memory, this, address, (short) value);
-                break;
-            }
-            case Bytecode.I64_STORE_8:
-            case Bytecode.I64_STORE_8_U8:
-            case Bytecode.I64_STORE_8_I32: {
-                final long value = popLong(frame, stackPointer);
-                memoryLib.store_i64_8(memory, this, address, (byte) value);
-                break;
-            }
-            case Bytecode.I64_STORE_16:
-            case Bytecode.I64_STORE_16_U8:
-            case Bytecode.I64_STORE_16_I32: {
-                final long value = popLong(frame, stackPointer);
-                memoryLib.store_i64_16(memory, this, address, (short) value);
-                break;
-            }
-            case Bytecode.I64_STORE_32:
-            case Bytecode.I64_STORE_32_U8:
-            case Bytecode.I64_STORE_32_I32: {
-                final long value = popLong(frame, stackPointer);
-                memoryLib.store_i64_32(memory, this, address, (int) value);
-                break;
-            }
-            default:
-                throw CompilerDirectives.shouldNotReachHere();
         }
     }
 
@@ -2197,7 +4884,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
 
                 Object struct = WasmFrame.popReference(frame, stackPointer - 1);
                 if (struct == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_STRUCTURE_REFERENCE, this);
                 }
                 switch (fieldType) {
@@ -2228,7 +4915,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
 
                 Object struct = WasmFrame.popReference(frame, stackPointer - 2);
                 if (struct == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_STRUCTURE_REFERENCE, this);
                 }
                 switch (fieldType) {
@@ -2330,7 +5017,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 int length = WasmFrame.popInt(frame, stackPointer - 1);
                 int source = WasmFrame.popInt(frame, stackPointer - 2);
                 if (checkOutOfBounds(source, length * WasmType.storageByteSize(elemType), dataLength)) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_MEMORY_ACCESS);
                 }
                 WasmArray array = switch (elemType) {
@@ -2358,7 +5045,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 int length = WasmFrame.popInt(frame, stackPointer - 1);
                 int source = WasmFrame.popInt(frame, stackPointer - 2);
                 if (checkOutOfBounds(source, length, elemInstance == null ? 0 : elemInstance.length)) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_TABLE_ACCESS);
                 }
                 WasmRefArray array = length == 0 ? new WasmRefArray(arrayType, 0) : new WasmRefArray(arrayType, length, elemInstance, source);
@@ -2379,11 +5066,11 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 Object array = WasmFrame.popReference(frame, stackPointer - 2);
 
                 if (array == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_ARRAY_REFERENCE, this);
                 }
                 if (checkOutOfBounds(index, ((WasmArray) array).length())) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_ARRAY_ACCESS);
                 }
                 switch (elemType) {
@@ -2418,11 +5105,11 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 Object array = WasmFrame.popReference(frame, stackPointer - 3);
 
                 if (array == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_ARRAY_REFERENCE, this);
                 }
                 if (checkOutOfBounds(index, ((WasmArray) array).length())) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_ARRAY_ACCESS);
                 }
                 switch (elemType) {
@@ -2441,7 +5128,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
             case Bytecode.ARRAY_LEN: {
                 Object array = WasmFrame.popReference(frame, stackPointer - 1);
                 if (array == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_ARRAY_REFERENCE, this);
                 }
                 WasmFrame.pushInt(frame, stackPointer - 1, ((WasmArray) array).length());
@@ -2459,11 +5146,11 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 Object array = WasmFrame.popReference(frame, stackPointer - 4);
 
                 if (array == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_ARRAY_REFERENCE, this);
                 }
                 if (checkOutOfBounds(destination, length, ((WasmArray) array).length())) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_ARRAY_ACCESS);
                 }
                 switch (elemType) {
@@ -2517,11 +5204,11 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 Object dstArray = WasmFrame.popReference(frame, stackPointer - 5);
 
                 if (srcArray == WasmConstant.NULL || dstArray == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_ARRAY_REFERENCE, this);
                 }
                 if (checkOutOfBounds(destination, length, ((WasmArray) dstArray).length()) || checkOutOfBounds(source, length, ((WasmArray) srcArray).length())) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_ARRAY_ACCESS);
                 }
                 switch (elemType) {
@@ -2553,15 +5240,15 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 Object array = WasmFrame.popReference(frame, stackPointer - 4);
 
                 if (array == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_ARRAY_REFERENCE, this);
                 }
                 if (checkOutOfBounds(destination, length, ((WasmArray) array).length())) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_ARRAY_ACCESS);
                 }
                 if (checkOutOfBounds(source, length * WasmType.storageByteSize(elemType), dataLength)) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_MEMORY_ACCESS);
                 }
                 switch (elemType) {
@@ -2589,15 +5276,15 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 Object array = WasmFrame.popReference(frame, stackPointer - 4);
 
                 if (array == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_ARRAY_REFERENCE, this);
                 }
                 if (checkOutOfBounds(destination, length, ((WasmArray) array).length())) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_ARRAY_ACCESS);
                 }
                 if (checkOutOfBounds(source, length, elemInstance == null ? 0 : elemInstance.length)) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_TABLE_ACCESS);
                 }
                 if (length > 0) {
@@ -2622,7 +5309,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 Object ref = WasmFrame.popReference(frame, stackPointer - 1);
                 boolean match = runTimeTypeCheck(expectedReferenceType, ref);
                 if (!match) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.CAST_FAILURE, this);
                 }
                 WasmFrame.pushReference(frame, stackPointer - 1, ref);
@@ -2672,7 +5359,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
             case Bytecode.I31_GET_U: {
                 Object i31 = WasmFrame.popReference(frame, stackPointer - 1);
                 if (i31 == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.NULL_I31_REFERENCE, this);
                 }
                 int i32 = (int) i31;
@@ -2848,7 +5535,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
             case Bytecode.REF_AS_NON_NULL: {
                 Object reference = popReference(frame, stackPointer - 1);
                 if (reference == WasmConstant.NULL) {
-                    enterErrorBranch();
+                    enterErrorBranch(codeEntry);
                     throw WasmException.format(Failure.NULL_REFERENCE, this, "Function reference is null");
                 }
                 pushReference(frame, stackPointer - 1, reference);
@@ -2921,7 +5608,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 } else {
                     baseAddress = popLong(frame, stackPointer - 2);
                 }
-                final long address = effectiveMemoryAddress64(memOffset, baseAddress);
+                final long address = effectiveMemoryAddress64(memOffset, baseAddress, this);
                 executeAtomicAtAddress(memory, memoryLib, frame, stackPointer - 1, opcode, address);
                 return 1;
             }
@@ -2940,7 +5627,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 } else {
                     baseAddress = popLong(frame, stackPointer - 3);
                 }
-                final long address = effectiveMemoryAddress64(memOffset, baseAddress);
+                final long address = effectiveMemoryAddress64(memOffset, baseAddress, this);
                 executeAtomicAtAddress(memory, memoryLib, frame, stackPointer - 1, opcode, address);
                 return 2;
             }
@@ -2957,7 +5644,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 } else {
                     baseAddress = popLong(frame, stackPointer - 1);
                 }
-                final long address = effectiveMemoryAddress64(memOffset, baseAddress);
+                final long address = effectiveMemoryAddress64(memOffset, baseAddress, this);
                 executeAtomicAtAddress(memory, memoryLib, frame, stackPointer - 1, opcode, address);
                 return 0;
             }
@@ -2974,7 +5661,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 } else {
                     baseAddress = popLong(frame, stackPointer - 2);
                 }
-                final long address = effectiveMemoryAddress64(memOffset, baseAddress);
+                final long address = effectiveMemoryAddress64(memOffset, baseAddress, this);
                 executeAtomicAtAddress(memory, memoryLib, frame, stackPointer - 1, opcode, address);
                 return 2;
             }
@@ -3421,7 +6108,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 } else {
                     baseAddress = popLong(frame, --stackPointer);
                 }
-                final long address = effectiveMemoryAddress64(memOffset, baseAddress);
+                final long address = effectiveMemoryAddress64(memOffset, baseAddress, this);
                 final WasmMemory memory = memory(instance, memoryIndex);
                 loadVector(memory, memoryLib(memoryIndex), frame, stackPointer++, vectorOpcode, address);
                 break;
@@ -3447,7 +6134,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 } else {
                     baseAddress = popLong(frame, --stackPointer);
                 }
-                final long address = effectiveMemoryAddress64(memOffset, baseAddress);
+                final long address = effectiveMemoryAddress64(memOffset, baseAddress, this);
                 final WasmMemory memory = memory(instance, memoryIndex);
                 storeVector(memory, memoryLib(memoryIndex), address, value);
                 break;
@@ -3478,7 +6165,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 } else {
                     baseAddress = popLong(frame, --stackPointer);
                 }
-                final long address = effectiveMemoryAddress64(memOffset, baseAddress);
+                final long address = effectiveMemoryAddress64(memOffset, baseAddress, this);
                 final WasmMemory memory = memory(instance, memoryIndex);
                 loadVectorLane(memory, memoryLib(memoryIndex), frame, stackPointer++, vectorOpcode, address, laneIndex, vec);
                 break;
@@ -3509,7 +6196,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 } else {
                     baseAddress = popLong(frame, --stackPointer);
                 }
-                final long address = effectiveMemoryAddress64(memOffset, baseAddress);
+                final long address = effectiveMemoryAddress64(memOffset, baseAddress, this);
                 final WasmMemory memory = memory(instance, memoryIndex);
                 storeVectorLane(memory, memoryLib(memoryIndex), vectorOpcode, address, laneIndex, vec);
                 break;
@@ -4382,14 +7069,14 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         int x = popInt(frame, stackPointer - 1);
         int y = popInt(frame, stackPointer - 2);
         if (x == -1 && y == Integer.MIN_VALUE) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_OVERFLOW, this);
         }
         int result;
         try {
             result = y / x;
         } catch (ArithmeticException e) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_DIVIDE_BY_ZERO, this);
         }
         pushInt(frame, stackPointer - 2, result);
@@ -4402,7 +7089,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         try {
             result = Integer.divideUnsigned(y, x);
         } catch (ArithmeticException e) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_DIVIDE_BY_ZERO, this);
         }
         pushInt(frame, stackPointer - 2, result);
@@ -4415,7 +7102,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         try {
             result = y % x;
         } catch (ArithmeticException e) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_DIVIDE_BY_ZERO, this);
         }
         pushInt(frame, stackPointer - 2, result);
@@ -4428,7 +7115,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         try {
             result = Integer.remainderUnsigned(y, x);
         } catch (ArithmeticException e) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_DIVIDE_BY_ZERO, this);
         }
         pushInt(frame, stackPointer - 2, result);
@@ -4533,14 +7220,14 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         long x = popLong(frame, stackPointer - 1);
         long y = popLong(frame, stackPointer - 2);
         if (x == -1 && y == Long.MIN_VALUE) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_OVERFLOW, this);
         }
         final long result;
         try {
             result = y / x;
         } catch (ArithmeticException e) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_DIVIDE_BY_ZERO, this);
         }
         pushLong(frame, stackPointer - 2, result);
@@ -4553,7 +7240,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         try {
             result = Long.divideUnsigned(y, x);
         } catch (ArithmeticException e) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_DIVIDE_BY_ZERO, this);
         }
         pushLong(frame, stackPointer - 2, result);
@@ -4566,7 +7253,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         try {
             result = y % x;
         } catch (ArithmeticException e) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_DIVIDE_BY_ZERO, this);
         }
         pushLong(frame, stackPointer - 2, result);
@@ -4579,7 +7266,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         try {
             result = Long.remainderUnsigned(y, x);
         } catch (ArithmeticException e) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.INT_DIVIDE_BY_ZERO, this);
         }
         pushLong(frame, stackPointer - 2, result);
@@ -4851,7 +7538,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         if (x >= -0x1p31f && x < 0x1p31f) {
             result = (int) x;
         } else {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw trunc_f32_trap(x);
         }
         pushInt(frame, stackPointer - 1, result);
@@ -4863,7 +7550,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         if (x > -1.0f && x < 0x1p32f) {
             result = ExactMath.truncateToUnsignedInt(x);
         } else {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw trunc_f32_trap(x);
         }
         pushInt(frame, stackPointer - 1, result);
@@ -4875,7 +7562,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         if (x > -0x1.00000002p31 && x < 0x1p31) { // sic!
             result = (int) x;
         } else {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw trunc_f64_trap(x);
         }
         pushInt(frame, stackPointer - 1, result);
@@ -4887,7 +7574,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         if (x > -1.0 && x < 0x1p32) {
             result = ExactMath.truncateToUnsignedInt(x);
         } else {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw trunc_f64_trap(x);
         }
         pushInt(frame, stackPointer - 1, result);
@@ -4934,7 +7621,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         if (x >= -0x1p63f && x < 0x1p63f) {
             result = (long) x;
         } else {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw trunc_f32_trap(x);
         }
         pushLong(frame, stackPointer - 1, result);
@@ -4946,7 +7633,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         if (x > -1.0f && x < 0x1p64f) {
             result = ExactMath.truncateToUnsignedLong(x);
         } else {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw trunc_f32_trap(x);
         }
         pushLong(frame, stackPointer - 1, result);
@@ -4958,7 +7645,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         if (x >= -0x1p63 && x < 0x1p63) {
             result = (long) x;
         } else {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw trunc_f64_trap(x);
         }
         pushLong(frame, stackPointer - 1, result);
@@ -4970,7 +7657,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         if (x > -1.0 && x < 0x1p64) {
             result = ExactMath.truncateToUnsignedLong(x);
         } else {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw trunc_f64_trap(x);
         }
         pushLong(frame, stackPointer - 1, result);
@@ -5115,7 +7802,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
             elementInstanceLength = elementInstance.length;
         }
         if (checkOutOfBounds(source, length, elementInstanceLength) || checkOutOfBounds(destination, length, table.size())) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.OUT_OF_BOUNDS_TABLE_ACCESS);
         }
         if (length == 0) {
@@ -5128,7 +7815,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         final WasmTable table = instance.table(tableIndex);
         final int i = popInt(frame, stackPointer - 1);
         if (i < 0 || i >= table.size()) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.OUT_OF_BOUNDS_TABLE_ACCESS);
         }
         final Object value = table.get(i);
@@ -5140,7 +7827,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         final Object value = popReference(frame, stackPointer - 1);
         final int i = popInt(frame, stackPointer - 2);
         if (i < 0 || i >= table.size()) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.OUT_OF_BOUNDS_TABLE_ACCESS);
         }
         table.set(i, value);
@@ -5162,7 +7849,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         final WasmTable sourceTable = instance.table(sourceTableIndex);
         final WasmTable destinationTable = instance.table(destinationTableIndex);
         if (checkOutOfBounds(source, length, sourceTable.size()) || checkOutOfBounds(destination, length, destinationTable.size())) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.OUT_OF_BOUNDS_TABLE_ACCESS);
         }
         if (length == 0) {
@@ -5175,7 +7862,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
     private void table_fill(WasmInstance instance, int length, Object value, int offset, int tableIndex) {
         final WasmTable table = instance.table(tableIndex);
         if (checkOutOfBounds(offset, length, table.size())) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.OUT_OF_BOUNDS_TABLE_ACCESS);
         }
         if (length == 0) {
@@ -5191,7 +7878,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         final int dataOffset = instance.dataInstanceOffset(dataIndex);
         final int dataLength = instance.dataInstanceLength(dataIndex);
         if (checkOutOfBounds(source, length, dataLength)) {
-            enterErrorBranch();
+            enterErrorBranch(codeEntry);
             throw WasmException.create(Failure.OUT_OF_BOUNDS_MEMORY_ACCESS);
         }
         memoryLib.initialize(memory, null, codeEntry.bytecode(), dataOffset + source, destination, length);

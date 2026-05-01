@@ -30,6 +30,7 @@ import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.probabilit
 
 import java.lang.ref.Reference;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -42,15 +43,13 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.AlwaysInline;
+import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.core.MemoryWalker;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateGCOptions;
-import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.genscavenge.HeapVerifier;
 import com.oracle.svm.core.heap.GC;
 import com.oracle.svm.core.heap.GCCause;
@@ -66,16 +65,17 @@ import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.VMOperationInfos;
 import com.oracle.svm.core.hub.InteriorObjRefWalker;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.snippets.ImplicitExceptions;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.thread.NativeVMOperation;
 import com.oracle.svm.core.thread.NativeVMOperationData;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.hosted.webimage.wasm.stack.WebImageWasmStackFrameVisitor;
 import com.oracle.svm.hosted.webimage.wasm.stack.WebImageWasmStackWalker;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.webimage.platform.WebImageWasmLMPlatform;
 import com.oracle.svm.webimage.wasm.code.WasmSimpleCodeInfoQueryResult;
 
@@ -206,7 +206,6 @@ public class WasmLMGC implements GC {
     }
 
     @Override
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void collect(GCCause cause) {
         collect(cause, false);
     }
@@ -246,17 +245,11 @@ public class WasmLMGC implements GC {
         return Options.GCStressTest.getValue();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private void collect(GCCause cause, boolean forceFullGC) {
         boolean outOfMemory = collectWithoutAllocating(cause, forceFullGC);
         if (outOfMemory) {
-            throwOutOfMemoryError();
+            throw OutOfMemoryUtil.heapSizeExceeded();
         }
-    }
-
-    @Uninterruptible(reason = "Switch from uninterruptible to interruptible code.", calleeMustBe = false)
-    private static void throwOutOfMemoryError() {
-        throw OutOfMemoryUtil.heapSizeExceeded();
     }
 
     @Uninterruptible(reason = "Avoid races with other threads that also try to trigger a GC", calleeMustBe = false)
@@ -605,7 +598,7 @@ final class GrayToBlackObjectVisitor implements ObjectVisitor {
         // Always mark referent as reachable (no support for soft or weak references yet)
         // TODO GR-43486 allow for soft and weak referenced referents to be potentially freed by the
         // GC
-        int referenceSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int referenceSize = ObjectLayout.singleton().getReferenceSize();
         referenceVisitor.visitObjectReferences(ReferenceInternals.getReferentFieldAddress(dr), false, referenceSize, dr, 1);
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -107,7 +107,7 @@ public class WasmJsApiSuite {
     private static final String EXCEPTIONS_OPTION = "wasm.Exceptions";
 
     private static WasmFunctionInstance createWasmFunctionInstance(WasmContext context, int[] paramTypes, int[] resultTypes, RootNode functionRootNode) {
-        WasmModule module = WasmModule.createBuiltin("dummyModule");
+        WasmModule module = WasmModule.createBuiltin(context.language(), "dummyModule");
         module.allocateFunctionType(paramTypes, resultTypes, context.getContextOptions().supportMultiValue(), context.language());
         WasmFunction func = module.declareFunction(0);
         func.setTarget(functionRootNode.getCallTarget());

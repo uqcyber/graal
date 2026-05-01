@@ -53,7 +53,7 @@ import jdk.graal.compiler.processor.AbstractProcessor;
 @SupportedAnnotationTypes(AutomaticallyRegisteredFeatureProcessor.ANNOTATION_CLASS_NAME)
 public class AutomaticallyRegisteredFeatureProcessor extends AbstractProcessor {
 
-    static final String ANNOTATION_CLASS_NAME = "com.oracle.svm.core.feature.AutomaticallyRegisteredFeature";
+    static final String ANNOTATION_CLASS_NAME = "com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature";
     static final String FEATURE_INTERFACE_CLASS_NAME = "com.oracle.svm.core.feature.InternalFeature";
     static final String SERVICE_REGISTRATION_INTERFACE_NAME = "com.oracle.svm.core.feature.AutomaticallyRegisteredFeatureServiceRegistration";
 

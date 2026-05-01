@@ -349,13 +349,8 @@ public class AutomaticUnsafeTransformationSupport {
         ValueNode fieldArgumentNode = invoke.callTarget().arguments().get(1);
         JavaConstant fieldArgument = nodeAsConstant(fieldArgumentNode);
         if (fieldArgument != null) {
-            /*
-             * GR-72441: need equivalent of ConstantReflectionProvider.asJavaType() for fields to
-             * get a `ResolvedJavaField` from a `JavaConstant`.
-             */
             GuestAccess access = GuestAccess.get();
-            Field oField = access.getSnippetReflection().asObject(Field.class, fieldArgument);
-            ResolvedJavaField field = access.lookupField(oField);
+            ResolvedJavaField field = access.asResolvedJavaField(fieldArgument);
             if (isValidField(invoke, field, unsuccessfulReasons, methodFormat)) {
                 targetField = field;
             }

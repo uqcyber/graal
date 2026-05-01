@@ -25,17 +25,15 @@
 
 package com.oracle.svm.core.posix;
 
-import static com.oracle.svm.core.posix.PosixSubstrateSigprofHandler.isSignalHandlerBasedExecutionSamplerEnabled;
-
 import java.util.List;
 
+import com.oracle.svm.core.jfr.JfrOptions;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.IsolateListenerSupport;
-import com.oracle.svm.core.IsolateListenerSupportFeature;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jfr.HasJfrSupport;
@@ -45,7 +43,6 @@ import com.oracle.svm.core.jfr.sampler.JfrExecutionSampler;
 import com.oracle.svm.core.posix.linux.LinuxSubstrateSigprofHandler;
 import com.oracle.svm.core.sampler.SubstrateSigprofHandler;
 import com.oracle.svm.core.thread.ThreadListenerSupport;
-import com.oracle.svm.core.thread.ThreadListenerSupportFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
@@ -69,12 +66,12 @@ public class PosixSubstrateSigprofHandlerFeature implements InternalFeature {
 
     @Override
     public List<Class<? extends Feature>> getRequiredFeatures() {
-        return List.of(ThreadListenerSupportFeature.class, IsolateListenerSupportFeature.class, JfrFeature.class);
+        return List.of(JfrFeature.class);
     }
 
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        if (JfrExecutionSamplerSupported.isSupported() && isSignalHandlerBasedExecutionSamplerEnabled() && shouldUseAsyncSampler()) {
+        if (JfrExecutionSamplerSupported.isSupported() && JfrOptions.SignalHandlerBasedExecutionSampler.getValue()) {
             SubstrateSigprofHandler sampler = makeNewSigprofHandler();
             ImageSingletons.add(JfrExecutionSampler.class, sampler);
             ImageSingletons.add(SubstrateSigprofHandler.class, sampler);
@@ -82,10 +79,6 @@ public class PosixSubstrateSigprofHandlerFeature implements InternalFeature {
             ThreadListenerSupport.get().register(sampler);
             IsolateListenerSupport.singleton().register(sampler);
         }
-    }
-
-    protected boolean shouldUseAsyncSampler() {
-        return true;
     }
 
     /**
@@ -96,11 +89,9 @@ public class PosixSubstrateSigprofHandlerFeature implements InternalFeature {
      * method is using a per-thread handler (see {@link LinuxSubstrateSigprofHandler}), where each
      * thread must handle the signal after the timer expires. Note that per-thread signal handling
      * is supported only on Linux.
-     * </p>
      * <p>
      * For JFR, we should use a global handler instead of a per-thread handler to adhere to the
      * sampling frequency specified in .jfc (JFR's configuration).
-     * </p>
      */
     private static SubstrateSigprofHandler makeNewSigprofHandler() {
         if (Platform.includedIn(Platform.DARWIN.class) || HasJfrSupport.get()) {

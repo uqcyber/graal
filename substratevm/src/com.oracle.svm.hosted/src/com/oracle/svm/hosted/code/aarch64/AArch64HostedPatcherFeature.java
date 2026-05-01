@@ -26,22 +26,23 @@ package com.oracle.svm.hosted.code.aarch64;
 
 import java.util.function.Consumer;
 
+import com.oracle.svm.core.graal.code.CGlobalDataDirectReference;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.objectfile.ObjectFile.RelocationKind;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.graal.code.CGlobalDataReference;
 import com.oracle.svm.core.graal.code.PatchConsumerFactory;
 import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.meta.SubstrateMethodPointerConstant;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.hosted.code.HostedPatcher;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ClassUtil;
@@ -59,6 +60,7 @@ import jdk.vm.ci.meta.VMConstant;
 
 @AutomaticallyRegisteredFeature
 @Platforms({Platform.AARCH64.class})
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public class AArch64HostedPatcherFeature implements InternalFeature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
@@ -199,7 +201,7 @@ class AdrpAddMacroInstructionHostedPatcher extends CompilationResult.CodeAnnotat
                 relocVal = pointer;
             }
         } else {
-            VMError.guarantee(ref instanceof DataSectionReference || ref instanceof CGlobalDataReference, "Unexpected reference: %s", ref);
+            VMError.guarantee(ref instanceof DataSectionReference || ref instanceof CGlobalDataDirectReference, "Unexpected reference: %s", ref);
         }
 
         int siteOffset = compStart + macroInstruction.instructionPosition;
@@ -244,7 +246,7 @@ class MovSequenceHostedPatcher extends CompilationResult.CodeAnnotation implemen
          * method. We add the method start to get the section-relative offset.
          */
         int siteOffset = compStart + annotation.instructionPosition;
-        if (ref instanceof DataSectionReference || ref instanceof CGlobalDataReference || ref instanceof ConstantReference) {
+        if (ref instanceof DataSectionReference || ref instanceof CGlobalDataDirectReference || ref instanceof ConstantReference) {
             if (ref instanceof ConstantReference constantRef) {
                 VMError.guarantee(!(constantRef.getConstant() instanceof SubstrateMethodPointerConstant), "SubstrateMethodPointerConstants should not be relocated %s", constantRef);
             }

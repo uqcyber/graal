@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,17 +37,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.graalvm.word.Pointer;
+import org.graalvm.word.impl.Word;
+
 import com.oracle.svm.configure.UnresolvedAccessCondition;
 import com.oracle.svm.configure.config.ForeignConfiguration.ConfigurationFunctionDescriptor;
 import com.oracle.svm.configure.config.ForeignConfiguration.StubDesc;
-import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.ArenaIntrinsics;
+import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.foreign.ForeignFunctionsRuntime.LinkRequest;
 import com.oracle.svm.core.nodes.foreign.ScopedMemExceptionHandlerClusterNode.ClusterBeginNode;
 import com.oracle.svm.core.nodes.foreign.ScopedMemExceptionHandlerClusterNode.ExceptionInputNode;
 import com.oracle.svm.core.nodes.foreign.ScopedMemExceptionHandlerClusterNode.ExceptionPathNode;
 import com.oracle.svm.core.nodes.foreign.ScopedMemExceptionHandlerClusterNode.RegularPathNode;
+import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.VMError;
 
@@ -60,7 +64,7 @@ import jdk.internal.foreign.layout.AbstractLayout;
 /**
  * For details on the implementation of shared arenas on substrate see
  * {@link Target_jdk_internal_misc_ScopedMemoryAccess}.
- *
+ * <p>
  * Note that this code should only be called by substitutions in
  * {@link Target_jdk_internal_misc_ScopedMemoryAccess}.
  */
@@ -110,7 +114,7 @@ public class SubstrateForeignUtil {
 
     /**
      * Handles exceptions related to memory sessions within a specific arena scope.
-     *
+     * <p>
      * This method checks if the {@link java.lang.foreign.Arena} associated with {@code session} is
      * in a valid state. If validation fails, it logs the exception and propagates it through the
      * exception path.
@@ -201,5 +205,20 @@ public class SubstrateForeignUtil {
             return "align(" + memoryLayout.byteAlignment() + ", " + layoutString + ")";
         }
         return layoutString;
+    }
+
+    @NeverInline("inlining cut off")
+    static void throwSymbolIsNullException(MemorySegment symbol) {
+        throw new IllegalArgumentException("Symbol is NULL: " + symbol);
+    }
+
+    @NeverInline("inlining cut off")
+    static void throwHeapSegmentNotAllowedException(MemorySegment segment) {
+        throw new IllegalArgumentException("Heap segment not allowed: " + segment);
+    }
+
+    @AlwaysInline("direct upcall stub performance")
+    public static Object objectFromAddress(long addr) {
+        return ((Pointer) Word.unsigned(addr)).toObject();
     }
 }

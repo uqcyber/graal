@@ -49,12 +49,12 @@ public final class UpcallStubsHolder {
      *
      * Naming scheme:
      *
-     * <pre>
-     *  upcall<High|Low>_(<c argument>*)<c return type>_<digest of paramsMemoryAssignment>[_<returnMemoryAssignment>]>
-     * </pre>
+     * {@code 
+     *  [direct_]upcall<High|Low>_[injrecv_](<c argument>*)<c return type>_<digest of paramsMemoryAssignment>[_<returnMemoryAssignment>]>
+     * }
      */
     @Platforms(Platform.HOSTED_ONLY.class)
-    public static String stubName(JavaEntryPointInfo jep, boolean highLevel, boolean direct) {
+    public static String stubName(JavaEntryPointInfo jep, boolean highLevel, boolean direct, boolean injectReceiver) {
         MethodType type = jep.handleType();
 
         StringBuilder builder = new StringBuilder();
@@ -64,6 +64,10 @@ public final class UpcallStubsHolder {
         builder.append("upcall");
         builder.append(highLevel ? "High" : "Low");
         builder.append("_");
+        if (injectReceiver) {
+            assert direct;
+            builder.append("injrecv_");
+        }
         for (var param : type.parameterArray()) {
             builder.append(JavaKind.fromJavaClass(param).getTypeChar());
         }

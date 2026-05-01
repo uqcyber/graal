@@ -52,7 +52,7 @@ import com.oracle.svm.core.util.UserError;
  *
  * Every node tracks a list of reasons for the set configuration. This list helps the users debug
  * conflicts in the configuration.
- * 
+ *
  * A {@code strict} configuration, as specified by {@link InitializationNode#strict}, defines
  * whether an initialization kind, as specified by {@link InitializationNode#kind}, was explicitly
  * configured for the corresponding type. A {@code non-strict} configuration is a configuration
@@ -166,10 +166,37 @@ final class ClassInitializationConfiguration {
     }
 }
 
+/**
+ * A node in a tree that models class/package initialization policy for Native Image. Each node
+ * corresponds to one qualifier (a path segment in a fully qualified name) and can hold an explicit
+ * initialization policy along with why it was chosen.
+ */
 final class InitializationNode {
+    /**
+     * The simple name for this tree level (e.g., "", "com", "oracle", "svm", "hosted" or
+     * "MyClass"). The root uses the empty string "".
+     */
     final String qualifier;
+
+    /**
+     * Whether the node's initialization policy (kind) was explicitly configured at this exact node
+     * (strict = true) versus inherited from an ancestor package (strict = false). This affects
+     * conflict handling: explicit (strict) settings cannot be overridden; attempts to change them
+     * will abort with a user error.
+     */
     boolean strict;
+
+    /**
+     * The initialization policy (InitKind) applied at this node, or null if nothing was set here.
+     * Effective policy for a class is determined by the longest matching path with a non-null kind
+     * (inheritance from parent nodes).
+     */
     InitKind kind;
+
+    /**
+     * Strings explaining why this policy was applied (e.g., command-line options or feature
+     * decisions). It's used for diagnostics (e.g., in error messages and reporting).
+     */
     final EconomicSet<String> reasons = EconomicSet.create();
 
     final InitializationNode parent;

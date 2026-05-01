@@ -25,7 +25,6 @@
 package com.oracle.svm.hosted.c;
 
 import java.io.IOException;
-import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -63,9 +62,11 @@ import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.impl.Word;
 import org.graalvm.word.WordBase;
 import org.graalvm.word.WordFactory;
+import org.graalvm.word.impl.BarrieredAccess;
+import org.graalvm.word.impl.ObjectAccess;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.graal.pointsto.infrastructure.WrappedElement;
 import com.oracle.graal.pointsto.meta.AnalysisType;
@@ -74,11 +75,16 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.libc.MuslLibC;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.hosted.GuestTypes;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.NativeImageOptions;
 import com.oracle.svm.hosted.c.info.ElementInfo;
 import com.oracle.svm.hosted.c.libc.HostedLibCBase;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.util.AnnotationUtil;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.ReflectionUtil.ReflectionUtilError;
@@ -86,8 +92,6 @@ import com.oracle.svm.shared.util.ReflectionUtil.ReflectionUtilError;
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.hotspot.JVMCIVersionCheck;
-import org.graalvm.word.impl.BarrieredAccess;
-import org.graalvm.word.impl.ObjectAccess;
 import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
@@ -96,6 +100,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.annotation.Annotated;
 
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public final class NativeLibraries {
 
     private final MetaAccessProvider metaAccess;
@@ -443,14 +448,15 @@ public final class NativeLibraries {
     }
 
     public void processCLibraryAnnotations(ImageClassLoader loader) {
-        for (Class<?> clazz : loader.findAnnotatedClasses(CLibrary.class, false)) {
-            if (makeContext(getDirectives(metaAccess.lookupJavaType(clazz))).isInConfiguration()) {
-                annotated.add(clazz.getAnnotation(CLibrary.class));
+        GuestTypes guestTypes = loader.guestTypes;
+        for (ResolvedJavaType clazz : guestTypes.findAnnotatedTypes(CLibrary.class, false)) {
+            if (makeContext(getDirectives(clazz)).isInConfiguration()) {
+                annotated.add(AnnotationUtil.getAnnotation(clazz, CLibrary.class));
             }
         }
-        for (Method method : loader.findAnnotatedMethods(CLibrary.class)) {
-            if (makeContext(getDirectives(metaAccess.lookupJavaType(method.getDeclaringClass()))).isInConfiguration()) {
-                annotated.add(method.getAnnotation(CLibrary.class));
+        for (ResolvedJavaMethod method : guestTypes.findAnnotatedMethods(CLibrary.class)) {
+            if (makeContext(getDirectives(method.getDeclaringClass())).isInConfiguration()) {
+                annotated.add(AnnotationUtil.getAnnotation(method, CLibrary.class));
             }
         }
     }

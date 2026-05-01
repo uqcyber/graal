@@ -372,7 +372,7 @@ public class ClosureCompilerSupportImpl implements ClosureCompilerSupport {
     protected CompilerOptions createClosureCompilerOptions() {
         final CompilerOptions closureCompOpts = new CompilerOptions();
 
-        WebImageOptions.ClosurePrettyPrintLevel prettyPrintLevel = WebImageOptions.ClosurePrettyPrint.getValue(HostedOptionValues.singleton());
+        WebImageOptions.ClosurePrettyPrintLevel prettyPrintLevel = WebImageOptions.ClosurePrettyPrint.getValue(HostedOptionValues.singleton().get());
 
         CompilationLevel.ADVANCED_OPTIMIZATIONS.setOptionsForCompilationLevel(closureCompOpts);
 

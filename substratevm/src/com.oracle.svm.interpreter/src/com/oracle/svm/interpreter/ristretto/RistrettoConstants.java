@@ -29,9 +29,10 @@ import com.oracle.svm.interpreter.ristretto.profile.RistrettoCompilationRequest;
 
 public class RistrettoConstants {
     /**
-     * Marker value indicating a {@link RistrettoMethod} was never compiled yet.
+     * Marker value indicating a {@link RistrettoMethod} is not compiled at the moment and only
+     * running in the interpreter.
      */
-    public static final int COMPILE_STATE_NEVER_COMPILED = 0;
+    public static final int COMPILE_STATE_INTERPRETED = 0;
 
     /**
      * Marker value indicating that a {@link RistrettoCompilationRequest} was submitted for the

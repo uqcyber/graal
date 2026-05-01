@@ -24,11 +24,14 @@
  */
 package com.oracle.svm.core.c;
 
+import java.util.function.Supplier;
+
 import org.graalvm.nativeimage.libgraal.hosted.GlobalData;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.impl.Word;
 
-import java.util.function.Supplier;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 
 /**
  * @see GlobalData#createGlobal(long)

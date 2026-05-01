@@ -35,7 +35,6 @@ import com.oracle.svm.webimage.hightiercodegen.variables.VariableMap;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.calc.CanonicalCondition;
-import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.nodes.LogicNode;
 import jdk.graal.compiler.nodes.ParameterNode;
@@ -383,14 +382,6 @@ public abstract class CodeGenTool {
 
     public void genTryBlock() {
         codeBuffer.emitTry();
-    }
-
-    public void genCatchBlockPrefix(String expName) {
-        codeBuffer.emitCatch(expName);
-    }
-
-    public void genCatchBlockPrefix(String expName, Stamp stamp) {
-        genCatchBlockPrefix(expName, stamp.javaType(getProviders().getMetaAccess()));
     }
 
     public void genCatchBlockPrefix(String expName, ResolvedJavaType javaType) {

@@ -24,13 +24,15 @@
  */
 package com.oracle.svm.core.headers;
 
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.memory.NativeMemory;
 
 /** Platform-independent LibC support. Don't use this class directly, use {@link LibC} instead. */
@@ -80,6 +82,9 @@ public interface LibCSupport {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     int strcmp(CCharPointer s1, CCharPointer s2);
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    int strncmp(CCharPointer s1, CCharPointer s2, UnsignedWord n);
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     int isdigit(int c);

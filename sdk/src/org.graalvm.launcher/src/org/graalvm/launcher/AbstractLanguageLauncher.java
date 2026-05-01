@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -161,13 +161,13 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
 
         String[] optionVarsArguments = new String[optionVarsArgs.length];
         for (int i = 0; i < optionVarsArgs.length; i++) {
-            optionVarsArguments[i] = new String(optionVarsArgs[i]);
+            optionVarsArguments[i] = launcher.decodeArgument(optionVarsArgs[i]);
         }
         launcher.optionVarsArguments = optionVarsArguments;
 
         String[] arguments = new String[args.length];
         for (int i = 0; i < args.length; i++) {
-            arguments[i] = new String(args[i]);
+            arguments[i] = launcher.decodeArgument(args[i]);
         }
 
         launcher.launch(arguments);
@@ -175,6 +175,15 @@ public abstract class AbstractLanguageLauncher extends LanguageLauncherBase {
         // shut down the launcher - do this in favor of calling the JNI DestroyJavaVM API, which
         // might hang waiting for daemon threads on SVM (GR-35345)
         System.exit(0);
+    }
+
+    /**
+     * Decodes an argument received from the native launcher. The default follows Java launcher
+     * behavior; language launchers may override this if their argument semantics require preserving
+     * undecodable native bytes.
+     */
+    protected String decodeArgument(byte[] argument) {
+        return new String(argument);
     }
 
     /**

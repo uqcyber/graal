@@ -41,6 +41,7 @@
 package com.oracle.truffle.api.bytecode;
 
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 import com.oracle.truffle.api.impl.Accessor;
@@ -53,6 +54,7 @@ final class BytecodeAccessor extends Accessor {
     static final MemorySupport MEMORY = ACCESSOR.memorySupport();
     static final RuntimeSupport RUNTIME = ACCESSOR.runtimeSupport();
     static final LanguageSupport LANGUAGE = ACCESSOR.languageSupport();
+    static final NodeSupport NODES = ACCESSOR.nodeSupport();
 
     private BytecodeAccessor() {
     }
@@ -69,6 +71,12 @@ final class BytecodeAccessor extends Accessor {
         @Override
         public <T> List<T> getEngineInstructionTracers(Object hostLanguage, Function<? extends Object, T> tracerFactory) {
             return (List<T>) BytecodeEngineData.get(hostLanguage).getEngineInstructionTracers((Function<BytecodeDescriptor<?, ?, ?>, InstructionTracer>) tracerFactory);
+        }
+
+        @SuppressWarnings("unchecked")
+        @Override
+        public void registerTransitionLogger(Object sharingLayer, BiConsumer<? extends Object, ? extends Object> logger) {
+            BytecodeEngineData.get(sharingLayer).setTransitionLogger((BiConsumer<BytecodeRootNode, BytecodeTransition>) logger);
         }
 
     }

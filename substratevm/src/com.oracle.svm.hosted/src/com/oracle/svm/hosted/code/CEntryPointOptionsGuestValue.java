@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.code;
 
-import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
 
 import jdk.graal.compiler.annotation.AnnotationValue;
 import jdk.vm.ci.meta.ResolvedJavaType;

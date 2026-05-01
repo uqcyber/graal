@@ -31,7 +31,7 @@ import org.graalvm.nativeimage.Platforms;
 import com.oracle.svm.core.CodeSynchronizationOperations;
 import com.oracle.svm.core.code.AbstractRuntimeCodeInstaller.RuntimeCodeInstallerPlatformHelper;
 import com.oracle.svm.core.code.RuntimeCodeCache;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;

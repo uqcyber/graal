@@ -279,6 +279,26 @@ public final class VectorAMD64 extends VectorArchitecture {
         return getSupportedVectorLength(stamp, maxLength, result);
     }
 
+    /**
+     * Returns support for native AVX512 rotate instructions.
+     */
+    @Override
+    public int getSupportedVectorRotateLength(Stamp stamp, int maxLength) {
+        if (!hasMinimumVectorizationRequirements(maxLength)) {
+            return 1;
+        }
+        if (!(stamp instanceof IntegerStamp integerStamp)) {
+            return 1;
+        }
+        int bits = integerStamp.getBits();
+        if (bits != Integer.SIZE && bits != Long.SIZE) {
+            return 1;
+        }
+        int requiredBytes = maxLength * getVectorStride(stamp);
+        AVXSize avxSize = arithOps.getSupportedAVXSize(VectorFeatureAssertion.AVX512F_VL, requiredBytes);
+        return getSupportedVectorLength(stamp, maxLength, avxSize);
+    }
+
     @Override
     public boolean narrowedVectorInstructionAvailable(NarrowableArithmeticNode operation, IntegerStamp narrowedStamp) {
         Op op = operation.getArithmeticOp();
@@ -611,14 +631,27 @@ public final class VectorAMD64 extends VectorArchitecture {
     }
 
     @Override
-    public int getSupportedVectorCompressExpandLength(Stamp elementStamp, int maxLength) {
+    public int getSupportedVectorCompressExpandLength(Stamp elementStamp, int maxLength, CompressExpandOp op) {
         if (!hasMinimumVectorizationRequirements(maxLength)) {
             return 1;
         }
 
         AVXSize avxSize = compressExpandOps.getSupportedAVXSize(elementStamp, maxLength);
         int supportedLength = getSupportedVectorLength(elementStamp, maxLength, avxSize);
+        if (op == CompressExpandOp.COMPRESS && supportedLength == 1 && supportsByteCompressFallback(elementStamp)) {
+            /*
+             * AVX byte-compress fallback: emulate byte compress with shuffle-based code paths.
+             */
+            supportedLength = getSupportedVectorLength(elementStamp, maxLength, getMaxSupportedAVXSize(arch.getFeatures()));
+        }
         return Math.min(supportedLength, maxLength);
+    }
+
+    private boolean supportsByteCompressFallback(Stamp elementStamp) {
+        return elementStamp instanceof IntegerStamp integerStamp &&
+                        integerStamp.getBits() == Byte.SIZE &&
+                        arch.getFeatures().contains(CPUFeature.AVX2) &&
+                        arch.getFeatures().contains(CPUFeature.POPCNT);
     }
 
     @Override
@@ -637,6 +670,38 @@ public final class VectorAMD64 extends VectorArchitecture {
         int maxSupportedAVXBytes = getMaxSupportedAVXSize(arch.getFeatures()).getBytes();
         // XMM into YMM concat or YMM into ZMM concat is supported
         return inputSizeInBytes == 16 && maxSupportedAVXBytes >= 32 || inputSizeInBytes == 32 && maxSupportedAVXBytes >= 64;
+    }
+
+    @Override
+    public boolean supportsVectorInsert(SimdStamp vectorStamp, SimdStamp valueStamp, int offset) {
+        if (!valueStamp.getComponent(0).isCompatible(vectorStamp.getComponent(0))) {
+            return false;
+        } else if (offset < 0 || valueStamp.getVectorLength() + offset > vectorStamp.getVectorLength()) {
+            return false;
+        } else {
+            int elementBytes = getVectorStride(vectorStamp.getComponent(0));
+            int vectorSizeInBytes = vectorStamp.getVectorLength() * elementBytes;
+            int valueSizeInBytes = valueStamp.getVectorLength() * elementBytes;
+            int offsetInBytes = offset * elementBytes;
+            int maxSupportedAVXBytes = getMaxSupportedAVXSize(arch.getFeatures()).getBytes();
+            if (vectorSizeInBytes > maxSupportedAVXBytes) {
+                return false;
+            } else if (valueSizeInBytes == Byte.BYTES || valueSizeInBytes == Short.BYTES || valueSizeInBytes == Integer.BYTES || valueSizeInBytes == Long.BYTES) {
+                /*
+                 * InsertOp can materialize sub-128-bit vector inserts on AMD64 if the insert is
+                 * aligned to the inserted value size and stays within a single XMM lane. Wider
+                 * inserts are lowered to this case lane-by-lane in AMD64VectorLoweringPhase.
+                 */
+                int offsetWithinXmmLane = offsetInBytes % AVXSize.XMM.getBytes();
+                return offsetInBytes % valueSizeInBytes == 0 && offsetWithinXmmLane + valueSizeInBytes <= AVXSize.XMM.getBytes();
+            } else if (valueSizeInBytes == AVXSize.XMM.getBytes()) {
+                return vectorSizeInBytes > AVXSize.XMM.getBytes() && offsetInBytes % AVXSize.XMM.getBytes() == 0;
+            } else if (valueSizeInBytes == AVXSize.YMM.getBytes()) {
+                return vectorSizeInBytes > AVXSize.YMM.getBytes() && maxSupportedAVXBytes >= AVXSize.ZMM.getBytes() && offsetInBytes % AVXSize.YMM.getBytes() == 0;
+            } else {
+                return false;
+            }
+        }
     }
 
     @Override

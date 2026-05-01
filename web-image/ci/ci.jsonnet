@@ -16,7 +16,7 @@ local weekly = r.weekly;
   // THE TASK CONFIGURATION
   task_dict:: {
     // TODO GR-67831 Split into separate style and fullbuild jobs
-    'style-fullbuild': mxgate('style,fullbuild,webimagehelp,webimageoptions') + t('30:00') + r.eclipse + r.jdt + r.spotbugs + r.prettier + platforms({
+    'style-fullbuild': mxgate('style,fullbuild,webimagehelp,webimageoptions') + t('30:00') + r.jdt + r.spotbugs + r.prettier + platforms({
       'linux:amd64:jdk-latest': tier1,
     }),
     'unittest': mxgate('webimagebuild,webimageunittest') + t('30:00') + r.node22 + platforms({

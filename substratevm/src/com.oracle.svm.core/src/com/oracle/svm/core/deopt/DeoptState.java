@@ -34,13 +34,13 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.impl.Word;
 import org.graalvm.word.WordBase;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.ReservedRegisters;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueType;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.hub.DynamicHub;
@@ -94,6 +94,21 @@ public class DeoptState {
         }
     }
 
+    /**
+     * Reads the value of an entry in this frame - this can be a local, a stack value or a lock.
+     */
+    public JavaConstant readValue(int idx, FrameInfoQueryResult sourceFrame) {
+        if (idx < sourceFrame.getValueInfos().length) {
+            return readValue(sourceFrame.getValueInfos()[idx], sourceFrame);
+        } else {
+            /*
+             * valueInfos can be shorter than {numLocals + numStack + numLocks}: trailing illegal
+             * slots are pruned when frame metadata is encoded.
+             */
+            return JavaConstant.forIllegal();
+        }
+    }
+
     protected JavaConstant readValue(FrameInfoQueryResult.ValueInfo valueInfo, FrameInfoQueryResult sourceFrame) {
         switch (valueInfo.getType()) {
             case Constant:
@@ -133,7 +148,7 @@ public class DeoptState {
     }
 
     private static PrimitiveConstant createWordConstant(WordBase word) {
-        return JavaConstant.forIntegerKind(ConfigurationValues.getWordKind(), word.rawValue());
+        return JavaConstant.forIntegerKind(SubstrateTarget.getWordKind(), word.rawValue());
     }
 
     private Object materializeObject(FrameInfoQueryResult.ValueInfo valueInfo, FrameInfoQueryResult sourceFrame) {
@@ -160,7 +175,7 @@ public class DeoptState {
         DeoptimizationCounters.counters().virtualObjectsCount.inc();
 
         FrameInfoQueryResult.ValueInfo[] encodings = sourceFrame.getVirtualObjects()[virtualObjectId];
-        ObjectLayout objectLayout = ConfigurationValues.getObjectLayout();
+        ObjectLayout objectLayout = ObjectLayout.singleton();
 
         /* The first encoded value is always the hub. */
         DynamicHub hub = (DynamicHub) SubstrateObjectConstant.asObject(readValue(encodings[0], sourceFrame));
@@ -256,6 +271,10 @@ public class DeoptState {
             default:
                 throw fatalDeoptimizationError("Unexpected constant kind: " + kind, frameInfo);
         }
+    }
+
+    public Pointer getSourceSp() {
+        return sourceSp;
     }
 
 }

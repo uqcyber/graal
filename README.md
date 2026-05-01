@@ -18,9 +18,10 @@ Instructions for building GraalVM from source are in [`vm/README.md`](vm/README.
 
 ## Get Support
 
-* Open a [GitHub issue][issues] for bug reports, questions, or requests for enhancements.
-* Join the [GraalVM Slack][slack] to connect with the community and the GraalVM team.
-* Report a security vulnerability according to the [Reporting Vulnerabilities guide][reporting-vulnerabilities].
+* Open a [GitHub issue][issues] for reproducible bugs and concrete feature requests.
+* Use [GitHub Discussions](https://github.com/oracle/graal/discussions) or join the [GraalVM Slack][slack] for questions, design discussion, and general community support.
+* Read the [contribution guide](CONTRIBUTING.md) before opening a pull request.
+* Report security vulnerabilities according to the [Reporting Vulnerabilities guide][reporting-vulnerabilities], not in public issues.
 
 ## Repository Structure
 

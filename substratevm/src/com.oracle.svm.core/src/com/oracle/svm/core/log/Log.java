@@ -36,7 +36,7 @@ import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordBase;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 
 import jdk.graal.compiler.api.replacements.Fold;
 
@@ -61,7 +61,7 @@ import jdk.graal.compiler.api.replacements.Fold;
  * import static com.oracle.svm.core.log.Log;
  *
  * void foo(int i, String s) {
- *   Log.log().string("i: ").signed(i).string(" s: ").string(s).newline();
+ *     Log.log().string("i: ").signed(i).string(" s: ").string(s).newline();
  * }
  * </pre>
  */

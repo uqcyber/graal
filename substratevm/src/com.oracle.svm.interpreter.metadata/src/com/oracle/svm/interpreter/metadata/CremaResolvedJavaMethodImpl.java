@@ -28,21 +28,27 @@ import java.lang.invoke.VarHandle;
 
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaMethod;
 import com.oracle.svm.core.hub.registry.SVMSymbols;
-import com.oracle.svm.core.interpreter.InterpreterSupport;
 import com.oracle.svm.core.reflect.CremaConstructorAccessor;
 import com.oracle.svm.core.reflect.CremaMethodAccessor;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.espresso.classfile.ExceptionHandler;
 import com.oracle.svm.espresso.classfile.ParserMethod;
+import com.oracle.svm.espresso.classfile.attributes.Attribute;
+import com.oracle.svm.espresso.classfile.attributes.AttributedElement;
 import com.oracle.svm.espresso.classfile.attributes.CodeAttribute;
+import com.oracle.svm.espresso.classfile.attributes.ExceptionsAttribute;
+import com.oracle.svm.espresso.classfile.attributes.MethodParametersAttribute;
+import com.oracle.svm.espresso.classfile.attributes.SignatureAttribute;
+import com.oracle.svm.espresso.classfile.descriptors.ParserSymbols;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
-public final class CremaResolvedJavaMethodImpl extends InterpreterResolvedJavaMethod implements CremaResolvedJavaMethod {
+public final class CremaResolvedJavaMethodImpl extends InterpreterResolvedJavaMethod implements CremaResolvedJavaMethod, AttributedElement {
     private final ExceptionHandler[] rawExceptionHandlers;
+    // GR-70288: Only keep a subset of the parsed attributes.
+    private final Attribute[] attributes;
 
     private CremaResolvedJavaMethodImpl(InterpreterResolvedObjectType declaringClass, ParserMethod parserMethod, int vtableIndex) {
         super(declaringClass, parserMethod, vtableIndex);
@@ -52,12 +58,16 @@ public final class CremaResolvedJavaMethodImpl extends InterpreterResolvedJavaMe
         } else {
             this.rawExceptionHandlers = null;
         }
+        this.attributes = parserMethod.getAttributes();
     }
 
     public static InterpreterResolvedJavaMethod create(InterpreterResolvedObjectType declaringClass, ParserMethod m, int vtableIndex) {
-        InterpreterResolvedJavaMethod interpreterMethod = new CremaResolvedJavaMethodImpl(declaringClass, m, vtableIndex);
-        interpreterMethod.setPreparedSignature(InterpreterSupport.singleton().prepareSignature(interpreterMethod));
-        return interpreterMethod;
+        return new CremaResolvedJavaMethodImpl(declaringClass, m, vtableIndex);
+    }
+
+    @Override
+    public Attribute[] getAttributes() {
+        return attributes;
     }
 
     @Override
@@ -105,39 +115,69 @@ public final class CremaResolvedJavaMethodImpl extends InterpreterResolvedJavaMe
     }
 
     @Override
+    public CodeAttribute getCodeAttribute() {
+        return getAttribute(CodeAttribute.NAME, CodeAttribute.class);
+    }
+
+    @Override
+    public ExceptionHandler[] getSymbolicExceptionHandlers() {
+        return rawExceptionHandlers;
+    }
+
+    @Override
     public JavaType[] getDeclaredExceptions() {
-        // (GR-69097)
-        throw VMError.unimplemented("getCheckedExceptions");
+        ExceptionsAttribute exceptionsAttribute = getAttribute(ExceptionsAttribute.NAME, ExceptionsAttribute.class);
+        if (exceptionsAttribute == null || exceptionsAttribute.entryCount() == 0) {
+            return new JavaType[0];
+        }
+        JavaType[] declaredExceptions = new JavaType[exceptionsAttribute.entryCount()];
+        InterpreterConstantPool constantPool = getConstantPool();
+        InterpreterResolvedObjectType declaringClass = getDeclaringClass();
+        for (int i = 0; i < declaredExceptions.length; i++) {
+            declaredExceptions[i] = constantPool.resolvedTypeAt(declaringClass, exceptionsAttribute.entryAt(i));
+        }
+        return declaredExceptions;
     }
 
     @Override
     public byte[] getRawAnnotations() {
-        // (GR-69096)
-        throw VMError.unimplemented("getRawAnnotations");
+        Attribute attribute = getAttribute(ParserSymbols.ParserNames.RuntimeVisibleAnnotations);
+        if (attribute == null) {
+            return null;
+        }
+        return attribute.getData();
     }
 
     @Override
     public byte[] getRawParameterAnnotations() {
-        // (GR-69096)
-        throw VMError.unimplemented("getRawParameterAnnotations");
+        Attribute attribute = getAttribute(ParserSymbols.ParserNames.RuntimeVisibleParameterAnnotations);
+        if (attribute == null) {
+            return null;
+        }
+        return attribute.getData();
     }
 
     @Override
     public byte[] getRawAnnotationDefault() {
-        // (GR-69096)
-        throw VMError.unimplemented("getRawAnnotationDefault");
+        Attribute attribute = getAttribute(ParserSymbols.ParserNames.AnnotationDefault);
+        if (attribute == null) {
+            return null;
+        }
+        return attribute.getData();
     }
 
     @Override
-    public byte[] getRawParameters() {
-        // (GR-69096)
-        throw VMError.unimplemented("getRawParameters");
+    public MethodParametersAttribute getParametersAttribute() {
+        return getAttribute(MethodParametersAttribute.NAME, MethodParametersAttribute.class);
     }
 
     @Override
     public byte[] getRawTypeAnnotations() {
-        // (GR-69096)
-        throw VMError.unimplemented("getRawTypeAnnotations");
+        Attribute attribute = getAttribute(ParserSymbols.ParserNames.RuntimeVisibleTypeAnnotations);
+        if (attribute == null) {
+            return null;
+        }
+        return attribute.getData();
     }
 
     @Override
@@ -151,6 +191,10 @@ public final class CremaResolvedJavaMethodImpl extends InterpreterResolvedJavaMe
 
     @Override
     public String getGenericSignature() {
-        return getSymbolicSignature().toString();
+        SignatureAttribute signatureAttribute = getAttribute(SignatureAttribute.NAME, SignatureAttribute.class);
+        if (signatureAttribute == null) {
+            return null;
+        }
+        return getDeclaringClass().getConstantPool().utf8At(signatureAttribute.getSignatureIndex(), "signature").toString();
     }
 }

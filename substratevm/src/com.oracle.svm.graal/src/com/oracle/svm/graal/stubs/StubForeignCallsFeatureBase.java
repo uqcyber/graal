@@ -39,7 +39,7 @@ import org.graalvm.nativeimage.Platforms;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateTargetDescription;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.cpufeature.Stubs;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.RuntimeCompilation;
@@ -171,7 +171,7 @@ public class StubForeignCallsFeatureBase implements InternalFeature {
     }
 
     private static EnumSet<?> getBuildtimeFeatures() {
-        Architecture arch = ImageSingletons.lookup(SubstrateTargetDescription.class).arch;
+        Architecture arch = ImageSingletons.lookup(SubstrateTarget.class).arch;
         if (arch instanceof AMD64) {
             return ((AMD64) arch).getFeatures();
         }

@@ -34,16 +34,15 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
-import com.oracle.svm.core.code.FrameSourceInfo;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.guest.staging.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.Substitute;
@@ -53,10 +52,12 @@ import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.CodeInfoQueryResult;
 import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
+import com.oracle.svm.core.code.FrameSourceInfo;
 import com.oracle.svm.core.code.UntetheredCodeInfo;
 import com.oracle.svm.core.code.UntetheredCodeInfoAccess;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 import com.oracle.svm.core.deopt.Deoptimizer;
+import com.oracle.svm.core.deopt.VirtualFrame;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.heap.StoredContinuation;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
@@ -71,8 +72,8 @@ import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.Target_java_lang_VirtualThread;
 import com.oracle.svm.core.thread.Target_jdk_internal_vm_Continuation;
 import com.oracle.svm.core.thread.Target_jdk_internal_vm_ContinuationScope;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
-import org.graalvm.word.impl.Word;
 
 @TargetClass(value = java.lang.StackWalker.class)
 @Platforms(InternalPlatform.NATIVE_ONLY.class)
@@ -191,7 +192,7 @@ final class Target_java_lang_StackWalker {
             return CodeInfoTable.lookupCodeInfoQueryResult(info, ip);
         }
 
-        protected DeoptimizedFrame.VirtualFrame deoptimizedVFrame;
+        protected VirtualFrame deoptimizedVFrame;
         protected FrameInfoQueryResult regularVFrame;
 
         @Override

@@ -27,7 +27,7 @@ package com.oracle.svm.hosted.reflect;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.svm.core.StaticFieldsSupport;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;

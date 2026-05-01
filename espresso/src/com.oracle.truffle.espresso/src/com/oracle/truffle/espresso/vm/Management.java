@@ -737,6 +737,23 @@ public final class Management extends NativeEnv {
     }
 
     @ManagementImpl
+    public static void SetPoolSensor(@SuppressWarnings("unused") @JavaType(Object.class) StaticObject pool,
+                    @SuppressWarnings("unused") int type,
+                    @SuppressWarnings("unused") @JavaType(Object.class) StaticObject sensor) {
+        // Threshold notifications are not implemented, but some management clients register
+        // sensors unconditionally before updating thresholds. Accepting the call keeps them alive.
+    }
+
+    @ManagementImpl
+    public static long SetPoolThreshold(@SuppressWarnings("unused") @JavaType(Object.class) StaticObject pool,
+                    @SuppressWarnings("unused") int type,
+                    long threshold) {
+        // The JDK keeps the configured threshold in the Java-side MemoryPoolImpl instance.
+        // Returning successfully is enough to avoid crashing threshold-aware clients.
+        return threshold;
+    }
+
+    @ManagementImpl
     @TruffleBoundary
     public @JavaType(Object.class) StaticObject GetMemoryUsage(@SuppressWarnings("unused") boolean heap, @Inject Meta meta) {
         MemoryUsage usage;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,8 @@ package com.oracle.svm.core.foreign;
 import java.lang.invoke.MethodType;
 import java.util.Arrays;
 import java.util.Objects;
+
+import org.graalvm.nativeimage.c.function.CFunctionPointer;
 
 import com.oracle.svm.shared.util.VMError;
 
@@ -112,8 +114,8 @@ public final class NativeEntryPointInfo {
                     boolean needsTransition,
                     boolean allowHeapAccess) {
         var info = make(argMoves, returnMoves, methodType, needsReturnBuffer, capturedStateMask, needsTransition, allowHeapAccess);
-        long addr = ForeignFunctionsRuntime.singleton().getDowncallStubPointer(info).rawValue();
-        return new Target_jdk_internal_foreign_abi_NativeEntryPoint(info.methodType(), addr, capturedStateMask);
+        CFunctionPointer downcallStubPointer = ForeignFunctionsRuntime.singleton().getDowncallStubPointer(info);
+        return new Target_jdk_internal_foreign_abi_NativeEntryPoint(info.methodType(), downcallStubPointer, capturedStateMask);
     }
 
     public MethodType methodType() {

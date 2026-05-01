@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,13 +41,14 @@ import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.function.CFunction.Transition;
 import org.graalvm.nativeimage.c.function.CLibrary;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.shared.util.BasedOnJDKClass;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 
+import jdk.graal.compiler.util.ObjectCopier;
 import jdk.internal.foreign.Utils;
-import org.graalvm.word.impl.Word;
 
 /**
  * Separated from {@link Target_jdk_internal_foreign_SystemLookup} to allow (forced) runtime
@@ -55,6 +56,7 @@ import org.graalvm.word.impl.Word;
  */
 @BasedOnJDKClass(jdk.internal.foreign.SystemLookup.class)
 public final class RuntimeSystemLookup {
+    @ObjectCopier.NotExternalValue(reason = "Lazy runtime lookup; must not be read during external value gathering") //
     static final SymbolLookup INSTANCE = makeSystemLookup();
 
     public static SymbolLookup makeSystemLookup() {

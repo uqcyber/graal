@@ -42,7 +42,7 @@ _suite = mx.suite('vm')
 
 class AgentScriptJsBenchmarkSuite(mx_benchmark.VmBenchmarkSuite, mx_benchmark.AveragingBenchmarkMixin):
     def __init__(self):
-        super(AgentScriptJsBenchmarkSuite, self).__init__()
+        super().__init__()
         self._benchmarks = {
             'plain' : [],
             'triple' : ['--insight=sieve-filter1.js'],
@@ -80,7 +80,7 @@ class AgentScriptJsBenchmarkSuite(mx_benchmark.VmBenchmarkSuite, mx_benchmark.Av
             re.compile(r'Hundred thousand prime numbers in [0-9]+ ms', re.MULTILINE),
         ]
 
-    def rules(self, out, benchmarks, bmSuiteArgs):
+    def rules(self, output, benchmarks, bmSuiteArgs):
         assert len(benchmarks) == 1
         return [
             mx_benchmark.StdOutRule(r'^Hundred thousand prime numbers in (?P<time>[0-9]+) ms$', {
@@ -97,23 +97,23 @@ class AgentScriptJsBenchmarkSuite(mx_benchmark.VmBenchmarkSuite, mx_benchmark.Av
         ]
 
     def createCommandLineArgs(self, benchmarks, bmSuiteArgs):
-        return self.vmArgs(bmSuiteArgs) + super(AgentScriptJsBenchmarkSuite, self).createCommandLineArgs(benchmarks, bmSuiteArgs)
+        return self.vmArgs(bmSuiteArgs) + super().createCommandLineArgs(benchmarks, bmSuiteArgs)
 
     def workingDirectory(self, benchmarks, bmSuiteArgs):
         return os.path.join(_suite.dir, 'benchmarks', 'agentscript')
 
     def createVmCommandLineArgs(self, benchmarks, runArgs):
         if not benchmarks:
-            raise mx.abort(f"Benchmark suite '{self.name()}' cannot run multiple benchmarks in the same VM process")
+            mx.abort(f"Benchmark suite '{self.name()}' cannot run multiple benchmarks in the same VM process")
         if len(benchmarks) != 1:
-            raise mx.abort(f"Benchmark suite '{self.name()}' can run only one benchmark at a time")
+            mx.abort(f"Benchmark suite '{self.name()}' can run only one benchmark at a time")
         return self._benchmarks[benchmarks[0]] + ['-e', 'count=50'] + runArgs + ['sieve.js']
 
     def get_vm_registry(self):
         return mx_benchmark.js_vm_registry
 
     def run(self, benchmarks, bmSuiteArgs) -> DataPoints:
-        results = super(AgentScriptJsBenchmarkSuite, self).run(benchmarks, bmSuiteArgs)
+        results = super().run(benchmarks, bmSuiteArgs)
         self.addAverageAcrossLatestResults(results)
         return results
 

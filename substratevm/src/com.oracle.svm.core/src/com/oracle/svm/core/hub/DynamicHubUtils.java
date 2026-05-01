@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core.hub;
 
+import org.graalvm.collections.EconomicSet;
+
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.meta.KnownOffsets;
 import com.oracle.svm.core.graal.snippets.OpenTypeWorldDispatchTableSnippets;
@@ -31,7 +33,6 @@ import com.oracle.svm.core.util.DuplicatedInNativeCode;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.debug.GraalError;
-import org.graalvm.collections.EconomicSet;
 
 /**
  * Contains utilities for interacting with DynamicHubs, such as converting vtable indexes to
@@ -118,6 +119,7 @@ public final class DynamicHubUtils {
             // count interfaces that can be hashed (i.e., their IDs are smaller than
             // SubstrateOptions.interfaceHashingMaxId())
             for (int interfaceID : interfaceIDs) {
+                GraalError.guarantee(interfaceID > 0, "Interface IDs are expected to be strictly positive");
                 if (interfaceID <= SubstrateOptions.interfaceHashingMaxId()) {
                     numHashedInterfaces++;
                 }

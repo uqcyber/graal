@@ -62,6 +62,11 @@ public final class EspressoExternalVMAccessBuilder implements VMAccess.Builder {
     }
 
     @Override
+    public boolean isFullyIsolated() {
+        return true;
+    }
+
+    @Override
     public VMAccess.Builder classPath(List<String> paths) {
         this.classpath = paths;
         return this;

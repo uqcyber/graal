@@ -102,7 +102,7 @@ def test():
     checker.check(exec_string)
 
     # run to main so the program image is loaded
-    exec_string = execute("break main")
+    exec_string = execute("break _start")
     print(exec_string)
     exec_string = execute("run")
     print(exec_string)
@@ -122,7 +122,8 @@ def test():
     method_name = match.group(1)
     print(f"method_name = {method_name}")
 
-    ## Now find the method start addess and break it
+    # Now find the method start address and break it
+    # Note: with address space layout randomization, the address is different on re-execution.
     command = f"x/i 'com.oracle.svm.core.code.IsolateEnterStub'::{method_name}"
     exec_string = execute(command)
     rexp = fr"{wildcard_pattern}0x({hex_digits_pattern}){wildcard_pattern}com.oracle.svm.core.code.IsolateEnterStub::JavaMainWrapper_run_{wildcard_pattern}"
@@ -136,14 +137,13 @@ def test():
     exec_string = execute(f"x/i 0x{bp_address:x}")
     print(exec_string)
 
-    # exec_string = execute("break hello.Hello::noInlineManyArgs")
     exec_string = execute(f"break *0x{bp_address:x}")
     rexp = fr"Breakpoint {digits_pattern} at {address_pattern}: file com/oracle/svm/core/code/IsolateEnterStub.java, line 1\."
     checker = Checker(fr"break *0x{bp_address:x}", rexp)
     checker.check(exec_string)
 
-    # run to breakpoint then delete it
-    execute("run")
+    # continue to breakpoint then delete it
+    execute("continue")
     execute("delete breakpoints")
 
     # check incoming parameters are bound to sensible values
@@ -891,9 +891,9 @@ def test():
     execute("delete breakpoints")
 
     # check if java.lang.Class and the hub field is resolved correctly
-    exec_string = execute(f"break hello.Hello::checkClassType")
+    exec_string = execute("break hello.Hello::checkClassType")
     rexp = fr"Breakpoint {digits_pattern} at {address_pattern}: file hello/Hello\.java, line {digits_pattern}\."
-    checker = Checker(fr"break hello.Hello::checkClassType", rexp)
+    checker = Checker(r"break hello.Hello::checkClassType", rexp)
     checker.check(exec_string)
 
     execute("continue")

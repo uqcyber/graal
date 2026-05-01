@@ -26,6 +26,7 @@
 package com.oracle.svm.core.libjvm;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.function.BooleanSupplier;
 
 import org.graalvm.nativeimage.ImageSingletons;
@@ -37,6 +38,9 @@ import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
+
+import jdk.internal.reflect.MethodAccessor;
+import jdk.internal.reflect.ReflectionFactory;
 
 /**
  * The methods in this class are stand-ins for the JNI entrypoints of a Crema-loaded application
@@ -54,7 +58,12 @@ public final class LibJVMMainMethodWrappers {
         }
     }
 
-    private volatile Class<?> validMainClass;
+    private static final Object[] EMPTY_ARGS = {};
+
+    private volatile MainMethodInvoker validMainMethodInvoker;
+
+    private record MainMethodInvoker(Class<?> mainClass, Method mainMethod, MethodAccessor accessor) {
+    }
 
     public static LibJVMMainMethodWrappers singleton() {
         return ImageSingletons.lookup(LibJVMMainMethodWrappers.class);
@@ -65,68 +74,44 @@ public final class LibJVMMainMethodWrappers {
             return origClazz;
         }
 
-        Class<?> mainClass = singleton().validMainClass;
+        MainMethodInvoker invoker = singleton().validMainMethodInvoker;
+        Class<?> mainClass = invoker == null ? null : invoker.mainClass;
         if (mainClass != null && origClazz == mainClass) {
             return LibJVMMainMethodWrappers.class;
         }
         return origClazz;
     }
 
-    public void setValidMainClass(Class<?> validMainClass) {
-        this.validMainClass = validMainClass;
+    public void setValidMainMethod(Method validMainMethod) {
+        MethodAccessor accessor = ReflectionFactory.getReflectionFactory().newMethodAccessor(validMainMethod, false);
+        validMainMethodInvoker = new MainMethodInvoker(validMainMethod.getDeclaringClass(), validMainMethod, accessor);
     }
 
     static void main(String[] args) {
-        Class<?> mainClass = singleton().validMainClass;
-        if (mainClass == null) {
-            throw VMError.shouldNotReachHere("Calling main(String[] args) via JNI failed.");
-        }
-
-        Throwable throwable = null;
-        try {
-            var mainMethod = mainClass.getDeclaredMethod("main", String[].class);
-            mainMethod.invoke(null, (Object) args);
-        } catch (InvocationTargetException e) {
-            // Return Throwable as if not invoked via reflection
-            Throwable cause = e.getCause();
-            if (cause != null) {
-                throwable = cause;
-            } else {
-                throwable = exceptionToError(mainClass, ".main(String[] args)", e);
-            }
-        } catch (NoSuchMethodException | IllegalAccessException e) {
-            throwable = exceptionToError(mainClass, ".main(String[] args)", e);
-        } catch (Throwable e) {
-            throwable = e;
-        }
-
-        if (throwable != null) {
-            // Checkstyle: allow System.err (run time code expected to print to stderr)
-            throwable.printStackTrace(System.err);
-            // Checkstyle: disallow System.err
-        }
+        invokeMainMethod(new Object[]{args}, "Calling main(String[] args) via JNI failed.");
     }
 
     static void main() {
-        Class<?> mainClass = singleton().validMainClass;
-        if (mainClass == null) {
-            throw VMError.shouldNotReachHere("Calling main() via JNI failed.");
+        invokeMainMethod(EMPTY_ARGS, "Calling main() via JNI failed.");
+    }
+
+    private static void invokeMainMethod(Object[] args, String noInvokerMessage) {
+        MainMethodInvoker invoker = singleton().validMainMethodInvoker;
+        if (invoker == null) {
+            throw VMError.shouldNotReachHere(noInvokerMessage);
         }
 
         Throwable throwable = null;
         try {
-            var mainMethod = mainClass.getDeclaredMethod("main");
-            mainMethod.invoke(null);
+            invoker.accessor.invoke(null, args);
         } catch (InvocationTargetException e) {
             // Return Throwable as if not invoked via reflection
             Throwable cause = e.getCause();
             if (cause != null) {
                 throwable = cause;
             } else {
-                throwable = exceptionToError(mainClass, ".main()", e);
+                throwable = exceptionToError(invoker.mainMethod, e);
             }
-        } catch (NoSuchMethodException | IllegalAccessException e) {
-            throwable = exceptionToError(mainClass, ".main()", e);
         } catch (Throwable e) {
             throwable = e;
         }
@@ -138,7 +123,8 @@ public final class LibJVMMainMethodWrappers {
         }
     }
 
-    private static Throwable exceptionToError(Class<?> mainClass, String mainMethodStr, ReflectiveOperationException cause) {
-        return new Error("Failed to call " + mainClass.getName() + mainMethodStr + " via reflection", cause);
+    private static Throwable exceptionToError(Method mainMethod, ReflectiveOperationException cause) {
+        String parameterString = mainMethod.getParameterCount() == 0 ? "()" : "(String[] args)";
+        return new Error("Failed to call " + mainMethod.getDeclaringClass().getName() + ".main" + parameterString + " via reflection", cause);
     }
 }

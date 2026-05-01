@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,10 +39,15 @@ import jdk.graal.compiler.replacements.nodes.ArrayRegionEqualsWithMaskNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMulAddNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMultiplyToLenNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerSquareToLenNode;
+import jdk.graal.compiler.replacements.nodes.Base64DecodeBlockNode;
+import jdk.graal.compiler.replacements.nodes.Base64EncodeBlockNode;
 import jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode;
 import jdk.graal.compiler.replacements.nodes.CipherBlockChainingAESNode;
 import jdk.graal.compiler.replacements.nodes.CountPositivesNode;
+import jdk.graal.compiler.replacements.nodes.CRC32CUpdateBytesNode;
+import jdk.graal.compiler.replacements.nodes.CRC32UpdateBytesNode;
 import jdk.graal.compiler.replacements.nodes.CounterModeAESNode;
+import jdk.graal.compiler.replacements.nodes.ElectronicCodeBookAESNode;
 import jdk.graal.compiler.replacements.nodes.EncodeArrayNode;
 import jdk.graal.compiler.replacements.nodes.GHASHProcessBlocksNode;
 import jdk.graal.compiler.replacements.nodes.IndexOfZeroNode;
@@ -56,35 +61,40 @@ import jdk.graal.compiler.replacements.nodes.VectorizedHashCodeNode;
 import jdk.graal.compiler.replacements.nodes.VectorizedMismatchNode;
 
 @GeneratedStubsHolder(targetVM = "substrate", sources = {
-                ArrayIndexOfNode.class,
-                IndexOfZeroNode.class,
+                AESNode.class,
+                ArrayCompareToNode.class,
+                ArrayCopyWithConversionsNode.class,
                 ArrayEqualsNode.class,
                 ArrayFillNode.class,
-                ArrayRegionEqualsNode.class,
-                ArrayCompareToNode.class,
+                ArrayIndexOfNode.class,
                 ArrayRegionCompareToNode.class,
-                ArrayCopyWithConversionsNode.class,
-                StringUTF16CompressNode.class,
-                StringLatin1InflateNode.class,
-                StringCodepointIndexToByteIndexNode.class,
-                CountPositivesNode.class,
-                EncodeArrayNode.class,
-                VectorizedMismatchNode.class,
-                VectorizedHashCodeNode.class,
+                ArrayRegionEqualsNode.class,
                 ArrayRegionEqualsWithMaskNode.class,
-                CalcStringAttributesNode.class,
-                AESNode.class,
-                CounterModeAESNode.class,
-                CipherBlockChainingAESNode.class,
-                GHASHProcessBlocksNode.class,
-                BigIntegerMultiplyToLenNode.class,
+                Base64DecodeBlockNode.class,
+                Base64EncodeBlockNode.class,
                 BigIntegerMulAddNode.class,
+                BigIntegerMultiplyToLenNode.class,
                 BigIntegerSquareToLenNode.class,
+                CalcStringAttributesNode.class,
+                CipherBlockChainingAESNode.class,
+                CounterModeAESNode.class,
+                CountPositivesNode.class,
+                CRC32CUpdateBytesNode.class,
+                CRC32UpdateBytesNode.class,
+                ElectronicCodeBookAESNode.class,
+                EncodeArrayNode.class,
+                GHASHProcessBlocksNode.class,
+                IndexOfZeroNode.class,
+                MD5Node.class,
                 SHA1Node.class,
                 SHA256Node.class,
                 SHA3Node.class,
                 SHA512Node.class,
-                MD5Node.class,
+                StringCodepointIndexToByteIndexNode.class,
+                StringLatin1InflateNode.class,
+                StringUTF16CompressNode.class,
+                VectorizedHashCodeNode.class,
+                VectorizedMismatchNode.class,
 })
 public final class SVMIntrinsicStubs {
 }

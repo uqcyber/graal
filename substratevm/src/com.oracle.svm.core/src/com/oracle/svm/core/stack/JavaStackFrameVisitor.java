@@ -33,6 +33,7 @@ import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.FrameSourceInfo;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
+import com.oracle.svm.core.deopt.VirtualFrame;
 import com.oracle.svm.core.interpreter.InterpreterSupport;
 import com.oracle.svm.shared.util.VMError;
 
@@ -51,7 +52,7 @@ public abstract class JavaStackFrameVisitor extends StackFrameVisitor {
 
     @Override
     protected boolean visitDeoptimizedFrame(Pointer originalSP, CodePointer deoptStubIP, DeoptimizedFrame deoptimizedFrame) {
-        for (DeoptimizedFrame.VirtualFrame frame = deoptimizedFrame.getTopFrame(); frame != null; frame = frame.getCaller()) {
+        for (VirtualFrame frame = deoptimizedFrame.getTopFrame(); frame != null; frame = frame.getCaller()) {
             if (!dispatchPossiblyInterpretedFrame(frame.getFrameInfo(), originalSP)) {
                 return false;
             }

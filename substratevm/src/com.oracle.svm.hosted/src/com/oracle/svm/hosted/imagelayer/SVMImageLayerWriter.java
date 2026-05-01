@@ -72,7 +72,6 @@ import java.util.stream.Stream;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.MapCursor;
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.impl.CEntryPointLiteralCodePointer;
 import org.graalvm.word.WordBase;
@@ -139,13 +138,13 @@ import com.oracle.svm.hosted.imagelayer.SharedLayerSnapshotCapnProtoSchemaHolder
 import com.oracle.svm.hosted.imagelayer.SharedLayerSnapshotCapnProtoSchemaHolder.PrimitiveArray;
 import com.oracle.svm.hosted.imagelayer.SharedLayerSnapshotCapnProtoSchemaHolder.SharedLayerSnapshot;
 import com.oracle.svm.hosted.jni.JNIJavaCallVariantWrapperMethod;
+import com.oracle.svm.hosted.lambda.LambdaProxyRenamingSubstitutionProcessor;
 import com.oracle.svm.hosted.lambda.LambdaSubstitutionType;
-import com.oracle.svm.hosted.lambda.StableLambdaProxyNameFeature;
 import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.meta.PatchedWordConstant;
-import com.oracle.svm.hosted.methodhandles.MethodHandleFeature;
+import com.oracle.svm.hosted.methodhandles.MethodHandleInvokerRenamingSubstitutionProcessor;
 import com.oracle.svm.hosted.methodhandles.MethodHandleInvokerSubstitutionType;
 import com.oracle.svm.hosted.reflect.ReflectionExpandSignatureMethod;
 import com.oracle.svm.hosted.reflect.proxy.ProxyRenamingSubstitutionProcessor;
@@ -459,7 +458,7 @@ public class SVMImageLayerWriter extends ImageLayerWriter {
             Builder b = builder.initClassInitializationInfo();
             b.setIsInitialized(info.isInitialized());
             b.setIsInErrorState(info.isInErrorState());
-            b.setIsLinked(info.isLinked());
+            b.setIsLinked(info.isExactlyLinked());
             b.setHasInitializer(info.hasInitializer());
             b.setIsBuildTimeInitialized(info.isBuildTimeInitialized());
             b.setIsTracked(info.isTracked());
@@ -556,8 +555,7 @@ public class SVMImageLayerWriter extends ImageLayerWriter {
          * switched.
          */
         if (type.getWrapped() instanceof LambdaSubstitutionType lambdaSubstitutionType) {
-            StableLambdaProxyNameFeature stableLambdaProxyNameFeature = ImageSingletons.lookup(StableLambdaProxyNameFeature.class);
-            if (!stableLambdaProxyNameFeature.getLambdaSubstitutionProcessor().isNameAlwaysStable(lambdaSubstitutionType.getName())) {
+            if (!LambdaProxyRenamingSubstitutionProcessor.singleton().isNameAlwaysStable(lambdaSubstitutionType.getName())) {
                 String message = "The lambda method " + lambdaSubstitutionType.getName() + " might not have a stable name in the extension image.";
                 handleNameConflict(message);
             }
@@ -567,8 +565,7 @@ public class SVMImageLayerWriter extends ImageLayerWriter {
          * still have a different name, but in a multi threading context, the names can be switched.
          */
         if (type.getWrapped() instanceof MethodHandleInvokerSubstitutionType methodHandleSubstitutionType) {
-            MethodHandleFeature methodHandleFeature = ImageSingletons.lookup(MethodHandleFeature.class);
-            if (!methodHandleFeature.getMethodHandleSubstitutionProcessor().isNameAlwaysStable(methodHandleSubstitutionType.getName())) {
+            if (!MethodHandleInvokerRenamingSubstitutionProcessor.singleton().isNameAlwaysStable(methodHandleSubstitutionType.getName())) {
                 String message = "The method handle " + methodHandleSubstitutionType.getName() + " might not have a stable name in the extension image.";
                 handleNameConflict(message);
             }
@@ -943,7 +940,12 @@ public class SVMImageLayerWriter extends ImageLayerWriter {
                         FieldValueInterceptionSupport.hasFieldValueInterceptor(field);
     }
 
+    /**
+     * Persists primitive-array data from either Java collections, host primitive arrays, or guest
+     * {@link JavaConstant} arrays into the Cap'n Proto primitive array builder.
+     */
     private static void persistConstantPrimitiveArray(PrimitiveArray.Builder builder, JavaKind componentKind, Object array) {
+        GuestAccess access = GuestAccess.get();
         if (array instanceof List<?> l) {
             switch (componentKind) {
                 case Boolean -> persistList(l, builder::initZ, (b, i) -> b.set(i, (boolean) l.get(i)));
@@ -956,27 +958,43 @@ public class SVMImageLayerWriter extends ImageLayerWriter {
                 case Double -> persistList(l, builder::initD, (b, i) -> b.set(i, (double) l.get(i)));
                 default -> throw new IllegalArgumentException("Unsupported kind: " + componentKind);
             }
+        } else if (array instanceof JavaConstant constant) {
+            ConstantReflectionProvider constantReflection = access.getProviders().getConstantReflection();
+            Integer length = constantReflection.readArrayLength(constant);
+            VMError.guarantee(length != null, "%s is not an array.", constant);
+            switch (componentKind) {
+                case Boolean -> persistArray(length, builder::initZ, (b, i) -> b.set(i, constantReflection.readArrayElement(constant, i).asBoolean()));
+                case Byte -> persistArray(length, builder::initB, (b, i) -> b.set(i, (byte) constantReflection.readArrayElement(constant, i).asInt()));
+                case Short -> persistArray(length, builder::initS, (b, i) -> b.set(i, (short) constantReflection.readArrayElement(constant, i).asInt()));
+                case Char -> persistArray(length, builder::initC, (b, i) -> b.set(i, (short) (char) constantReflection.readArrayElement(constant, i).asInt()));
+                case Int -> persistArray(length, builder::initI, (b, i) -> b.set(i, constantReflection.readArrayElement(constant, i).asInt()));
+                case Long -> persistArray(length, builder::initJ, (b, i) -> b.set(i, constantReflection.readArrayElement(constant, i).asLong()));
+                case Float -> persistArray(length, builder::initF, (b, i) -> b.set(i, constantReflection.readArrayElement(constant, i).asFloat()));
+                case Double -> persistArray(length, builder::initD, (b, i) -> b.set(i, constantReflection.readArrayElement(constant, i).asDouble()));
+                default -> throw new IllegalArgumentException("Unsupported kind: " + componentKind);
+            }
         } else {
-            GuestAccess access = GuestAccess.get();
             assert access.lookupType(componentKind.toJavaClass()).equals(access.lookupType(array.getClass()).getComponentType()) : "%s != %s"
                             .formatted(access.lookupType(componentKind.toJavaClass()), access.lookupType(array.getClass()).getComponentType());
+            int length = Array.getLength(array);
             switch (array) {
-                case boolean[] a -> persistArray(a, builder::initZ, (b, i) -> b.set(i, a[i]));
-                case byte[] a -> persistArray(a, builder::initB, (b, i) -> b.set(i, a[i]));
-                case short[] a -> persistArray(a, builder::initS, (b, i) -> b.set(i, a[i]));
-                case char[] a -> persistArray(a, builder::initC, (b, i) -> b.set(i, (short) a[i]));
-                case int[] a -> persistArray(a, builder::initI, (b, i) -> b.set(i, a[i]));
-                case long[] a -> persistArray(a, builder::initJ, (b, i) -> b.set(i, a[i]));
-                case float[] a -> persistArray(a, builder::initF, (b, i) -> b.set(i, a[i]));
-                case double[] a -> persistArray(a, builder::initD, (b, i) -> b.set(i, a[i]));
+                case boolean[] a -> persistArray(length, builder::initZ, (b, i) -> b.set(i, a[i]));
+                case byte[] a -> persistArray(length, builder::initB, (b, i) -> b.set(i, a[i]));
+                case short[] a -> persistArray(length, builder::initS, (b, i) -> b.set(i, a[i]));
+                case char[] a -> persistArray(length, builder::initC, (b, i) -> b.set(i, (short) a[i]));
+                case int[] a -> persistArray(length, builder::initI, (b, i) -> b.set(i, a[i]));
+                case long[] a -> persistArray(length, builder::initJ, (b, i) -> b.set(i, a[i]));
+                case float[] a -> persistArray(length, builder::initF, (b, i) -> b.set(i, a[i]));
+                case double[] a -> persistArray(length, builder::initD, (b, i) -> b.set(i, a[i]));
                 default -> throw new IllegalArgumentException("Unsupported kind: " + componentKind);
             }
         }
     }
 
-    /** Enables concise one-liners in {@link #persistConstantPrimitiveArray}. */
-    private static <A, T extends ListBuilder> void persistArray(A array, IntFunction<T> init, ObjIntConsumer<T> setter) {
-        int length = Array.getLength(array);
+    /**
+     * Writes {@code length} values into a list builder initialized by {@code init}.
+     */
+    private static <T extends ListBuilder> void persistArray(int length, IntFunction<T> init, ObjIntConsumer<T> setter) {
         T builder = init.apply(length);
         for (int i = 0; i < length; i++) {
             setter.accept(builder, i);
@@ -1098,11 +1116,7 @@ public class SVMImageLayerWriter extends ImageLayerWriter {
 
     @Override
     public void persistAnalysisParsedGraph(AnalysisMethod method, AnalysisParsedGraph analysisParsedGraph) {
-        /*
-         * A copy of the encoded graph is needed here because the nodeStartOffsets can be
-         * concurrently updated otherwise, which causes the ObjectCopier to fail.
-         */
-        String location = persistGraph(method, new EncodedGraph(analysisParsedGraph.getEncodedGraph()));
+        String location = persistGraph(method, analysisParsedGraph.getEncodedGraph());
         if (location != null) {
             /*
              * This method should only be called once for each method. This check is performed by

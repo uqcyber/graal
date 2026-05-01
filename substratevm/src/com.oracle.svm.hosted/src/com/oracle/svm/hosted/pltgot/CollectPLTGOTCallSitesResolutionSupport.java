@@ -32,9 +32,9 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 
-import com.oracle.objectfile.ObjectFile;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.pltgot.MethodAddressResolver;
+import com.oracle.svm.hosted.image.AbstractImage;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 
@@ -69,8 +69,8 @@ class CollectPLTGOTCallSitesResolutionSupport implements MethodAddressResolution
     }
 
     @Override
-    public void augmentImageObjectFile(ObjectFile imageObjectFile) {
-        resolver.augmentImageObjectFile(imageObjectFile);
+    public void augmentImage(AbstractImage abstractImage) {
+        resolver.augmentImage(abstractImage);
     }
 
     @Override

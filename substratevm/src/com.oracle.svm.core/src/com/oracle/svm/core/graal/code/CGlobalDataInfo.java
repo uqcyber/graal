@@ -32,8 +32,8 @@ import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.BuildPhaseProvider.AfterHeapLayout;
 import com.oracle.svm.core.BuildPhaseProvider.AfterHostedUniverse;
-import com.oracle.svm.core.c.CGlobalDataImpl;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
+import com.oracle.svm.guest.staging.c.CGlobalDataImpl;
 import com.oracle.svm.shared.util.VMError;
 
 /**

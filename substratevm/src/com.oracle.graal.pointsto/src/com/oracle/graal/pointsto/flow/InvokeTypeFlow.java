@@ -36,8 +36,8 @@ import com.oracle.graal.pointsto.meta.InvokeInfo;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.util.AnalysisError;
-import com.oracle.svm.shared.meta.MethodVariant;
-import com.oracle.svm.shared.meta.MethodVariant.MethodVariantKey;
+import com.oracle.svm.common.meta.MethodVariant;
+import com.oracle.svm.common.meta.MethodVariant.MethodVariantKey;
 
 import jdk.vm.ci.code.BytecodePosition;
 
@@ -122,6 +122,13 @@ public abstract class InvokeTypeFlow extends TypeFlow<BytecodePosition> implemen
     @Override
     public PointsToAnalysisMethod getTargetMethod() {
         return targetMethod;
+    }
+
+    /**
+     * Returns the bytecode index of this invoke within its declaring method.
+     */
+    public int getBci() {
+        return getSource().getBCI();
     }
 
     public int actualParametersCount() {

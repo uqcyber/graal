@@ -30,6 +30,7 @@ import com.oracle.svm.graal.meta.SubstrateType;
 import com.oracle.svm.interpreter.InterpreterToVM;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaField;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaType;
+import com.oracle.svm.interpreter.ristretto.RistrettoUtils;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.debug.GraalError;
@@ -65,7 +66,7 @@ public class RistrettoConstantReflectionProvider extends SubstrateConstantReflec
 
     @Override
     public JavaConstant readFieldValue(ResolvedJavaField field, JavaConstant receiver) {
-        if (field instanceof RistrettoField rField) {
+        if (field instanceof RistrettoField rField && RistrettoUtils.isRuntimeLoaded(rField.getDeclaringClass())) {
             final InterpreterResolvedJavaField iField = rField.getInterpreterField();
             Object baseObject;
             final InterpreterResolvedJavaType declaringClass = iField.getDeclaringClass();

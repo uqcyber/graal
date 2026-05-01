@@ -24,17 +24,16 @@
  */
 package com.oracle.svm.core.jdk;
 
-import java.util.List;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.hosted.Feature;
 
 import com.oracle.svm.core.IsolateListenerSupport;
 import com.oracle.svm.core.IsolateListenerSupport.IsolateListener;
-import com.oracle.svm.core.IsolateListenerSupportFeature;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.RuntimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
@@ -43,9 +42,13 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
 
 public interface SignalHandlerSupport extends IsolateListener {
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     static SignalHandlerSupport singleton() {
         return ImageSingletons.lookup(SignalHandlerSupport.class);
     }
+
+    @Uninterruptible(reason = "Signal handlers can be installed during early isolate startup before thread state is set up.")
+    void tryInstallHandlersForIgnoredSignals();
 
     long installJavaSignalHandler(int sig, long nativeH);
 
@@ -54,6 +57,11 @@ public interface SignalHandlerSupport extends IsolateListener {
 
 @SingletonTraits(access = RuntimeAccessOnly.class, layeredCallbacks = SingleLayer.class, layeredInstallationKind = InitialLayerOnly.class)
 class NoSignalHandlerSupport implements SignalHandlerSupport {
+    @Override
+    public void tryInstallHandlersForIgnoredSignals() {
+        /* Nothing to do. */
+    }
+
     @Override
     public long installJavaSignalHandler(int sig, long nativeH) {
         throw new IllegalStateException("Signal handling is not supported.");
@@ -71,11 +79,6 @@ class SignalHandlerFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
         return ImageLayerBuildingSupport.firstImageBuild();
-    }
-
-    @Override
-    public List<Class<? extends Feature>> getRequiredFeatures() {
-        return List.of(RuntimeSupportFeature.class, IsolateListenerSupportFeature.class);
     }
 
     @Override

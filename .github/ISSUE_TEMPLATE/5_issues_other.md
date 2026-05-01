@@ -8,10 +8,10 @@ assignees: ''
 ---
 
 **Describe the issue**
-A clear and concise description of the issue. We recommend using the [latest snapshot builds](https://github.com/graalvm/graalvm-ce-dev-builds/releases) to replicate the issue as  bugs are constantly being fixed in the master branch
+A clear and concise description of the issue. We recommend reproducing against the [latest snapshot builds](https://github.com/graalvm/graalvm-ce-dev-builds/releases), since bugs are constantly being fixed on the master branch. Do not use this template for security vulnerabilities or general support questions.
 
 **Steps to reproduce the issue**
-Please include both build steps as well as run steps
+Please include both build steps and run steps, ideally using a minimal reproducer.
 1. **[e.g.: git clone --depth 1 https://git.myrepo.com/projectone ]**
 2. **[e.g.: mvn clean package]**
 
@@ -27,3 +27,5 @@ Add any other information about the problem here. Especially important are stack
 ```
     PASTE YOUR LOG/STACK TRACE HERE
 ```
+
+If you are looking for help or design guidance rather than reporting a concrete bug, please use [GitHub Discussions](https://github.com/oracle/graal/discussions) or the [GraalVM Slack workspace](https://www.graalvm.org/slack-invitation/).

@@ -27,8 +27,8 @@ package com.oracle.svm.core.posix.darwin;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.c.function.CEntryPointErrors;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
 import com.oracle.svm.core.os.AbstractCopyingImageHeapProvider;
 import com.oracle.svm.core.posix.headers.darwin.DarwinVirtualMemory;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;

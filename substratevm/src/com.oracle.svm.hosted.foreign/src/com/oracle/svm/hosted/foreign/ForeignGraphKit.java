@@ -28,8 +28,6 @@ import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.graalvm.collections.Pair;
-
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.hosted.phases.HostedGraphKit;
 
@@ -38,22 +36,24 @@ import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.extended.PublishWritesNode;
 import jdk.graal.compiler.nodes.java.NewArrayNode;
-import jdk.graal.compiler.replacements.nodes.ReadRegisterNode;
-import jdk.vm.ci.code.Register;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.Signature;
 
 class ForeignGraphKit extends HostedGraphKit {
     ForeignGraphKit(DebugContext debug, HostedProviders providers, ResolvedJavaMethod method) {
         super(debug, providers, method);
     }
 
-    Pair<List<ValueNode>, ValueNode> unpackArgumentsAndExtractNEP(ValueNode argumentsArray, MethodType methodType) {
-        List<ValueNode> args = loadArrayElements(argumentsArray, JavaKind.Object, methodType.parameterCount() + 1);
-        ValueNode nep = args.remove(args.size() - 1);
-        return Pair.create(args, nep);
+    public static String signatureToIdentifier(Signature signature) {
+        StringBuilder sb = new StringBuilder();
+        for (var javaKind : signature.toParameterKinds(false)) {
+            sb.append(javaKind.getTypeChar());
+        }
+        sb.append('_').append(signature.getReturnKind().getTypeChar());
+        return sb.toString();
     }
 
     public ValueNode packArguments(List<ValueNode> arguments) {
@@ -67,16 +67,19 @@ class ForeignGraphKit extends HostedGraphKit {
         return append(new PublishWritesNode(argumentArray));
     }
 
-    List<ValueNode> unboxArguments(List<ValueNode> args, MethodType methodType) {
-        assert args.size() == methodType.parameterCount() : args.size() + " " + methodType.parameterCount();
-        var newArgs = new ArrayList<>(args);
-        for (int i = 0; i < newArgs.size(); ++i) {
-            ValueNode argument = newArgs.get(i);
-            JavaKind targetKind = JavaKind.fromJavaClass(methodType.parameterType(i));
-            if (targetKind.isPrimitive()) {
-                newArgs.set(i, createUnboxing(argument, targetKind));
+    ValueNode[] unboxArguments(List<ValueNode> args, Signature targetSignature) {
+        assert !args.isEmpty() : "there must be at least the NativeEntryPoint (the last arg)";
+        assert args.size() == targetSignature.getParameterCount(false) : args.size() + " " + targetSignature.getParameterCount(false);
+        var newArgs = new ValueNode[args.size()];
+        for (int i = 0; i < newArgs.length; ++i) {
+            ValueNode argument = args.get(i);
+            JavaKind targetKind = targetSignature.getParameterKind(i);
+            if (argument.getStackKind().isObject() && targetKind.isPrimitive()) {
+                argument = createUnboxing(argument, targetKind);
             }
+            newArgs[i] = argument;
         }
+
         return newArgs;
     }
 
@@ -93,19 +96,17 @@ class ForeignGraphKit extends HostedGraphKit {
         return newArgs;
     }
 
-    public ValueNode boxAndReturn(ValueNode returnValue, MethodType methodType) {
-        JavaKind returnKind = JavaKind.fromJavaClass(methodType.returnType());
-        if (returnKind.equals(JavaKind.Void)) {
-            return createReturn(createObject(null), JavaKind.Object);
+    public ValueNode boxAndReturn(ValueNode returnValue, JavaKind returnKind) {
+        if (JavaKind.Void.equals(returnKind)) {
+            return createReturn(ConstantNode.defaultForKind(JavaKind.Object), JavaKind.Object);
         }
-
         var boxed = getMetaAccess().lookupJavaType(returnKind.toBoxedJavaClass());
         return createReturn(createBoxing(returnValue, returnKind, boxed), JavaKind.Object);
     }
 
     public ValueNode unbox(ValueNode returnValue, MethodType methodType) {
         JavaKind returnKind = JavaKind.fromJavaClass(methodType.returnType());
-        if (returnKind.equals(JavaKind.Void)) {
+        if (JavaKind.Void.equals(returnKind)) {
             return returnValue;
         }
         return createUnboxing(returnValue, returnKind);
@@ -114,9 +115,5 @@ class ForeignGraphKit extends HostedGraphKit {
     public ValueNode createReturn(ValueNode returnValue, MethodType methodType) {
         JavaKind returnKind = JavaKind.fromJavaClass(methodType.returnType());
         return createReturn(returnValue, returnKind);
-    }
-
-    public ValueNode bindRegister(Register register, JavaKind kind) {
-        return append(new ReadRegisterNode(register, kind, false, false));
     }
 }

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016, 2025, Oracle and/or its affiliates.
+# Copyright (c) 2016, 2026, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -46,7 +46,7 @@ def _sulong_gate_unittest(title, test_suite, tasks, args, tags=None, testClasses
     f.execute(tasks)
 
 
-class TestSuiteBuildTask(object):
+class TestSuiteBuildTask:
     def __init__(self, test_suite, tags, extra_build_args=None):
         self.test_suite = test_suite
         self.tags = tags
@@ -65,7 +65,7 @@ class TestSuiteBuildTask(object):
         return isinstance(other, TestSuiteBuildTask) and self.test_suite == other.test_suite and self.extra_build_args == other.extra_build_args
 
 
-class UnittestTaskFactory(object):
+class UnittestTaskFactory:
 
     def __init__(self):
         self.build_tasks = []
@@ -93,16 +93,14 @@ class UnittestTaskFactory(object):
                 description = ''
             def _reduce_package_prefix(cls):
                 prefix = "com.oracle.truffle.llvm"
-                reduced_prefix = ".".join((x[0] for x in prefix.split(".")))
+                reduced_prefix = ".".join(x[0] for x in prefix.split("."))
                 if cls and cls.startswith(prefix):
                     return cls.replace(prefix, reduced_prefix, 1)
                 return cls
             # add a "junit" prefix if the test class does not use a full package name (no '.') to make it obvious that it is a
             # Java class
             junit_prefix = "JUnit " if not any("." in x for x in testClasses) else ""
-            return '{description}({junit_prefix}{testClasses})'.format(description=description,
-                                                                       junit_prefix=junit_prefix,
-                                                                       testClasses=', '.join((_reduce_package_prefix(cls) for cls in testClasses)))
+            return f"{description}({junit_prefix}{', '.join(_reduce_package_prefix(cls) for cls in testClasses)})"
 
         description = _sulong_gate_format_description(testClasses, description=description)
 
@@ -124,7 +122,7 @@ class UnittestTaskFactory(object):
             test_task(tasks)
 
 
-class SulongGateEnv(object):
+class SulongGateEnv:
     """"Sets a marker environment variable."""
     def __enter__(self):
         os.environ['_MX_SULONG_GATE'] = "1"
@@ -168,11 +166,11 @@ def _sulong_gate_runner(args, tasks):
 
     if standaloneMode == "native":
         with Task('Build Native LLVM Standalone', tasks, tags=['standalone']) as t:
-            if t: mx.command_function('build')(['--dependencies', f'SULONG_NATIVE_STANDALONE'])
+            if t: mx.command_function('build')(['--dependencies', 'SULONG_NATIVE_STANDALONE'])
 
     if standaloneMode == "jvm":
         with Task('Build Java LLVM Standalone', tasks, tags=['standalone']) as t:
-            if t: mx.command_function('build')(['--dependencies', f'SULONG_JVM_STANDALONE'])
+            if t: mx.command_function('build')(['--dependencies', 'SULONG_JVM_STANDALONE'])
 
     # Folders not containing tests: options, services, util
     _unittest('Benchmarks', 'SULONG_SHOOTOUT_TEST_SUITE', description="Language Benchmark game tests", testClasses=['ShootoutsSuite'], tags=['benchmarks', 'sulongMisc'])

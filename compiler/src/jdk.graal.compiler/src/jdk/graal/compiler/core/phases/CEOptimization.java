@@ -50,6 +50,8 @@ import jdk.graal.compiler.phases.common.FloatingReadPhase;
 import jdk.graal.compiler.phases.common.LockEliminationPhase;
 import jdk.graal.compiler.phases.common.ReassociationPhase;
 import jdk.graal.compiler.phases.common.UseTrappingNullChecksPhase;
+import jdk.graal.compiler.phases.constantblinding.ConstantBlindingPhase;
+import jdk.graal.compiler.phases.constantblinding.ConstantBlindingPhase.Options;
 import jdk.graal.compiler.phases.common.inlining.InliningPhase;
 import jdk.graal.compiler.phases.schedule.SchedulePhase;
 import jdk.graal.compiler.vector.replacements.vectorapi.VectorAPIExpansionPhase;
@@ -321,7 +323,15 @@ public enum CEOptimization {
      * This phase is enabled by default and can be disabled with
      * {@link jdk.graal.compiler.vector.replacements.vectorapi.VectorAPIIntrinsics.Options#OptimizeVectorAPI}.
      */
-    VectorAPIOptimization(VectorAPIIntrinsics.Options.OptimizeVectorAPI, VectorAPIExpansionPhase.class);
+    VectorAPIOptimization(VectorAPIIntrinsics.Options.OptimizeVectorAPI, VectorAPIExpansionPhase.class),
+
+    /**
+     * {@link ConstantBlindingPhase} is a security feature that prevents user-controlled constants
+     * from appearing verbatim in generated machine code.
+     *
+     * This phase is disabled by default and can be enabled with {@link Options#BlindConstants}.
+     */
+    ConstantBlinding(ConstantBlindingPhase.Options.BlindConstants, ConstantBlindingPhase.class);
 
     private final OptionKey<?> option;
     private final Class<? extends BasePhase<?>> optimization;

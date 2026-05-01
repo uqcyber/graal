@@ -32,7 +32,7 @@ import org.graalvm.nativeimage.c.function.RelocatedPointer;
 import org.graalvm.word.ComparableWord;
 import org.graalvm.word.PointerBase;
 
-import com.oracle.svm.core.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalData;
 
 /**
  * Placeholder for the base address of {@link CGlobalData} memory during the image build.

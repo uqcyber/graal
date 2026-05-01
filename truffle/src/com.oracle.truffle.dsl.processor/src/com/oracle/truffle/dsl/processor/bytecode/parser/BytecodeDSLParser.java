@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -73,6 +73,7 @@ import javax.lang.model.util.Types;
 import com.oracle.truffle.dsl.processor.ProcessorContext;
 import com.oracle.truffle.dsl.processor.TruffleProcessorOptions;
 import com.oracle.truffle.dsl.processor.TruffleTypes;
+import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeConfigEncoding;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLBuiltins;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.IllegalLocalExceptionFactory;
@@ -112,11 +113,6 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
     public static final String SYMBOL_BYTECODE_NODE = "$bytecodeNode";
     public static final String SYMBOL_BYTECODE_INDEX = "$bytecodeIndex";
     public static final String SYMBOL_CONTINUATION_ROOT = "$continuationRootNode";
-
-    private static final int MAX_TAGS = 32;
-    private static final int MAX_INSTRUMENTATIONS = 31;
-    // we reserve 14 bits for future features
-    private static final int MAX_TAGS_AND_INSTRUMENTATIONS = 50;
 
     private static final EnumSet<TypeKind> BOXABLE_TYPE_KINDS = EnumSet.of(TypeKind.BOOLEAN, TypeKind.BYTE, TypeKind.INT, TypeKind.FLOAT, TypeKind.LONG, TypeKind.DOUBLE);
 
@@ -351,15 +347,6 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                 model.enableRootBodyTagging = false;
             }
 
-            if (model.getProvidedTags().size() > MAX_TAGS) {
-                model.addError(generateBytecodeMirror, taginstrumentationValue,
-                                "Tag instrumentation is currently limited to a maximum of 32 tags. " + //
-                                                "The language '%s' provides %s tags. " +
-                                                "Reduce the number of tags to resolve this.",
-                                getQualifiedName(model.languageClass),
-                                model.getProvidedTags().size());
-            }
-
             parseTagTreeNodeLibrary(model, generateBytecodeMirror);
 
         } else {
@@ -398,6 +385,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         model.interceptControlFlowException = ElementUtils.findMethod(typeElement, "interceptControlFlowException");
         model.interceptInternalException = ElementUtils.findMethod(typeElement, "interceptInternalException");
         model.interceptTruffleException = ElementUtils.findMethod(typeElement, "interceptTruffleException");
+        model.traceTransition = ElementUtils.findMethod(typeElement, "traceTransition");
 
         checkRootNodeOverrides(typeElement, model);
         if (model.hasErrors()) {
@@ -456,6 +444,18 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         }
 
         BytecodeDSLBuiltins.addBuiltins(model, types, context);
+
+        // Note: Need to turn this into a function if we end up having more overrides we need to
+        // check
+        if (ElementUtils.findOverride(ElementUtils.findMethod(types.BytecodeRootNode, "getSource"), model.templateType) != null) {
+            model.addWarning("Custom operation with name %s conflicts with a built-in operation with the same name. " +
+                            "The built-in operation will not be generated. Rename or remove the overriding method to resolve this.", "getSource");
+        }
+
+        String sourceContentSupplierMethodName = ElementUtils.getAnnotationValue(String.class, generateBytecodeMirror, "sourceContentSupplier", false);
+        if (sourceContentSupplierMethodName != null) {
+            model.sourceContentSupplier = resolveSourceContentSupplier(model, generateBytecodeMirror, sourceContentSupplierMethodName);
+        }
 
         model.variadicStackLimitExpression = DSLExpression.parse(model, "variadicStackLimit", model.variadicStackLimit);
         if (model.variadicStackLimitExpression != null) {
@@ -542,14 +542,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
             CustomOperationParser.forCodeGeneration(model, types.Operation).parseCustomRegularOperation(mir, te, null);
         }
 
-        if (model.getInstrumentationsCount() > MAX_INSTRUMENTATIONS) {
-            model.addError("Too many @Instrumentation annotated operations specified. The number of instrumentations is " + model.getInstrumentationsCount() +
-                            ". The maximum number of instrumentations is " + MAX_INSTRUMENTATIONS + ".");
-        } else if (model.getInstrumentationsCount() + model.getProvidedTags().size() > MAX_TAGS_AND_INSTRUMENTATIONS) {
-            model.addError("Too many @Instrumentation and provided tags specified. The number of instrumentrations is " + model.getInstrumentationsCount() + " and provided tags is " +
-                            model.getProvidedTags().size() +
-                            ". The maximum number of instrumentations and provided tags is " + MAX_TAGS_AND_INSTRUMENTATIONS + ".");
-        }
+        model.bytecodeConfigEncoding = BytecodeConfigEncoding.fromModel(model, generateBytecodeMirror);
 
         for (AnnotationMirror mir : ElementUtils.getRepeatedAnnotation(typeElement.getAnnotationMirrors(), types.OperationProxy)) {
             customOperationDeclared = true;
@@ -736,7 +729,8 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                         ElementUtils.findMethod(types.RootNode, "prepareForInstrumentation"),
                         ElementUtils.findMethod(types.BytecodeRootNode, "getBytecodeNode"),
                         ElementUtils.findMethod(types.BytecodeRootNode, "getRootNodes"),
-                        ElementUtils.findMethod(types.BytecodeOSRNode, "executeOSR"),
+                        ElementUtils.findMethod(types.BytecodeOSRNode, "executeOSR", new TypeMirror[]{types.VirtualFrame, context.getType(int.class), context.getDeclaredType(Object.class)}, null),
+                        ElementUtils.findMethod(types.BytecodeOSRNode, "executeOSR", new TypeMirror[]{types.VirtualFrame, context.getType(long.class), context.getDeclaredType(Object.class)}, null),
                         ElementUtils.findMethod(types.BytecodeOSRNode, "getOSRMetadata"),
                         ElementUtils.findMethod(types.BytecodeOSRNode, "setOSRMetadata"),
                         ElementUtils.findMethod(types.BytecodeOSRNode, "storeParentFrameInArguments"),
@@ -1017,7 +1011,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                     case CUSTOM:
                         for (Operand dynamicOperand : instruction.signature.dynamicOperands()) {
                             if (instruction.getQuickeningRoot().needsChildBciForBoxingElimination(model, dynamicOperand)) {
-                                instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(dynamicOperand.dynamicIndex()));
+                                instruction.addChildBciImmediate(dynamicOperand);
                             }
                         }
 
@@ -1065,7 +1059,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                         break;
                     case BRANCH_FALSE:
                         if (model.isBoxingEliminated(type(boolean.class))) {
-                            instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(0));
+                            instruction.addChildBciImmediate(instruction.signature.dynamicOperands().get(0));
 
                             model.quickenInstruction(instruction,
                                             instruction.signature,
@@ -1077,8 +1071,8 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                         }
                         break;
                     case MERGE_CONDITIONAL:
-                        instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(0));
-                        instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(1));
+                        instruction.addChildBciImmediate(instruction.signature.dynamicOperands().get(0));
+                        instruction.addChildBciImmediate(instruction.signature.dynamicOperands().get(1));
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
                             InstructionModel specializedInstruction = model.quickenInstruction(instruction,
                                             instruction.signature.withOperandType(1, boxedType, boxedType),
@@ -1094,7 +1088,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                                         "generic", QuickeningKind.GENERIC, null, false);
                         break;
                     case POP:
-                        instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(0));
+                        instruction.addChildBciImmediate(instruction.signature.dynamicOperands().get(0));
 
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
                             model.quickenInstruction(instruction,
@@ -1111,7 +1105,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                         // we are always returning and returns do not support boxing elimination.
                         break;
                     case TAG_LEAVE:
-                        instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(0));
+                        instruction.addChildBciImmediate(instruction.signature.dynamicOperands().get(0));
 
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
                             InstructionModel specializedInstruction = model.quickenInstruction(instruction,
@@ -1155,7 +1149,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                     case STORE_LOCAL:
                     case STORE_LOCAL_MATERIALIZED:
                         // needed for boxing elimination
-                        instruction.addImmediate(ImmediateKind.BYTECODE_INDEX, createChildBciName(0));
+                        instruction.addChildBciImmediate(instruction.signature.dynamicOperands().get(0));
 
                         for (TypeMirror boxedType : model.boxingEliminatedTypes) {
                             InstructionModel specializedInstruction = model.quickenInstruction(instruction,
@@ -1324,6 +1318,26 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         return new IllegalLocalExceptionFactory(createMethod, params);
     }
 
+    private ExecutableElement resolveSourceContentSupplier(BytecodeDSLModel model, AnnotationMirror generateBytecodeMirror, String sourceContentSupplierMethodName) {
+        AnnotationValue sourceContentSupplierValue = ElementUtils.getAnnotationValue(generateBytecodeMirror, "sourceContentSupplier");
+        if (sourceContentSupplierMethodName.isEmpty()) {
+            model.addError(generateBytecodeMirror, sourceContentSupplierValue, "The sourceContentSupplier attribute cannot be empty.");
+            return null;
+        }
+        ExecutableElement supplierMethod = ElementUtils.findMethod(model.getTemplateType(), sourceContentSupplierMethodName, new TypeMirror[]{model.languageClass, types.Source}, types.Source);
+        if (supplierMethod == null) {
+            model.addError(generateBytecodeMirror, sourceContentSupplierValue,
+                            "No method '%s' was declared on the root node with signature %s(%s, %s). Source content supplier methods must conform to this signature.", sourceContentSupplierMethodName,
+                            getSimpleName(types.Source), getSimpleName(model.languageClass), getSimpleName(types.Source));
+        } else if (!supplierMethod.getModifiers().contains(Modifier.STATIC)) {
+            model.addError(generateBytecodeMirror, sourceContentSupplierValue, "The method '%s' must be static.", sourceContentSupplierMethodName);
+        } else if (supplierMethod.getModifiers().contains(Modifier.PRIVATE)) {
+            model.addError(generateBytecodeMirror, sourceContentSupplierValue, "The method '%s' must be visible to subclasses. Remove the private modifier to resolve this.",
+                            sourceContentSupplierMethodName);
+        }
+        return supplierMethod;
+    }
+
     private List<List<TypeMirror>> expandBoxingEliminatedImplicitCasts(BytecodeDSLModel model, TypeSystemData typeSystem, List<TypeMirror> signatureTypes) {
         List<List<TypeMirror>> expandedSignatures = new ArrayList<>();
         expandedSignatures.add(new ArrayList<>());
@@ -1446,10 +1460,6 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
             }
         }
         return foundMirror;
-    }
-
-    private static String createChildBciName(int i) {
-        return "child" + i;
     }
 
     private static long countBoxingEliminatedTypes(BytecodeDSLModel model, List<TypeMirror> s0) {

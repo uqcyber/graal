@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -144,7 +144,8 @@ public class BinaryParser extends BinaryStreamParser {
     private static final int[] EMPTY_TYPES = new int[0];
 
     private final WasmModule module;
-    private final WasmContext wasmContext;
+    private final WasmLanguage language;
+    private final WasmContextOptions contextOptions;
     private final int[] multiResult;
     private final long[] longMultiResult;
     private final boolean[] booleanMultiResult;
@@ -161,21 +162,27 @@ public class BinaryParser extends BinaryStreamParser {
 
     @TruffleBoundary
     public BinaryParser(WasmModule module, WasmContext context, byte[] data) {
+        this(module, context.language(), data);
+    }
+
+    @TruffleBoundary
+    public BinaryParser(WasmModule module, WasmLanguage language, byte[] data) {
         super(data);
         this.module = module;
-        this.wasmContext = context;
+        this.language = language;
+        this.contextOptions = language.contextOptions();
         this.multiResult = new int[2];
         this.longMultiResult = new long[2];
         this.booleanMultiResult = new boolean[2];
-        this.multiValue = context.getContextOptions().supportMultiValue();
-        this.bulkMemoryAndRefTypes = context.getContextOptions().supportBulkMemoryAndRefTypes();
-        this.memory64 = context.getContextOptions().supportMemory64();
-        this.multiMemory = context.getContextOptions().supportMultiMemory();
-        this.threads = context.getContextOptions().supportThreads();
-        this.simd = context.getContextOptions().supportSIMD();
-        this.exceptions = context.getContextOptions().supportExceptions();
-        this.typedFunctionReferences = context.getContextOptions().supportTypedFunctionReferences();
-        this.gc = context.getContextOptions().supportGC();
+        this.multiValue = contextOptions.supportMultiValue();
+        this.bulkMemoryAndRefTypes = contextOptions.supportBulkMemoryAndRefTypes();
+        this.memory64 = contextOptions.supportMemory64();
+        this.multiMemory = contextOptions.supportMultiMemory();
+        this.threads = contextOptions.supportThreads();
+        this.simd = contextOptions.supportSIMD();
+        this.exceptions = contextOptions.supportExceptions();
+        this.typedFunctionReferences = contextOptions.supportTypedFunctionReferences();
+        this.gc = contextOptions.supportGC();
     }
 
     @TruffleBoundary
@@ -468,7 +475,7 @@ public class BinaryParser extends BinaryStreamParser {
                 }
                 typeIndex++;
             }
-            module.finishRecursiveTypeGroup(recursiveTypeGroupStart, wasmContext.language());
+            module.finishRecursiveTypeGroup(recursiveTypeGroupStart, language);
             for (int subTypeIndex = typeIndex - subTypeCount; subTypeIndex < typeIndex; subTypeIndex++) {
                 if (module.hasSuperType(subTypeIndex)) {
                     int superTypeIndex = module.superType(subTypeIndex);
@@ -591,8 +598,8 @@ public class BinaryParser extends BinaryStreamParser {
             readMemoryLimits(longMultiResult, booleanMultiResult);
             final boolean is64Bit = booleanMultiResult[0];
             final boolean isShared = booleanMultiResult[1];
-            final boolean useUnsafeMemory = wasmContext.getContextOptions().useUnsafeMemory();
-            final boolean directByteBufferMemoryAccess = wasmContext.getContextOptions().directByteBufferMemoryAccess();
+            final boolean useUnsafeMemory = contextOptions.useUnsafeMemory();
+            final boolean directByteBufferMemoryAccess = contextOptions.directByteBufferMemoryAccess();
             module.symbolTable().allocateMemory(memoryIndex, longMultiResult[0], longMultiResult[1], is64Bit, isShared, multiMemory, useUnsafeMemory, directByteBufferMemoryAccess);
         }
     }
@@ -814,6 +821,11 @@ public class BinaryParser extends BinaryStreamParser {
                          * stack, we prematurely exit the loop and let the following code size check
                          * (in readCodeSection) throw an exception.
                          */
+                        if (offsetToLineIndexMap != null) {
+                            // Make sure we exit the current statement before leaving the function
+                            bytecode.addNotify(-1, -1);
+                        }
+                        bytecode.addOp(Bytecode.RETURN);
                         break end;
                     }
                     break;
@@ -2790,27 +2802,27 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private void checkSaturatingFloatToIntSupport(int opcode) {
-        checkContextOption(wasmContext.getContextOptions().supportSaturatingFloatToInt(), "Saturating float-to-int conversion is not enabled (opcode: 0xFC 0x%02x)", opcode);
+        checkContextOption(contextOptions.supportSaturatingFloatToInt(), "Saturating float-to-int conversion is not enabled (opcode: 0xFC 0x%02x)", opcode);
     }
 
     private void checkSignExtensionOpsSupport(int opcode) {
-        checkContextOption(wasmContext.getContextOptions().supportSignExtensionOps(), "Sign-extension operators are not enabled (opcode: 0x%02x)", opcode);
+        checkContextOption(contextOptions.supportSignExtensionOps(), "Sign-extension operators are not enabled (opcode: 0x%02x)", opcode);
     }
 
     private void checkBulkMemoryAndRefTypesSupport(int opcode) {
-        checkContextOption(wasmContext.getContextOptions().supportBulkMemoryAndRefTypes(), "Bulk memory operations and reference types are not enabled (opcode: 0x%02x)", opcode);
+        checkContextOption(contextOptions.supportBulkMemoryAndRefTypes(), "Bulk memory operations and reference types are not enabled (opcode: 0x%02x)", opcode);
     }
 
     private void checkThreadsSupport(int opcode) {
-        checkContextOption(wasmContext.getContextOptions().supportThreads(), "Threads and atomics are not enabled (opcode: 0x%02x)", opcode);
+        checkContextOption(contextOptions.supportThreads(), "Threads and atomics are not enabled (opcode: 0x%02x)", opcode);
     }
 
     private void checkSIMDSupport() {
-        checkContextOption(wasmContext.getContextOptions().supportSIMD(), "Vector instructions are not enabled (opcode: 0x%02x)", Instructions.VECTOR);
+        checkContextOption(contextOptions.supportSIMD(), "Vector instructions are not enabled (opcode: 0x%02x)", Instructions.VECTOR);
     }
 
     private void checkRelaxedSIMDSupport(int vectorOpcode) {
-        checkContextOption(wasmContext.getContextOptions().supportRelaxedSIMD(), "Relaxed vector instructions are not enabled (opcode: 0x%02x 0x%x)", Instructions.VECTOR, vectorOpcode);
+        checkContextOption(contextOptions.supportRelaxedSIMD(), "Relaxed vector instructions are not enabled (opcode: 0x%02x 0x%x)", Instructions.VECTOR, vectorOpcode);
     }
 
     private static void checkLegacyExceptionHandlingSupport(int opcode) {
@@ -2818,21 +2830,21 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private void checkExceptionHandlingSupport(int opcode) {
-        checkContextOption(wasmContext.getContextOptions().supportExceptions(), "Exception handling is not enabled (opcode: 0x%02x)", opcode);
+        checkContextOption(contextOptions.supportExceptions(), "Exception handling is not enabled (opcode: 0x%02x)", opcode);
     }
 
     private void checkTypedFunctionReferencesSupport(int opcode) {
-        checkContextOption(wasmContext.getContextOptions().supportTypedFunctionReferences(), "Typed function references are not enabled (opcode: 0x%02x)", opcode);
+        checkContextOption(contextOptions.supportTypedFunctionReferences(), "Typed function references are not enabled (opcode: 0x%02x)", opcode);
     }
 
     private void checkGCSupport(int opcode) {
-        checkContextOption(wasmContext.getContextOptions().supportGC(), "Garbage collected types are not enabled (opcode: 0x%02x)", opcode);
+        checkContextOption(contextOptions.supportGC(), "Garbage collected types are not enabled (opcode: 0x%02x)", opcode);
     }
 
     private void store(ParserState state, int type, int n, long[] result) {
         int alignHint = readAlignHint(n);
         final int memoryIndex = readMemoryIndexFromAlignHint(alignHint);
-        final long memoryOffset = readBaseMemoryOffset();
+        final long memoryOffset = readBaseMemoryOffset(memoryIndex);
         state.popChecked(type); // value to store
         if (module.memoryHasIndexType64(memoryIndex) && memory64) {
             state.popChecked(I64_TYPE);
@@ -2846,7 +2858,7 @@ public class BinaryParser extends BinaryStreamParser {
     private void load(ParserState state, int type, int n, long[] result) {
         final int alignHint = readAlignHint(n);
         final int memoryIndex = readMemoryIndexFromAlignHint(alignHint);
-        final long memoryOffset = readBaseMemoryOffset();
+        final long memoryOffset = readBaseMemoryOffset(memoryIndex);
         if (module.memoryHasIndexType64(memoryIndex) && memory64) {
             state.popChecked(I64_TYPE); // 64-bit base address
         } else {
@@ -2860,7 +2872,7 @@ public class BinaryParser extends BinaryStreamParser {
     private void atomicStore(ParserState state, int type, int n, long[] result) {
         int alignHint = readAtomicAlignHint(n);
         final int memoryIndex = readMemoryIndexFromAlignHint(alignHint);
-        final long memoryOffset = readBaseMemoryOffset();
+        final long memoryOffset = readBaseMemoryOffset(memoryIndex);
         state.popChecked(type); // value to store
         if (module.memoryHasIndexType64(memoryIndex) && memory64) {
             state.popChecked(I64_TYPE);
@@ -2874,7 +2886,7 @@ public class BinaryParser extends BinaryStreamParser {
     private void atomicLoad(ParserState state, int type, int n, long[] result) {
         final int alignHint = readAtomicAlignHint(n);
         final int memoryIndex = readMemoryIndexFromAlignHint(alignHint);
-        final long memoryOffset = readBaseMemoryOffset();
+        final long memoryOffset = readBaseMemoryOffset(memoryIndex);
         if (module.memoryHasIndexType64(memoryIndex) && memory64) {
             state.popChecked(I64_TYPE); // 64-bit base address
         } else {
@@ -2888,7 +2900,7 @@ public class BinaryParser extends BinaryStreamParser {
     private void atomicReadModifyWrite(ParserState state, int type, int n, long[] result) {
         final int alignHint = readAtomicAlignHint(n);
         final int memoryIndex = readMemoryIndexFromAlignHint(alignHint);
-        final long memoryOffset = readBaseMemoryOffset();
+        final long memoryOffset = readBaseMemoryOffset(memoryIndex);
         state.popChecked(type); // RMW value
         if (module.memoryHasIndexType64(memoryIndex) && memory64) {
             state.popChecked(I64_TYPE); // 64-bit base address
@@ -2903,7 +2915,7 @@ public class BinaryParser extends BinaryStreamParser {
     private void atomicCompareExchange(ParserState state, int type, int n, long[] result) {
         final int alignHint = readAtomicAlignHint(n);
         final int memoryIndex = readMemoryIndexFromAlignHint(alignHint);
-        final long memoryOffset = readBaseMemoryOffset();
+        final long memoryOffset = readBaseMemoryOffset(memoryIndex);
         state.popChecked(type); // replacement value
         state.popChecked(type); // expected value
         if (module.memoryHasIndexType64(memoryIndex) && memory64) {
@@ -2919,7 +2931,7 @@ public class BinaryParser extends BinaryStreamParser {
     private void atomicNotify(ParserState state, long[] result) {
         final int alignHint = readAtomicAlignHint(32);
         final int memoryIndex = readMemoryIndexFromAlignHint(alignHint);
-        final long memoryOffset = readBaseMemoryOffset();
+        final long memoryOffset = readBaseMemoryOffset(memoryIndex);
         state.popChecked(I32_TYPE); // 32-bit count (number of threads to notify)
         if (module.memoryHasIndexType64(memoryIndex) && memory64) {
             state.popChecked(I64_TYPE); // 64-bit base address
@@ -2934,7 +2946,7 @@ public class BinaryParser extends BinaryStreamParser {
     private void atomicWait(ParserState state, int type, int n, long[] result) {
         final int alignHint = readAtomicAlignHint(n);
         final int memoryIndex = readMemoryIndexFromAlignHint(alignHint);
-        final long memoryOffset = readBaseMemoryOffset();
+        final long memoryOffset = readBaseMemoryOffset(memoryIndex);
         state.popChecked(I64_TYPE); // 64-bit relative timeout
         state.popChecked(type); // expected value
         if (module.memoryHasIndexType64(memoryIndex) && memory64) {
@@ -3097,7 +3109,7 @@ public class BinaryParser extends BinaryStreamParser {
                 case Instructions.I32_ADD:
                 case Instructions.I32_SUB:
                 case Instructions.I32_MUL:
-                    if (!wasmContext.getContextOptions().supportExtendedConstExpressions()) {
+                    if (!contextOptions.supportExtendedConstExpressions()) {
                         fail(Failure.ILLEGAL_OPCODE, "Invalid instruction for constant expression: 0x%02X", opcode);
                     }
                     state.popChecked(I32_TYPE);
@@ -3118,7 +3130,7 @@ public class BinaryParser extends BinaryStreamParser {
                 case Instructions.I64_ADD:
                 case Instructions.I64_SUB:
                 case Instructions.I64_MUL:
-                    if (!wasmContext.getContextOptions().supportExtendedConstExpressions()) {
+                    if (!contextOptions.supportExtendedConstExpressions()) {
                         fail(Failure.ILLEGAL_OPCODE, "Invalid instruction for constant expression: 0x%02X", opcode);
                     }
                     state.popChecked(I64_TYPE);
@@ -3706,12 +3718,16 @@ public class BinaryParser extends BinaryStreamParser {
         return memoryIndex;
     }
 
-    private long readBaseMemoryOffset() {
+    private long readBaseMemoryOffset(int memoryIndex) {
         final long memoryOffset;
         if (memory64) {
             memoryOffset = readUnsignedInt64(); // 64-bit store offset
         } else {
             memoryOffset = Integer.toUnsignedLong(readUnsignedInt32()); // 32-bit store offset
+        }
+        if (!module.memoryHasIndexType64(memoryIndex)) {
+            assertUnsignedLongLessOrEqual(memoryOffset, 0xFFFF_FFFFL, Failure.UNSPECIFIED_INVALID,
+                            "Memory offset must fit into the 32-bit address type");
         }
         return memoryOffset;
     }

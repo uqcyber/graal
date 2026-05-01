@@ -64,6 +64,8 @@ public interface TypeAccess<C extends TypeAccess<C, M, F>, M extends MethodAcces
 
     /**
      * Finds the least common ancestor between this class and the other class.
+     * <p>
+     * This is only called on classes that are neither array, interface nor primitive.
      */
     C findLeastCommonAncestor(C other);
 

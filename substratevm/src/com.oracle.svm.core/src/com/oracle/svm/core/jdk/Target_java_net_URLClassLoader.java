@@ -28,6 +28,7 @@ import java.io.Closeable;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.WeakHashMap;
 
@@ -41,6 +42,15 @@ final class Target_jdk_internal_loader_URLClassPath {
 
     /* Reset fields that can store a Zip file via sun.misc.URLClassPath$JarLoader.jar. */
 
+    @Alias
+    public native URL findResource(String name);
+
+    @Alias
+    public native Enumeration<URL> findResources(String name);
+
+    @Alias
+    public native Target_jdk_internal_loader_Resource getResource(String name);
+
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, declClass = ArrayList.class)//
     private ArrayList<?> loaders;
 
@@ -50,6 +60,13 @@ final class Target_jdk_internal_loader_URLClassPath {
     /* The original locations of the .jar files are no longer available at run time. */
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, declClass = ArrayList.class)//
     private ArrayList<URL> path;
+}
+
+@TargetClass(className = "jdk.internal.loader.Resource")
+@SuppressWarnings({"unused", "static-method"})
+final class Target_jdk_internal_loader_Resource {
+    @Alias
+    public native byte[] getBytes() throws java.io.IOException;
 }
 
 @TargetClass(URLClassLoader.class)

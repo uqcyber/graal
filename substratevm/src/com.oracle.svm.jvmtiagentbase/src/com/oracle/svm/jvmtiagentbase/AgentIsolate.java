@@ -26,16 +26,16 @@ package com.oracle.svm.jvmtiagentbase;
 
 import static org.graalvm.word.WordFactory.nullPointer;
 
-import com.oracle.svm.core.c.function.CEntryPointOptions;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.WordPointer;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.c.function.CEntryPointActions;
-import com.oracle.svm.core.c.function.CEntryPointErrors;
+import com.oracle.svm.guest.staging.c.function.CEntryPointActions;
+import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
+import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.shared.util.VMError;
 
 /**

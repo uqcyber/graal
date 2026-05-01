@@ -50,8 +50,9 @@ import com.oracle.svm.core.thread.ContinuationSupport;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.RecurringCallbackSupport;
 import com.oracle.svm.core.thread.Target_jdk_internal_vm_Continuation;
-import com.oracle.svm.shared.util.BasedOnJDKFile;
+import com.oracle.svm.espresso.shared.resolver.CallKind;
 import com.oracle.svm.guest.staging.jdk.InternalVMMethod;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.internal.reflect.Reflection;
@@ -196,18 +197,17 @@ public final class ClassInitializationInfo {
     }
 
     /** For classes that are loaded at run-time. */
-    private ClassInitializationInfo(boolean typeReachedTracked, boolean hasClassInitializer) {
+    private ClassInitializationInfo(boolean isArray, boolean hasClassInitializer) {
         assert RuntimeClassLoading.isSupported();
 
         this.buildTimeInitialized = false;
         this.hasInitializer = hasClassInitializer;
         this.runtimeClassInitializer = hasClassInitializer ? INTERPRETER_INITIALIZATION_MARKER : null;
-        this.slowPathRequired = true;
-        this.initLock = new ReentrantLock();
-        /* GR-59739: Needs a new state "Loaded". */
-        this.initState = InitState.Linked;
-        this.typeReachedTracked = typeReachedTracked;
-        this.typeReached = typeReachedTracked ? TypeReached.NOT_REACHED : TypeReached.UNTRACKED;
+        this.slowPathRequired = !isArray;
+        this.initLock = isArray ? null : new ReentrantLock();
+        this.initState = isArray ? InitState.FullyInitialized : InitState.Loaded;
+        this.typeReachedTracked = false;
+        this.typeReached = TypeReached.UNTRACKED;
 
         assert !this.typeReachedTracked || slowPathRequired;
     }
@@ -232,8 +232,8 @@ public final class ClassInitializationInfo {
         return new ClassInitializationInfo(methodPointer, typeReachedTracked);
     }
 
-    public static ClassInitializationInfo forRuntimeLoadedClass(boolean typeReachedTracked, boolean hasClassInitializer) {
-        return new ClassInitializationInfo(typeReachedTracked, hasClassInitializer);
+    public static ClassInitializationInfo forRuntimeLoadedClass(boolean isArray, boolean hasClassInitializer) {
+        return new ClassInitializationInfo(isArray, hasClassInitializer);
     }
 
     public boolean isBuildTimeInitialized() {
@@ -261,13 +261,21 @@ public final class ClassInitializationInfo {
         return initState == InitState.InitializationError;
     }
 
+    private boolean isBeingLinked() {
+        return initState == InitState.BeingLinked;
+    }
+
     private boolean isBeingInitialized() {
         return initState == InitState.BeingInitialized;
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public boolean isLinked() {
+    public boolean isExactlyLinked() {
         return initState == InitState.Linked;
+    }
+
+    public boolean isLinked() {
+        return initState.isAtLeast(InitState.Linked);
     }
 
     public boolean isTypeReached(DynamicHub caller) {
@@ -378,6 +386,7 @@ public final class ClassInitializationInfo {
             RecurringCallbackSupport.suspendCallbackTimer("Prevent deadlocks and other issues.");
         }
         try {
+            ensureLinked0(hub);
             tryInitialize0(hub);
         } finally {
             if (Platform.includedIn(NATIVE_ONLY.class) && !superClassInitialization) {
@@ -414,6 +423,112 @@ public final class ClassInitializationInfo {
             if (superInfo.typeReached != TypeReached.UNTRACKED) {
                 superInfo.typeReached = TypeReached.REACHED;
                 reachInterfaces(superInterface);
+            }
+        }
+    }
+
+    public void ensureLinked(DynamicHub hub) {
+        if (!RuntimeClassLoading.isSupported()) {
+            return;
+        }
+
+        if (isLinked()) {
+            return;
+        }
+
+        /*
+         * Before acquiring the lock, make the yellow zone available and disable recurring callback
+         * execution.
+         */
+        if (Platform.includedIn(NATIVE_ONLY.class)) {
+            StackOverflowCheck.singleton().makeYellowZoneAvailable();
+            RecurringCallbackSupport.suspendCallbackTimer("Prevent deadlocks and other issues.");
+        }
+        try {
+            ensureLinked0(hub);
+        } finally {
+            if (Platform.includedIn(NATIVE_ONLY.class)) {
+                RecurringCallbackSupport.resumeCallbackTimer();
+                StackOverflowCheck.singleton().protectYellowZone();
+            }
+        }
+    }
+
+    private void ensureLinked0(DynamicHub hub) {
+        if (!RuntimeClassLoading.isSupported()) {
+            return;
+        }
+
+        if (isLinked()) {
+            return;
+        }
+
+        /* Grab the initialization lock */
+        initLock.lock();
+        try {
+            while (isBeingLinked() && !isReentrantInitialization()) {
+                if (initCondition == null) {
+                    /*
+                     * We are holding initLock, so there cannot be any races installing the
+                     * initCondition.
+                     */
+                    initCondition = initLock.newCondition();
+                }
+                initCondition.awaitUninterruptibly();
+            }
+
+            if (isLinked()) {
+                return;
+            }
+
+            if (isBeingLinked() && isReentrantInitialization()) {
+                return;
+            }
+
+            initState = InitState.BeingInitialized;
+            setInitThread();
+        } finally {
+            initLock.unlock();
+        }
+
+        try {
+            // link super class before linking this class
+            DynamicHub superHub = hub.getSuperHub();
+            if (superHub != null) {
+                ClassInitializationInfo superInfo = superHub.getClassInitializationInfo();
+                superInfo.ensureLinked0(superHub);
+            }
+
+            // link all interfaces implemented by this class before linking this class
+            for (DynamicHub interfaceHub : hub.getInterfaces()) {
+                ClassInitializationInfo superInfo = interfaceHub.getClassInitializationInfo();
+                superInfo.ensureLinked0(interfaceHub);
+            }
+
+            prepareAndVerify(hub);
+
+            // Successfully linked
+            setInitializationStateAndNotify(InitState.Linked);
+        } catch (Throwable ex) {
+            // Roll-back the attempt. Further attempts at linking should retry.
+            setInitializationStateAndNotify(InitState.Loaded);
+            throw ex;
+        }
+    }
+
+    private static void prepareAndVerify(DynamicHub hub) {
+        /*
+         * Verifier can trigger class loading, which calls arbitrary Java code. So, Protect the
+         * yellow zone before executing arbitrary Java code.
+         */
+        if (Platform.includedIn(NATIVE_ONLY.class)) {
+            StackOverflowCheck.singleton().protectYellowZone();
+        }
+        try {
+            CremaSupport.singleton().prepareAndVerify(hub);
+        } finally {
+            if (Platform.includedIn(NATIVE_ONLY.class)) {
+                StackOverflowCheck.singleton().makeYellowZoneAvailable();
             }
         }
     }
@@ -723,7 +838,7 @@ public final class ClassInitializationInfo {
     private void invokeClassInitializer0(DynamicHub hub) {
         if (RuntimeClassLoading.isSupported() && runtimeClassInitializer == INTERPRETER_INITIALIZATION_MARKER) {
             ResolvedJavaMethod classInitializer = hub.getInterpreterType().getClassInitializer();
-            CremaSupport.singleton().execute(classInitializer, new Object[0], false);
+            CremaSupport.singleton().execute(classInitializer, new Object[0], CallKind.STATIC);
         } else {
             ClassInitializerFunctionPointer functionPointer = (ClassInitializerFunctionPointer) runtimeClassInitializer.functionPointer;
             VMError.guarantee(functionPointer.isNonNull());
@@ -733,8 +848,16 @@ public final class ClassInitializationInfo {
 
     public enum InitState {
         /**
-         * Successfully linked/verified (but not initialized yet). Linking happens during image
-         * building, so we do not need to track states before linking.
+         * Initial state for runtime loaded classes.
+         */
+        Loaded,
+        /**
+         * Currently linking, i.e., running class preparation and verification.
+         */
+        BeingLinked,
+        /**
+         * Successfully linked/verified (but not initialized yet). For AOT classes, Linking happens
+         * during image building.
          */
         Linked,
         /**
@@ -742,13 +865,17 @@ public final class ClassInitializationInfo {
          */
         BeingInitialized,
         /**
-         * Initialized (successful final state).
-         */
-        FullyInitialized,
-        /**
          * Error happened during initialization.
          */
-        InitializationError
+        InitializationError,
+        /**
+         * Initialized (successful final state).
+         */
+        FullyInitialized;
+
+        public boolean isAtLeast(InitState state) {
+            return this.ordinal() >= state.ordinal();
+        }
     }
 
     public enum TypeReached {

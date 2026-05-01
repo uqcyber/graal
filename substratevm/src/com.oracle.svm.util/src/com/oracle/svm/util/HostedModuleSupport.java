@@ -53,6 +53,11 @@ public final class HostedModuleSupport {
                     "org.graalvm.truffle.compiler",
                     "org.graalvm.word");
 
+    public static final Set<String> GUEST_MODULES = Set.of(
+                    "org.graalvm.nativeimage.guest",
+                    "org.graalvm.nativeimage.guest.staging",
+                    "org.graalvm.nativeimage.shared");
+
     public static Set<String> parseModuleSetModifierProperty(String prop) {
         Set<String> specifiedModules = new HashSet<>(); // noEconomicSet(streaming)
         String args = System.getProperty(prop, "");

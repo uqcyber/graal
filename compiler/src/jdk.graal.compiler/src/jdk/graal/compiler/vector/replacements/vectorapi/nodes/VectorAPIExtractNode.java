@@ -34,6 +34,7 @@ import org.graalvm.collections.EconomicMap;
 import jdk.graal.compiler.vector.replacements.vectorapi.VectorAPIType;
 
 import jdk.graal.compiler.core.common.type.IntegerStamp;
+import jdk.graal.compiler.core.common.type.PrimitiveStamp;
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
@@ -44,14 +45,19 @@ import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.nodes.LogicNode;
 import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.calc.AndNode;
 import jdk.graal.compiler.nodes.calc.ConditionalNode;
+import jdk.graal.compiler.nodes.calc.IntegerConvertNode;
+import jdk.graal.compiler.nodes.calc.IntegerLessThanNode;
 import jdk.graal.compiler.nodes.calc.IntegerTestNode;
 import jdk.graal.compiler.nodes.calc.LeftShiftNode;
 import jdk.graal.compiler.nodes.spi.Canonicalizable;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.vector.architecture.VectorArchitecture;
+import jdk.graal.compiler.vector.nodes.simd.SimdBroadcastNode;
 import jdk.graal.compiler.vector.nodes.simd.LogicValueStamp;
 import jdk.graal.compiler.vector.nodes.simd.SimdCutNode;
+import jdk.graal.compiler.vector.nodes.simd.SimdPermuteWithVectorIndicesNode;
 import jdk.graal.compiler.vector.nodes.simd.SimdStamp;
 import jdk.graal.compiler.vector.nodes.simd.SimdToBitMaskNode;
 
@@ -111,7 +117,7 @@ public class VectorAPIExtractNode extends VectorAPISinkNode implements Canonical
 
     @Override
     public boolean canExpand(VectorArchitecture vectorArch, EconomicMap<ValueNode, Stamp> simdStamps) {
-        return inputType != null && (inputType.isMask || idx().isJavaConstant());
+        return inputType != null && (inputType.isMask || idx().isJavaConstant() || canExpandVariableIndex(vectorArch));
     }
 
     @Override
@@ -131,8 +137,62 @@ public class VectorAPIExtractNode extends VectorAPISinkNode implements Canonical
             return ConditionalNode.create(cond, ConstantNode.forLong(0), ConstantNode.forLong(1), NodeView.DEFAULT);
         }
 
-        ValueNode element = new SimdCutNode(vector, idx().asJavaConstant().asInt(), 1);
-        return reinterpretAsLong(element);
+        if (idx().isJavaConstant()) {
+            ValueNode element = new SimdCutNode(vector, idx().asJavaConstant().asInt(), 1);
+            return reinterpretAsLong(element);
+        }
+        return expandVariableIndex(vector);
+    }
+
+    private boolean canExpandVariableIndex(VectorArchitecture vectorArch) {
+        if (inputType == null || inputType.isMask || idx().isJavaConstant()) {
+            return false;
+        }
+        if (!hasRangeCheckedIndex() && !hasFirstTrueReductionIndex()) {
+            return false;
+        }
+        return vectorArch.getSupportedVectorPermuteLength(inputType.stamp.getComponent(0), inputType.vectorLength) == inputType.vectorLength;
+    }
+
+    private boolean hasRangeCheckedIndex() {
+        if (inputType == null || inputType.isMask || idx().isJavaConstant()) {
+            return false;
+        }
+        if (!(idx().stamp(NodeView.DEFAULT) instanceof IntegerStamp indexStamp)) {
+            return false;
+        }
+        /*
+         * VectorMask.firstTrue() returns the first matching lane index, or vectorLength if no lane
+         * matches. Allow that special no-match value here; extraction sites that use it must guard
+         * the extract with an explicit bounds check.
+         */
+        return indexStamp.lowerBound() >= 0 && indexStamp.upperBound() <= inputType.vectorLength;
+    }
+
+    private boolean hasFirstTrueReductionIndex() {
+        ValueNode index = idx();
+        while (index instanceof IntegerConvertNode<?> convert) {
+            index = convert.getValue();
+        }
+        return index instanceof VectorAPIMaskReductionCoercedNode maskReduction && maskReduction.isFirstTrueOp();
+    }
+
+    private ValueNode expandVariableIndex(ValueNode vector) {
+        ValueNode vectorLength = ConstantNode.forInt(inputType.vectorLength);
+        LogicNode inRange = IntegerLessThanNode.create(idx(), vectorLength, NodeView.DEFAULT);
+        /*
+         * For this path, idx is either in [0, VL - 1] or the VectorMask.firstTrue() no-match value
+         * VL. Vector API lengths are powers of two, so idx & (VL - 1) keeps in-range indices
+         * unchanged and maps the no-match value to lane 0. The surrounding conditional then
+         * discards that extracted lane-0 value and returns 0 instead.
+         */
+        ValueNode safeIndex = AndNode.create(idx(), ConstantNode.forInt(inputType.vectorLength - 1), NodeView.DEFAULT);
+        int elementBits = PrimitiveStamp.getBits(((SimdStamp) vector.stamp(NodeView.DEFAULT)).getComponent(0));
+        ValueNode indexAsElement = IntegerConvertNode.convertUnsigned(safeIndex, IntegerStamp.create(elementBits), NodeView.DEFAULT);
+        ValueNode indexVector = new SimdBroadcastNode(indexAsElement, inputType.vectorLength);
+        ValueNode extractedVector = SimdPermuteWithVectorIndicesNode.create(vector, indexVector);
+        ValueNode extracted = reinterpretAsLong(new SimdCutNode(extractedVector, 0, 1));
+        return ConditionalNode.create(inRange, extracted, ConstantNode.forLong(0), NodeView.DEFAULT);
     }
 
     private ValueNode vector() {

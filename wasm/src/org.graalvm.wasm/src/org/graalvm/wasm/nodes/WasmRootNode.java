@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,6 +48,7 @@ import org.graalvm.wasm.WasmModule;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameDescriptor;
@@ -121,6 +122,19 @@ public abstract class WasmRootNode extends RootNode {
         CompilerAsserts.neverPartOfCompilation();
         assert this.boundInstance == null;
         this.boundInstance = boundInstance;
+    }
+
+    @TruffleBoundary
+    protected final WasmContext getContextOrNull() {
+        if (boundInstance != null) {
+            return boundInstance.context();
+        }
+        try {
+            return WasmContext.get(this);
+        } catch (AssertionError e) {
+            assert e.getMessage() != null && e.getMessage().startsWith("No polyglot context is entered.") : e;
+            return null;
+        }
     }
 
     @Override

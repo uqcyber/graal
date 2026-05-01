@@ -524,7 +524,7 @@ public class JSCodeGenTool extends CodeGenTool {
     }
 
     public String vmClassName() {
-        String imageName = WebImageOptions.VMClassName.getValue(HostedOptionValues.singleton());
+        String imageName = WebImageOptions.VMClassName.getValue(HostedOptionValues.singleton().get());
         imageName = imageName.replaceAll("[^A-Za-z]", "_");
         return imageName;
     }

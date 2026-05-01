@@ -60,8 +60,7 @@ abstract class SystemThread extends Thread {
     @Override
     @SuppressWarnings("try")
     public final void run() {
-        AbstractPolyglotImpl rootPolyglot = polyglot.getRootImpl();
-        try (AbstractPolyglotImpl.ThreadScope threadScope = rootPolyglot.createThreadScope()) {
+        try (AbstractPolyglotImpl.ThreadScope threadScope = polyglot.createThreadScope()) {
             beforeExecute();
             TL_HANDSHAKE.ensureThreadInitialized();
             try {

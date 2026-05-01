@@ -52,6 +52,11 @@ public class VerifySharedConstantEmptyArray extends VerifyStringFormatterUsage {
     private static final Set<String> NAMES = CollectionsUtil.setOf(
                     "EMPTY_ARRAY",
                     "EMPTY_PATTERNS",
+                    /*
+                     * ECJ uses this synthetic backing field name for empty enum value arrays, such
+                     * as for RecordedOperationPersistence.EnumSetSerializer.UnknownEnum.
+                     */
+                    "ENUM$VALUES",
                     "NO_NODES");
 
     @Override

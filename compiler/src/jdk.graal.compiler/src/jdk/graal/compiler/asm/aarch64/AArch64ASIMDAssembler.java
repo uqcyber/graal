@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -544,11 +544,13 @@ public abstract class AArch64ASIMDAssembler {
         /* Advanced SIMD load/store multiple structures (C4-296). */
         ST4_MULTIPLE_4R(0b0000 << 12),
         ST1_MULTIPLE_4R(0b0010 << 12),
+        ST3_MULTIPLE_3R(0b0100 << 12),
         ST1_MULTIPLE_3R(0b0110 << 12),
         ST1_MULTIPLE_1R(0b0111 << 12),
         ST2_MULTIPLE_2R(0b1000 << 12),
         ST1_MULTIPLE_2R(0b1010 << 12),
         LD4_MULTIPLE_4R(LoadFlag | 0b0000 << 12),
+        LD3_MULTIPLE_3R(LoadFlag | 0b0100 << 12),
         LD1_MULTIPLE_4R(LoadFlag | 0b0010 << 12),
         LD1_MULTIPLE_3R(LoadFlag | 0b0110 << 12),
         LD1_MULTIPLE_1R(LoadFlag | 0b0111 << 12),
@@ -705,6 +707,7 @@ public abstract class AArch64ASIMDAssembler {
         /* UBit 1, size xx */
         CMHI(UBit | 0b00110 << 11),
         CMHS(UBit | 0b00111 << 11),
+        UQSUB(UBit | 0b00101 << 11),
         USHL(UBit | 0b01000 << 11),
         UMAX(UBit | 0b01100 << 11),
         UMAXP(UBit | 0b10100 << 11),
@@ -2313,6 +2316,33 @@ public abstract class AArch64ASIMDAssembler {
     }
 
     /**
+     * C7.2.183 Load multiple 3-element structures to three registers, with de-interleaving.<br>
+     *
+     * This instruction loads multiple 3-element structures from memory and writes the result to
+     * three registers. Note the three registers must be consecutive (modulo the number of SIMD
+     * registers).<br>
+     *
+     * <code>
+     * memory at addr: b0 b1 b2 b3 b4 b5 ... <br>
+     * result in dst1: b0 b3 b6 ... <br>
+     * result in dst2: b1 b4 b7 ... <br>
+     * result in dst3: b2 b5 b8 ... <br>
+     * </code>
+     *
+     * @param size register size.
+     * @param eSize element size.
+     * @param dst1 destination of structure's first value.
+     * @param dst2 destination of structure's second value. Must be register after dst1.
+     * @param dst3 destination of structure's third value. Must be register after dst2.
+     * @param addr address of first structure.
+     */
+    public void ld3MultipleVVV(ASIMDSize size, ElementSize eSize, Register dst1, Register dst2, Register dst3, AArch64Address addr) {
+        assert assertConsecutiveSIMDRegisters(dst1, dst2, dst3);
+        assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
+        loadStoreMultipleStructures(ASIMDInstruction.LD3_MULTIPLE_3R, size, eSize, dst1, addr);
+    }
+
+    /**
      * C7.2.177 Load multiple single-element structures to four registers.<br>
      *
      * This instruction loads multiple single-element structures from memory and writes the result
@@ -3413,6 +3443,17 @@ public abstract class AArch64ASIMDAssembler {
     }
 
     /**
+     * C7.2.325 Store multiple 3-element structures to memory, with interleaving.<br>
+     *
+     * Note the registers must be consecutive (modulo the number of SIMD registers).<br>
+     */
+    public void st3MultipleVVV(ASIMDSize size, ElementSize eSize, Register src1, Register src2, Register src3, AArch64Address addr) {
+        assert assertConsecutiveSIMDRegisters(src1, src2, src3);
+        assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
+        loadStoreMultipleStructures(ASIMDInstruction.ST3_MULTIPLE_3R, size, eSize, src1, addr);
+    }
+
+    /**
      * C7.2.327 Store multiple 4-element structures to memory, with interleaving.<br>
      *
      * Note the registers must be consecutive (modulo the number of SIMD registers).<br>
@@ -3505,11 +3546,29 @@ public abstract class AArch64ASIMDAssembler {
      * @param index SIMD register.
      */
     public void tblVVV(ASIMDSize size, Register dst, Register table, Register index) {
+        tblVVV(size, dst, table, 1, index);
+    }
+
+    /**
+     * C7.2.339 Table vector lookup (multiple register table variant).<br>
+     *
+     * Table vector lookup using {@code numTableRegs} consecutive table registers starting at
+     * {@code table}.
+     *
+     * @param size register size.
+     * @param dst SIMD register.
+     * @param table first SIMD register in the consecutive table-register range.
+     * @param numTableRegs number of consecutive table registers to use.
+     * @param index SIMD register.
+     *
+     * @see #tblVVV(ASIMDSize, Register, Register, Register)
+     */
+    public void tblVVV(ASIMDSize size, Register dst, Register table, int numTableRegs, Register index) {
         assert dst.getRegisterCategory().equals(SIMD) : dst;
         assert table.getRegisterCategory().equals(SIMD) : table;
         assert index.getRegisterCategory().equals(SIMD) : index;
 
-        tableLookupEncoding(ASIMDInstruction.TBL, size, 1, dst, table, index);
+        tableLookupEncoding(ASIMDInstruction.TBL, size, numTableRegs, dst, table, index);
     }
 
     /**
@@ -3547,7 +3606,7 @@ public abstract class AArch64ASIMDAssembler {
     }
 
     /**
-     * C7.2.440 Table vector lookup extension (single register table variant).<br>
+     * C7.2.340 Table vector lookup extension (single register table variant).<br>
      *
      * This instruction is used to perform permutations at a byte granularity. Within the
      * destination, each byte is determined by using the index register to pick either a value
@@ -3569,11 +3628,29 @@ public abstract class AArch64ASIMDAssembler {
      * @param index SIMD register.
      */
     public void tbxVVV(ASIMDSize size, Register dst, Register table, Register index) {
+        tbxVVV(size, dst, table, 1, index);
+    }
+
+    /**
+     * C7.2.340 Table vector lookup extension (multiple register table variant).<br>
+     *
+     * Table vector lookup extension using {@code numTableRegs} consecutive table registers starting
+     * at {@code table}.
+     *
+     * @param size register size.
+     * @param dst SIMD register.
+     * @param table first SIMD register in the consecutive table-register range.
+     * @param numTableRegs number of consecutive table registers to use.
+     * @param index SIMD register.
+     *
+     * @see #tbxVVV(ASIMDSize, Register, Register, Register)
+     */
+    public void tbxVVV(ASIMDSize size, Register dst, Register table, int numTableRegs, Register index) {
         assert dst.getRegisterCategory().equals(SIMD) : dst;
         assert table.getRegisterCategory().equals(SIMD) : table;
         assert index.getRegisterCategory().equals(SIMD) : index;
 
-        tableLookupEncoding(ASIMDInstruction.TBX, size, 1, dst, table, index);
+        tableLookupEncoding(ASIMDInstruction.TBX, size, numTableRegs, dst, table, index);
     }
 
     /**
@@ -3830,6 +3907,29 @@ public abstract class AArch64ASIMDAssembler {
         assert src.getRegisterCategory().equals(SIMD) : src;
 
         copyEncoding(ASIMDInstruction.UMOV, eSize == ElementSize.DoubleWord, eSize, dst, src, index);
+    }
+
+    /**
+     * C7.2.380 UQSUB Unsigned saturating Subtract.<br>
+     *
+     * This instruction subtracts the element values of the second source SIMD&FP register from the
+     * corresponding element values of the first source SIMD&FP register, places the results into a
+     * vector, and writes the vector to the destination SIMD&FP register.
+     *
+     * @param size register size.
+     * @param eSize element size.
+     * @param dst SIMD register.
+     * @param src1 first source SIMD register.
+     * @param src2 second source SIMD register.
+     */
+    public void uqsubVVV(ASIMDSize size, ElementSize eSize, Register dst, Register src1, Register src2) {
+        assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src1.getRegisterCategory().equals(SIMD) : src1;
+        assert src2.getRegisterCategory().equals(SIMD) : src2;
+        assert eSize != ElementSize.DoubleWord : "Invalid lane width for uqsub";
+
+        threeSameEncoding(ASIMDInstruction.UQSUB, size, elemSizeXX(eSize), dst, src1, src2);
     }
 
     /**

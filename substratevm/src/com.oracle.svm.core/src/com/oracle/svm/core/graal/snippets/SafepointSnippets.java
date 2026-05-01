@@ -33,7 +33,7 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 import org.graalvm.word.LocationIdentity;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
@@ -81,7 +81,7 @@ public final class SafepointSnippets extends SubstrateTemplates implements Snipp
     private static void safepointSnippet() {
         final boolean needSlowPath = SafepointCheckNode.test();
         if (BranchProbabilityNode.probability(BranchProbabilityNode.VERY_SLOW_PATH_PROBABILITY, needSlowPath)) {
-            callSlowPathSafepointCheck(SafepointSlowpath.ENTER_SLOW_PATH_SAFEPOINT_CHECK);
+            callSlowPathSafepointCheck(SafepointSlowpath.ENTER_SLOW_PATH_SAFEPOINT_CHECK_CALLEE_SAVED_CCONV);
         }
     }
 

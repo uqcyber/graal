@@ -272,7 +272,10 @@ public abstract class OptimizedTruffleRuntime implements TruffleRuntime, Truffle
     }
 
     protected EngineCacheSupport loadEngineCacheSupport(List<OptionDescriptors> options) {
-        return loadGraalRuntimeServiceProvider(EngineCacheSupport.class, options, false);
+        DebugEngineCacheSupport debugEngineCacheSupport = new DebugEngineCacheSupport();
+        OptionDescriptors serviceOptions = debugEngineCacheSupport.getEngineOptions();
+        options.add(serviceOptions);
+        return debugEngineCacheSupport;
     }
 
     public abstract ThreadLocalHandshake getThreadLocalHandshake();
@@ -972,7 +975,8 @@ public abstract class OptimizedTruffleRuntime implements TruffleRuntime, Truffle
         }
         compileImpl(callTarget, task);
 
-        if (oldBlockCompilations == null && callTarget.blockCompilations != null) {
+        List<OptimizedCallTarget> newBlockCompilations = callTarget.blockCompilations;
+        if (oldBlockCompilations == null && newBlockCompilations != null && !newBlockCompilations.isEmpty()) {
             // retry with block compilations
             ((CompilationTask) task).reset();
             listeners.onCompilationQueued(callTarget, task.tier());
@@ -1029,7 +1033,22 @@ public abstract class OptimizedTruffleRuntime implements TruffleRuntime, Truffle
     @SuppressWarnings("try")
     public CompilationTask submitForCompilation(OptimizedCallTarget optimizedCallTarget, boolean lastTierCompilation) {
         Priority priority = new Priority(optimizedCallTarget.getCallAndLoopCount(), lastTierCompilation ? Priority.Tier.LAST : Priority.Tier.FIRST);
-        return getCompileQueue().submitCompilation(priority, optimizedCallTarget);
+        return getCompileQueue().submitCompilation(priority, optimizedCallTarget, CompilationTask.SubmissionReason.EXPLICIT);
+    }
+
+    @SuppressWarnings("try")
+    public CompilationTask submitForCompilation(OptimizedCallTarget optimizedCallTarget, boolean lastTierCompilation, CompilationTask.SubmissionReason submissionReason) {
+        BackgroundCompileQueue compileQueue = getCompileQueue();
+        if (compileQueue == null) {
+            /*
+             * Binary compatibility for Substrate runtimes that only override the legacy 2-arg
+             * submit method. This occurs with older GraalVM 21 runtime mixes where hosted mode and
+             * single-threaded runtime execution do not initialize a background compile queue.
+             */
+            return submitForCompilation(optimizedCallTarget, lastTierCompilation);
+        }
+        Priority priority = new Priority(optimizedCallTarget.getCallAndLoopCount(), lastTierCompilation ? Priority.Tier.LAST : Priority.Tier.FIRST);
+        return compileQueue.submitCompilation(priority, optimizedCallTarget, submissionReason);
     }
 
     @SuppressWarnings("all")

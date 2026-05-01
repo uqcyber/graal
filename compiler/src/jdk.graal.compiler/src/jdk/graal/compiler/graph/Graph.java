@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,16 +65,11 @@ public class Graph implements EventCounter {
         @Option(help = "Verify graphs often during compilation when assertions are turned on", type = OptionType.Debug)//
         public static final OptionKey<Boolean> VerifyGraalGraphs = new OptionKey<>(true) {
             @Override
-            public Boolean getValueOrDefault(UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
+            public Boolean getValue(OptionValues values) {
                 if (!Assertions.assertionsEnabled()) {
                     return false;
                 }
-                return super.getValueOrDefault(values);
-            }
-
-            @Override
-            public Boolean getValue(OptionValues values) {
-                return getValueOrDefault(values.getMap());
+                return super.getValue(values);
             }
         };
         @Option(help = "Perform expensive verification of graph inputs, usages, successors and predecessors", type = OptionType.Debug)//

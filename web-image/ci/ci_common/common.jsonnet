@@ -96,7 +96,6 @@ local node_map = {
     },
   },
 
-  eclipse: common.deps.eclipse,
   jdt: common.deps.jdt,
   spotbugs: common.deps.spotbugs,
   svm: common.deps.svm,

@@ -37,11 +37,13 @@ import java.util.Map;
 
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Pair;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.ReservedRegisters;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.graal.code.CGlobalDataDirectReference;
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
-import com.oracle.svm.core.graal.code.CGlobalDataReference;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionKind;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
@@ -65,10 +67,10 @@ import com.oracle.svm.core.nodes.SafepointCheckNode;
 import com.oracle.svm.core.thread.RecurringCallbackSupport;
 import com.oracle.svm.core.thread.SafepointCheckCounter;
 import com.oracle.svm.core.thread.VMThreads;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMBasicBlockRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMTypeRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMValueRef;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.core.common.NumUtil;
@@ -139,9 +141,9 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
     private final LLVMIRBuilder builder;
     private final DebugInfoBuilder debugInfoBuilder;
 
-    private Map<Node, LLVMValueWrapper> valueMap = new HashMap<>();
+    private final Map<Node, LLVMValueWrapper> valueMap = new HashMap<>();
     private final EconomicSet<BasicBlock<?>> processedBlocks = EconomicSet.create();
-    private Map<ValuePhiNode, LLVMValueRef> backwardsPhi = new HashMap<>();
+    private final Map<ValuePhiNode, LLVMValueRef> backwardsPhi = new HashMap<>();
     private long nextCGlobalId = 0L;
 
     @SuppressWarnings("this-escape")
@@ -663,8 +665,7 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
         LLVMValueRef retrieveExceptionFunction = gen.getFunction(LLVMExceptionUnwind.getRetrieveExceptionMethod(gen.getMetaAccess()));
         LLVMValueRef[] args = new LLVMValueRef[0];
         SubstrateCallingConventionKind.Java.toType(true);
-        LLVMValueRef[] arguments = args;
-        LLVMValueRef exception = gen.buildStatepointCall(retrieveExceptionFunction, LLVMGenerator.nextPatchpointId.getAndIncrement(), arguments);
+        LLVMValueRef exception = gen.buildStatepointCall(retrieveExceptionFunction, LLVMGenerator.nextPatchpointId.getAndIncrement(), args);
         setResult(node, exception);
     }
 
@@ -674,14 +675,15 @@ public class NodeLLVMBuilder implements NodeLIRBuilderTool, SubstrateNodeLIRBuil
         builder.buildDebugtrap();
     }
 
-    private final Map<String, CGlobalDataReference> cGlobals = new HashMap<>();
+    private final Map<String, CGlobalDataDirectReference> cGlobals = new HashMap<>();
 
     @Override
+    @Platforms(Platform.HOSTED_ONLY.class)
     public void emitCGlobalDataLoadAddress(CGlobalDataLoadAddressNode node) {
         CGlobalDataInfo dataInfo = node.getDataInfo();
 
         String symbolName = (dataInfo.getData().symbolName != null) ? dataInfo.getData().symbolName : "global_" + gen.getFunctionName() + "#" + nextCGlobalId++;
-        CGlobalDataReference reference = new CGlobalDataReference(dataInfo);
+        CGlobalDataDirectReference reference = new CGlobalDataDirectReference(dataInfo);
         if (cGlobals.containsKey(symbolName)) {
             /*
              * This global was defined both as a symbol name and a defined value. We only register

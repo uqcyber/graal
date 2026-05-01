@@ -40,6 +40,11 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.util.ImageHeapMap;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.Duplicable;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -51,6 +56,7 @@ import sun.security.util.Debug;
  * "../../../../../../../../../../../../docs/reference-manual/native-image/JCASecurityServices.md">
  * JCA Security Services documentation</a> for details).
  */
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Duplicable.class, other = Disallowed.class)
 public final class SecurityProvidersSupport {
     /**
      * A set of providers to be loaded using the service-loading technique at runtime, but not
@@ -143,6 +149,48 @@ public final class SecurityProvidersSupport {
         return savedInitialSecurityProperties;
     }
 
+    public static String getBuiltInProviderName(String provName) {
+        return switch (provName) {
+            case "SUN", "sun.security.provider.Sun" -> "SUN";
+            case "SunRsaSign", "sun.security.rsa.SunRsaSign" -> "SunRsaSign";
+            case "SunJCE", "com.sun.crypto.provider.SunJCE" -> "SunJCE";
+            case "SunJSSE", "sun.security.ssl.SunJSSE" -> "SunJSSE";
+            case "SunEC", "sun.security.ec.SunEC" -> "SunEC";
+            case "Apple", "apple.security.AppleProvider" -> "Apple";
+            default -> null;
+        };
+    }
+
+    public static String getBuiltInProviderClassName(String provName) {
+        return switch (provName) {
+            case "SUN", "sun.security.provider.Sun" -> "sun.security.provider.Sun";
+            case "SunRsaSign", "sun.security.rsa.SunRsaSign" -> "sun.security.rsa.SunRsaSign";
+            case "SunJCE", "com.sun.crypto.provider.SunJCE" -> "com.sun.crypto.provider.SunJCE";
+            case "SunJSSE", "sun.security.ssl.SunJSSE" -> "sun.security.ssl.SunJSSE";
+            case "SunEC", "sun.security.ec.SunEC" -> "sun.security.ec.SunEC";
+            case "Apple", "apple.security.AppleProvider" -> "apple.security.AppleProvider";
+            default -> null;
+        };
+    }
+
+    public boolean isMissingBuiltInProvider(String provName) {
+        String providerName = getBuiltInProviderName(provName);
+        String providerFQName = getBuiltInProviderClassName(provName);
+        return providerName != null && !isSecurityProviderRequested(providerName, providerFQName);
+    }
+
+    public static SecurityException missingBuiltInProvider(String provName) {
+        String providerName = getBuiltInProviderName(provName);
+        String providerFQName = getBuiltInProviderClassName(provName);
+        if (providerName == null || providerFQName == null) {
+            throw VMError.shouldNotReachHere("Unsupported built-in provider: " + provName);
+        }
+        return new SecurityException(
+                        "The security provider '" + providerName + "' (" + providerFQName + ") was requested at run time, " +
+                                        "but it was not registered for inclusion in the native image. " +
+                                        "Add the option -H:AdditionalSecurityProviders=" + providerFQName + " to the native-image build and rebuild the image.");
+    }
+
     public Provider loadBuiltInProvider(String provName, Debug debug) {
         return switch (provName) {
             case "SUN", "sun.security.provider.Sun" ->
@@ -151,9 +199,9 @@ public final class SecurityProvidersSupport {
                 isSecurityProviderRequested("SunRsaSign", "sun.security.rsa.SunRsaSign") ? new sun.security.rsa.SunRsaSign() : null;
             case "SunJCE", "com.sun.crypto.provider.SunJCE" ->
                 isSecurityProviderRequested("SunJCE", "com.sun.crypto.provider.SunJCE") ? new com.sun.crypto.provider.SunJCE() : null;
-            case "SunJSSE" ->
+            case "SunJSSE", "sun.security.ssl.SunJSSE" ->
                 isSecurityProviderRequested("SunJSSE", "sun.security.ssl.SunJSSE") ? new sun.security.ssl.SunJSSE() : null;
-            case "SunEC" ->
+            case "SunEC", "sun.security.ec.SunEC" ->
                 isSecurityProviderRequested("SunEC", "sun.security.ec.SunEC") ? allocateSunECProvider() : null;
             case "Apple", "apple.security.AppleProvider" -> {
                 try {

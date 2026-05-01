@@ -304,39 +304,60 @@ public final class ForeignUtil extends JNIHandleSet {
     }
 
     private static int javaLangInvokeMethodHandleInfoREFInvokeStatic = -1;
+    private static int javaLangInvokeMethodHandleInfoREFInvokeVirtual = -1;
+    private static int javaLangInvokeMethodHandleInfoREFInvokeSpecial = -1;
 
-    private static int getJavaLangInvokeMethodHandleInfoREFInvokeStatic(JNIEnvironment env, NativeImageAgentJNIHandleSet handles) {
-        if (javaLangInvokeMethodHandleInfoREFInvokeStatic == -1) {
+    private static boolean isAllowedRefKind(JNIEnvironment env, NativeImageAgentJNIHandleSet handles, int refKind) {
+        if (javaLangInvokeMethodHandleInfoREFInvokeStatic == -1 ||
+                        javaLangInvokeMethodHandleInfoREFInvokeVirtual == -1 ||
+                        javaLangInvokeMethodHandleInfoREFInvokeSpecial == -1) {
             JNIObjectHandle javaLangInvokeMethodHandleInfo = handles.findClass(env, "java/lang/invoke/MethodHandleInfo");
-            JNIFieldId fieldId = handles.getFieldId(env, javaLangInvokeMethodHandleInfo, "REF_invokeStatic", "I", true);
-            javaLangInvokeMethodHandleInfoREFInvokeStatic = Support.jniFunctions().getGetStaticIntField().invoke(env, javaLangInvokeMethodHandleInfo, fieldId);
+
+            JNIFieldId fieldIdStatic = handles.getFieldId(env, javaLangInvokeMethodHandleInfo, "REF_invokeStatic", "I", true);
+            javaLangInvokeMethodHandleInfoREFInvokeStatic = Support.jniFunctions().getGetStaticIntField().invoke(env, javaLangInvokeMethodHandleInfo, fieldIdStatic);
+
+            JNIFieldId fieldIdVirtual = handles.getFieldId(env, javaLangInvokeMethodHandleInfo, "REF_invokeVirtual", "I", true);
+            javaLangInvokeMethodHandleInfoREFInvokeVirtual = Support.jniFunctions().getGetStaticIntField().invoke(env, javaLangInvokeMethodHandleInfo, fieldIdVirtual);
+
+            JNIFieldId fieldIdSpecial = handles.getFieldId(env, javaLangInvokeMethodHandleInfo, "REF_invokeSpecial", "I", true);
+            javaLangInvokeMethodHandleInfoREFInvokeSpecial = Support.jniFunctions().getGetStaticIntField().invoke(env, javaLangInvokeMethodHandleInfo, fieldIdSpecial);
         }
-        return javaLangInvokeMethodHandleInfoREFInvokeStatic;
+        return refKind == javaLangInvokeMethodHandleInfoREFInvokeStatic ||
+                        refKind == javaLangInvokeMethodHandleInfoREFInvokeVirtual ||
+                        refKind == javaLangInvokeMethodHandleInfoREFInvokeSpecial;
     }
 
     /**
      * Extracts the qualified class name and method name from a crackable method handle and returns
      * a string in form of {@code className::methodName} (e.g.
-     * {@code "Lorg/my/MyClass$InnerClass::foo"}). If extraction fails, {@link Tracer#UNKNOWN_VALUE}
-     * is returned.
-     * 
+     * {@code "Lorg/my/MyClass$InnerClass::foo"}). Additionally, if this is a bound method handle
+     * binding an instance receiver to a direct method handle, it tries to unwrap it because it is a
+     * target for direct upcalls (which are significantly more efficient than regular upcalls).
+     * Other bound handles are not suitable for direct upcalls and are not unwrapped here. If
+     * extraction fails, {@link Tracer#UNKNOWN_VALUE} is returned.
+     *
      * Unfortunately, we cannot just call 'toString()' on the method handle descriptor because the
      * output will only contain the simple class name. Therefore, we need to do:
      * 
      * <pre>{@code
+     * if (target instanceof BoundMethodHandle bmh && bmh.fieldCount() == 2 && bmh.arg(0) instanceof MethodHandle mh && mh is virtual or special) {
+     *     target = mh;
+     * }
      * Optional<MethodHandleDesc> methodHandleDescOptional = target.describeConstable();
      * if (methodHandleDescOptional.isEmpty())
      *     return Tracer.UNKNOWN_VALUE;
      * MethodHandleDesc methodHandleDesc = methodHandleDescOptional.get();
      * if (!(methodHandleDesc instanceof DirectMethodHandleDesc directMethodHandleDesc))
      *     return Tracer.UNKNOWN_VALUE;
-     * if (directMethodHandleDesc.refKind() != MethodHandleInfo.REF_invokeStatic)
+     * if (directMethodHandleDesc.refKind() is not allowed)
      *     return Tracer.UNKNOWN_VALUE;
      * return directMethodHandleDesc.owner().descriptorString() + "::" + methodHandleDesc.methodName();
      * }
      * </pre>
      */
-    public static String getTargetString(JNIEnvironment env, NativeImageAgentJNIHandleSet handles, JNIObjectHandle target) {
+    public static String getDirectUpcallTargetString(JNIEnvironment env, NativeImageAgentJNIHandleSet handles, JNIObjectHandle methodHandle) {
+        JNIObjectHandle target = tryUnwrapBoundMethodHandle(env, handles, methodHandle);
+
         // Optional<MethodHandleDesc> describeConstable()
         JNIObjectHandle methodHandleDescOptional = Support.callObjectMethod(env, target, handles.getJavaLangInvokeMethodHandleDescribeConstable(env));
         if (clearException(env)) {
@@ -351,13 +372,13 @@ public final class ForeignUtil extends JNIHandleSet {
         if (clearException(env)) {
             return Tracer.UNKNOWN_VALUE;
         }
-        // methodHandleDesc instance DirectMethodHandleDesc
+        // methodHandleDesc instanceof DirectMethodHandleDesc
         if (!jniFunctions().getIsInstanceOf().invoke(env, methodHandleDesc, handles.getJavaLangConstantDirectMethodHandleDesc(env))) {
             return Tracer.UNKNOWN_VALUE;
         }
-        // methodHandleDesc.refKind() != MethodHandleInfo.REF_invokeStatic
+        // methodHandleDesc.refKind() is not one of the supported direct-upcall kinds
         int refKind = Support.callIntMethod(env, methodHandleDesc, handles.getJavaLangConstantDirectMethodHandleDescRefKind(env));
-        if (clearException(env) || refKind != getJavaLangInvokeMethodHandleInfoREFInvokeStatic(env, handles)) {
+        if (clearException(env) || !isAllowedRefKind(env, handles, refKind)) {
             return Tracer.UNKNOWN_VALUE;
         }
         // methodHandleDesc.owner() -> ClassDesc
@@ -376,6 +397,44 @@ public final class ForeignUtil extends JNIHandleSet {
             return Tracer.UNKNOWN_VALUE;
         }
         return Support.fromJniString(env, descriptorString) + "::" + Support.fromJniString(env, methodName);
+    }
+
+    private static JNIObjectHandle tryUnwrapBoundMethodHandle(JNIEnvironment env, NativeImageAgentJNIHandleSet handles, JNIObjectHandle methodHandle) {
+        // methodHandle instanceof BoundMethodHandle
+        if (!jniFunctions().getIsInstanceOf().invoke(env, methodHandle, handles.getJavaLangInvokeBoundMethodHandle(env))) {
+            return methodHandle;
+        }
+        // ((BoundMethodHandle) methodHandle).fieldCount() != 2
+        int fieldCount = Support.callIntMethod(env, methodHandle, handles.getJavaLangInvokeBoundMethodHandleFieldCount(env));
+        if (clearException(env) || fieldCount != 2) {
+            return methodHandle;
+        }
+        // Object bmhArg0 = ((BoundMethodHandle) methodHandle).arg(0)
+        JNIObjectHandle bmhArg0 = Support.callObjectMethodI(env, methodHandle, handles.getJavaLangInvokeBoundMethodHandleArg(env), 0);
+        // !(bmhArg0 instanceof MethodHandle)
+        if (!jniFunctions().getIsInstanceOf().invoke(env, bmhArg0, handles.getJavaLangInvokeMethodHandle(env))) {
+            return methodHandle;
+        }
+
+        // bmhArg0.describeConstable()
+        JNIObjectHandle methodHandleDescOptional = Support.callObjectMethod(env, bmhArg0, handles.getJavaLangInvokeMethodHandleDescribeConstable(env));
+        if (clearException(env)) {
+            return methodHandle;
+        }
+        // methodHandleDescOptional.get()
+        JNIObjectHandle methodHandleDesc = Support.callObjectMethod(env, methodHandleDescOptional, handles.getJavaUtilOptionalGet(env));
+        if (clearException(env)) {
+            return methodHandle;
+        }
+        // methodHandleDesc instanceof DirectMethodHandleDesc
+        if (!jniFunctions().getIsInstanceOf().invoke(env, methodHandleDesc, handles.getJavaLangConstantDirectMethodHandleDesc(env))) {
+            return methodHandle;
+        }
+        int refKind = Support.callIntMethod(env, methodHandleDesc, handles.getJavaLangConstantDirectMethodHandleDescRefKind(env));
+        if (clearException(env) || !isAllowedRefKind(env, handles, refKind) || refKind == javaLangInvokeMethodHandleInfoREFInvokeStatic) {
+            return methodHandle;
+        }
+        return bmhArg0;
     }
 
     @SuppressWarnings("serial")

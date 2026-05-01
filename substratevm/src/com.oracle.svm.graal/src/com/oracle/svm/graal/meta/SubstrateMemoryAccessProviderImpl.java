@@ -28,7 +28,6 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.SignedWord;
 
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.graal.meta.SubstrateMemoryAccessProvider;
 import com.oracle.svm.core.heap.ReferenceAccess;
@@ -94,7 +93,7 @@ public final class SubstrateMemoryAccessProviderImpl implements SubstrateMemoryA
         Object baseObject = SubstrateObjectConstant.asObject(baseConstant);
         if (baseObject == null) {
             throw new IllegalArgumentException("Base is null.");
-        } else if (displacement < 0 || Word.unsigned(displacement + ConfigurationValues.getObjectLayout().getReferenceSize()).aboveThan(LayoutEncoding.getMomentarySizeFromObject(baseObject))) {
+        } else if (displacement < 0 || Word.unsigned(displacement + ObjectLayout.singleton().getReferenceSize()).aboveThan(LayoutEncoding.getMomentarySizeFromObject(baseObject))) {
             throw new IllegalArgumentException("Reading outside object bounds.");
         }
 
@@ -147,7 +146,7 @@ public final class SubstrateMemoryAccessProviderImpl implements SubstrateMemoryA
      * the object, because a read before/after the object could be in unmapped memory and segfault.
      */
     private static JavaConstant readPrimitiveChecked(JavaKind kind, Constant baseConstant, long displacement, int accessBytes) {
-        ObjectLayout ol = ConfigurationValues.getObjectLayout();
+        ObjectLayout ol = ObjectLayout.singleton();
 
         if (!(baseConstant instanceof SubstrateObjectConstant)) {
             throw new IllegalArgumentException("Base " + baseConstant.getClass() + " is not supported.");

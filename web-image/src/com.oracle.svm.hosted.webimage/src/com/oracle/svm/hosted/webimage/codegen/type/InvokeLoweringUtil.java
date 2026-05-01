@@ -70,7 +70,7 @@ public class InvokeLoweringUtil {
         } else {
             switch (calltype) {
                 case DYNAMIC_VTAB:
-                    if (WebImageOptions.UseVtable.getValue(HostedOptionValues.singleton())) {
+                    if (WebImageOptions.UseVtable.getValue(HostedOptionValues.singleton().get())) {
                         jsLTools.genFunctionCall(Emitter.of(n.getReceiver()), Emitter.of("constructor." + TypeVtableLowerer.VTAB_PROP + "[" + targetMethod.getVTableIndex() + "]"),
                                         Emitter.of(n.callTarget().arguments()));
                     } else {

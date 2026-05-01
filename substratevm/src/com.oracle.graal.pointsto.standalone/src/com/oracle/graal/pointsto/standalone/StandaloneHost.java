@@ -36,6 +36,8 @@ import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.graal.pointsto.standalone.plugins.StandaloneGraphBuilderPhase;
 import com.oracle.graal.pointsto.util.AnalysisError;
+import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.graal.compiler.core.common.spi.ForeignCallDescriptor;
 import jdk.graal.compiler.core.common.spi.ForeignCallsProvider;
@@ -44,6 +46,7 @@ import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import jdk.graal.compiler.nodes.graphbuilderconf.IntrinsicContext;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.OptimisticOptimizations;
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 public class StandaloneHost extends HostVM {
@@ -103,8 +106,43 @@ public class StandaloneHost extends HostVM {
         return isClosedTypeWorld;
     }
 
+    /**
+     * Resolves the guest-side class loader name so standalone analysis reporting reflects the
+     * analyzed application rather than the host VM loader graph.
+     */
     @Override
     public String loaderName(AnalysisType type) {
-        return loaderName(type.getJavaClass().getClassLoader());
+        GuestAccess guestAccess = GuestAccess.get();
+        JavaConstant classLoaderConstant = getClassLoader(guestAccess, type);
+        if (classLoaderConstant.isNull()) {
+            return "null";
+        }
+        String classLoaderName = getClassLoaderName(guestAccess, classLoaderConstant);
+        if (classLoaderName != null) {
+            return classLoaderName;
+        }
+        ResolvedJavaType classLoaderType = guestAccess.getProviders().getMetaAccess().lookupJavaType(classLoaderConstant);
+        return classLoaderType.toJavaName();
+    }
+
+    /**
+     * Reads the guest-side {@link ClassLoader} for the original application class represented by
+     * {@code type}.
+     */
+    private static JavaConstant getClassLoader(GuestAccess guestAccess, AnalysisType type) {
+        var original = OriginalClassProvider.getOriginalType(type);
+        JavaConstant asConstant = guestAccess.getProviders().getConstantReflection().asJavaClass(original);
+        return guestAccess.invoke(guestAccess.elements.java_lang_Class_getClassLoader, asConstant);
+    }
+
+    /**
+     * Returns the guest-side class loader name when the loader exposes one.
+     */
+    private static String getClassLoaderName(GuestAccess guestAccess, JavaConstant classLoaderConstant) {
+        JavaConstant classLoaderName = guestAccess.invoke(guestAccess.elements.java_lang_ClassLoader_getName, classLoaderConstant);
+        if (classLoaderName.isNull()) {
+            return null;
+        }
+        return guestAccess.getSnippetReflection().asObject(String.class, classLoaderName);
     }
 }

@@ -65,8 +65,8 @@ Here is an example Maven dependency setup that you can put into your project:
 > The `pom` type is a requirement for language or tool dependencies.
 
 Language and tool dependencies use the [GraalVM Free Terms and Conditions (GFTC)](https://www.oracle.com/downloads/licenses/graal-free-license.html) license.
-To use community-licensed versions instead, add the `-community` suffix to each artifact (for example, `js-community`).
-To access [polyglot isolate](#polyglot-isolates) artifacts, use the `-isolate` suffix instead (for example, `js-isolate`).
+To use community-licensed versions, add the `-community` suffix to each artifact (for example, `js-community`).
+For [polyglot isolate](#polyglot-isolates) artifacts, use `-isolate` on Oracle GraalVM and `-isolate-community` on GraalVM Community Edition 25.1 or later (for example, `js-isolate` or `js-isolate-community`).
 
 The artifacts `languages` and `tools` include all available languages and tools as dependencies.
 This artifact might grow or shrink between major releases.
@@ -406,29 +406,28 @@ Polyglot Truffle runtimes can be used on several host virtual machines with vary
 Runtime optimization of guest application code is crucial for the efficient execution of embedded guest applications.
 This table shows the level of optimizations the Java runtimes currently provide:
 
-| Java Runtime                                  | Runtime Optimization Level                          |
-|-----------------------------------------------|-----------------------------------------------------|
-| Oracle GraalVM                                | Best (includes additional compiler optimizations)   |
-| GraalVM Community Edition                     | Optimized                                           |
-| Oracle JDK                                    | Optimized via VM option                             |
-| OpenJDK                                       | Optimized via VM option and `--upgrade-module-path` |
-| JDK without JVMCI capability                  | No runtime optimizations (interpreter-only)         |
+| Java Runtime                                  | Runtime Optimization Level                            |
+|-----------------------------------------------|-------------------------------------------------------|
+| Oracle GraalVM                                | Best (includes additional compiler optimizations)     |
+| GraalVM Community Edition                     | Optimized                                             |
+| Oracle JDK                                    | Optimized via VM option (up to 25.0 LTS)              |
+| OpenJDK                                       | Optimized via VM option and `--upgrade-module-path` (up to 25.0 LTS) |
+| JDK without JVMCI capability                  | No runtime optimizations (interpreter-only)           |
 
 ### Explanations
 
 * **Optimized:** Executed guest application code can be compiled and executed as highly efficient machine code at run time.
 * **Optimized with additional compiler passes:** Oracle GraalVM implements additional optimizations performed during runtime compilation. For example, it uses a more advanced inlining heuristic. This typically leads to better runtime performance and memory consumption.
-* **Optimized via VM option:** Optimization is enabled by specifying `-XX:+EnableJVMCI` to the `java` launcher.
-* **Optimized via VM option and `--upgrade-module-path`:** Optimization is enabled by specifying `-XX:+EnableJVMCI` to the `java` launcher. Additionally, the Graal compiler must be downloaded as a JAR file and specified to the `java` launcher with `--upgrade-module-path`. In this mode, the compiler runs as a Java application and may negatively affect the execution performance of the host application.
+* **Optimized via VM option:** Optimization is enabled by specifying `-XX:+EnableJVMCI` to the `java` launcher. This configuration is supported up to Polyglot 25.0 LTS. Starting with Polyglot 25.1, plain Oracle JDK uses the fallback runtime instead.
+* **Optimized via VM option and `--upgrade-module-path`:** Optimization is enabled by specifying `-XX:+EnableJVMCI` to the `java` launcher. Additionally, the Graal compiler must be downloaded as a JAR file and specified to the `java` launcher with `--upgrade-module-path`. In this mode, the compiler runs as a Java application and may negatively affect the execution performance of the host application. This configuration is supported up to Polyglot 25.0 LTS. Starting with Polyglot 25.1, plain OpenJDK uses the fallback runtime instead.
 * **No runtime optimizations:** With no runtime optimizations or if JVMCI is not enabled, the guest application code is executed in interpreter-only mode.
 * **JVMCI:** Refers to the [Java-Level JVM Compiler Interface](https://openjdk.org/jeps/243) supported by most Java runtimes.
 
-A project has been created to enable runtime optimization by default for Oracle JDK and OpenJDK.
-See [Project Galahad](https://openjdk.org/projects/galahad/) for further details.
-
 ### Enable Optimization on OpenJDK and Oracle JDK
 
-When running on a JDK runtime optimization enabled by default, such as OpenJDK, you might see a warning like this:
+The configurations described below are supported up to Polyglot 25.0 LTS. Starting with Polyglot 25.1, plain OpenJDK and Oracle JDK no longer support the optimizing Truffle runtime and use the fallback runtime instead. If you need the optimizing runtime on these JDKs, continue using the 25.0 LTS release.
+
+When running on OpenJDK or Oracle JDK with Polyglot 25.1 or later, you might see a warning like this:
 
 ```
 [engine] WARNING: The polyglot engine uses a fallback runtime that does not support runtime compilation to machine code.
@@ -437,13 +436,13 @@ Execution without runtime compilation will negatively impact the guest applicati
 
 This indicates that the guest application is executed with no runtime optimizations enabled.
 The warning can be suppressed by either suppressing using the `--engine.WarnInterpreterOnly=false` option or the `-Dpolyglot.engine.WarnInterpreterOnly=false` system property.
-In addition, the `compiler.jar` file and its dependencies must be downloaded from [Maven Central](https://central.sonatype.com/artifact/org.graalvm.compiler/compiler/) and referred to use the option `--upgrade-module-path`.
+If you are using Polyglot 25.0 LTS or earlier, the `compiler.jar` file and its dependencies must be downloaded from [Maven Central](https://central.sonatype.com/artifact/org.graalvm.compiler/compiler/) and referred to use the option `--upgrade-module-path`.
 Note that `compiler.jar` must *not* be put on the module or class path.
 Refer to the [polyglot embedding demonstration](https://github.com/graalvm/polyglot-embedding-demo) for an example configuration using Maven or Gradle.
 
 ### Switching to the Fallback Engine
 
-If the need arises, for example, running only trivial scripts or in the resource-constrained systems, you may want to switch to the fallback engine without runtime optimizations.
+If the need arises, for example, when running only trivial scripts or on resource-constrained systems, you may want to switch to the fallback engine without runtime optimizations.
 Since Polyglot version 23.1, the fallback engine can be activated by removing the `truffle-runtime` and `truffle-enterprise` modules from the class or module path.
 
 This can be achieved with Maven like this:
@@ -668,12 +667,14 @@ To summarize, the code cache can be controlled by keeping and maintaining strong
 
 ## Polyglot Isolates
 
-On Oracle GraalVM, a polyglot engine can be configured to run in a dedicated Native Image isolate.
+On GraalVM, a polyglot engine can be configured to run in a dedicated Native Image isolate.
+This capability is available on Oracle GraalVM since version 23.1 and, starting with GraalVM 25.1, on GraalVM Community Edition.
 A polyglot engine in this mode executes within a VM-level fault domain with a dedicated garbage collector and JIT compiler.
 Polyglot isolates are useful for [sandboxing](../../security/polyglot-sandbox.md).
 Running languages in an isolate works with HotSpot and Native Image host virtual machines.
 
-Languages used as polyglot isolates can be downloaded from Maven Central using the `-isolate` suffix.
+Languages used as polyglot isolates can be downloaded from Maven Central.
+Use `-isolate` artifacts with Oracle GraalVM and `-isolate-community` artifacts with GraalVM Community Edition.
 For example, a dependency on isolated JavaScript can be configured by adding a Maven dependency like this:
 
 ```xml
@@ -690,6 +691,8 @@ For example, a dependency on isolated JavaScript can be configured by adding a M
     <type>pom</type>
 </dependency>
 ```
+
+For GraalVM Community Edition 25.1 or later, use `js-isolate-community` instead of `js-isolate`.
 
 Starting from the Polyglot API version 24.1.0, the polyglot engine supports polyglot isolates for individual platforms.
 To download a polyglot isolate for a specific platform, append the operating system and CPU architecture classifiers to the polyglot isolate Maven `artifactId`.
@@ -710,6 +713,22 @@ For example, to configure a dependency on isolated Python for Linux amd64, add t
 </dependency>
 ```
 
+For GraalVM Community Edition 25.1 or later, use the corresponding `-community` artifact:
+```xml
+<dependency>
+	<groupId>org.graalvm.polyglot</groupId>
+	<artifactId>polyglot</artifactId>
+	<version>${graalvm.polyglot.version}</version>
+	<type>jar</type>
+</dependency>
+<dependency>
+	<groupId>org.graalvm.polyglot</groupId>
+	<artifactId>python-isolate-linux-amd64-community</artifactId>
+	<version>${graalvm.polyglot.version}</version>
+	<type>pom</type>
+</dependency>
+```
+
 Supported platform classifiers are:
 * `linux-amd64`
 * `linux-aarch64`
@@ -718,8 +737,8 @@ Supported platform classifiers are:
 
 For a complete Maven POM file that adds the polyglot isolate Native Image dependency for the current platform, refer to the [Polyglot Embedding Demonstration](https://github.com/graalvm/polyglot-embedding-demo) on GitHub.
 
-To enable isolate usage with the Polyglot API, the `--engine.SpawnIsolate=true` option must be passed to `Engine` or `Context` when constructed.
-The option `engine.SpawnIsolate` may not be available if used on any JDK other than Oracle GraalVM.
+To enable isolate usage with the Polyglot API, pass the `--engine.SpawnIsolate=true` option when constructing an `Engine` or `Context`.
+The `engine.SpawnIsolate` option is available on Oracle GraalVM and on GraalVM Community Edition starting with version 25.1.
 
 ```java
 import org.graalvm.polyglot.*;
@@ -752,11 +771,11 @@ Context context = Context.newBuilder("js")
 
 Currently, the following languages are available as polyglot isolates:
 
-| Language                      | Available from |
-|-------------------------------|----------------|
-| JavaScript (`js-isolate`)     | 23.1           |
-| Python (`python-isolate`)     | 24.1           |
-| Wasm (`wasm-isolate`)         | 25.0           |
+| Language   | Oracle GraalVM artifact (available from) | GraalVM Community Edition artifact (available from) |
+|------------|------------------------------------------|------------------------------------------------------|
+| JavaScript | `js-isolate` (23.1)                      | `js-isolate-community` (25.1)                        |
+| Python     | `python-isolate` (24.1)                  | `python-isolate-community` (25.1)                    |
+| Wasm       | `wasm-isolate` (25.0)                    | `wasm-isolate-community` (25.1)                      |
 
 We plan to add support for more languages in future versions.
 

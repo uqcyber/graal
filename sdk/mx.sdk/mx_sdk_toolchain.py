@@ -39,7 +39,6 @@
 # SOFTWARE.
 #
 
-from __future__ import print_function
 import os
 import os.path
 import re
@@ -50,7 +49,7 @@ import mx_util
 class ToolchainTestProject(mx.Project):
     def __init__(self, suite, name, deps, workingSets, theLicense, **kwArgs):
         d = os.path.join(suite.dir, kwArgs['subDir'], name)
-        super(ToolchainTestProject, self).__init__(suite, name, srcDirs=[], deps=deps, workingSets=workingSets, d=d, theLicense=theLicense, **kwArgs)
+        super().__init__(suite, name, srcDirs=[], deps=deps, workingSets=workingSets, d=d, theLicense=theLicense, **kwArgs)
 
     def getBuildTask(self, args):
         return ToolchainTestBuildTask(self, args, 1)
@@ -88,12 +87,12 @@ class ToolchainTestBuildTask(mx.BuildTask):
     def buildForbidden(self):
         if not self.args.native:
             return True
-        return super(ToolchainTestBuildTask, self).buildForbidden()
+        return super().buildForbidden()
 
     def cleanForbidden(self):
         if not self.args.native:
             return True
-        return super(ToolchainTestBuildTask, self).cleanForbidden()
+        return super().cleanForbidden()
 
     def build(self):
         mx_util.ensure_dir_exists(self.subject.get_output_root())

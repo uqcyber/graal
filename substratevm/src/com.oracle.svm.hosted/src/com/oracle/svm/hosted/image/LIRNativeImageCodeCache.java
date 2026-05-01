@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,14 +37,14 @@ import org.graalvm.collections.Pair;
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.objectfile.ObjectFile;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.code.SharedCompilationResult;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.DeadlockWatchdog;
 import com.oracle.svm.hosted.code.HostedDirectCallTrampolineSupport;
 import com.oracle.svm.hosted.code.HostedImageHeapConstantPatch;
 import com.oracle.svm.hosted.code.HostedPatcher;
 import com.oracle.svm.hosted.meta.HostedMethod;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.code.CompilationResult.CodeAnnotation;
@@ -70,7 +70,7 @@ public class LIRNativeImageCodeCache extends NativeImageCodeCache {
     @SuppressWarnings("this-escape")
     public LIRNativeImageCodeCache(Map<HostedMethod, CompilationResult> compilations, NativeImageHeap imageHeap) {
         super(compilations, imageHeap);
-        target = ConfigurationValues.getTarget();
+        target = SubstrateTarget.singleton();
         trampolineMap = new HashMap<>();
         orderedTrampolineMap = new HashMap<>();
 
@@ -134,17 +134,20 @@ public class LIRNativeImageCodeCache extends NativeImageCodeCache {
         return true;
     }
 
-    @SuppressWarnings({"try", "resource"})
     @Override
     public void layoutMethods(DebugContext debug, BigBang bb) {
+        layoutMethods(debug, getOrderedCompilations());
+    }
 
+    @SuppressWarnings({"try", "resource"})
+    private void layoutMethods(DebugContext debug, List<Pair<HostedMethod, CompilationResult>> compilations) {
         try (Indent _ = debug.logAndIndent("layout methods")) {
             // Assign initial location to all methods.
             HostedDirectCallTrampolineSupport trampolineSupport = HostedDirectCallTrampolineSupport.singleton();
             Map<HostedMethod, Integer> curOffsetMap = trampolineSupport.mayNeedTrampolines() ? new HashMap<>() : null;
 
             int curPos = 0;
-            for (Pair<HostedMethod, CompilationResult> entry : getOrderedCompilations()) {
+            for (Pair<HostedMethod, CompilationResult> entry : compilations) {
                 HostedMethod method = entry.getLeft();
                 CompilationResult compilation = entry.getRight();
                 curPos = align(curPos, SharedCompilationResult.getCodeAlignment(compilation));
@@ -163,7 +166,7 @@ public class LIRNativeImageCodeCache extends NativeImageCodeCache {
                 addDirectCallTrampolines(curOffsetMap);
 
                 // record final code address offsets and trampoline metadata
-                for (Pair<HostedMethod, CompilationResult> pair : getOrderedCompilations()) {
+                for (Pair<HostedMethod, CompilationResult> pair : compilations) {
                     HostedMethod method = pair.getLeft();
                     int methodStartOffset = curOffsetMap.get(method);
                     method.setCodeAddressOffset(methodStartOffset);
@@ -189,7 +192,7 @@ public class LIRNativeImageCodeCache extends NativeImageCodeCache {
                 }
             }
 
-            Pair<HostedMethod, CompilationResult> lastCompilation = getLastCompilation();
+            Pair<HostedMethod, CompilationResult> lastCompilation = compilations.getLast();
             HostedMethod lastMethod = lastCompilation.getLeft();
 
             // the total code size is aligned up to SubstrateOptions.buildTimeCodeAlignment()
@@ -404,8 +407,7 @@ public class LIRNativeImageCodeCache extends NativeImageCodeCache {
         }
     }
 
-    private static void processDataReferences(RelocatableBuffer relocs, HostedMethod method, CompilationResult compilation, Map<Integer, HostedPatcher> patches) {
-        int compStart = method.getCodeAddressOffset();
+    protected void processDataReferences(RelocatableBuffer relocs, HostedMethod method, CompilationResult compilation, Map<Integer, HostedPatcher> patches) {
         for (DataPatch dataPatch : compilation.getDataPatches()) {
             assert dataPatch.note == null : "Unexpected note: " + dataPatch.note;
             Reference ref = dataPatch.reference;
@@ -414,10 +416,15 @@ public class LIRNativeImageCodeCache extends NativeImageCodeCache {
             /*
              * Constants are (1) allocated offsets in a separate space, which can be emitted as
              * read-only (.rodata) section, or (2) method pointers that are computed relative to the
-             * PC.
+             * PC, or (3) directly patched accesses to other sections via base address located in
+             * the image heap.
              */
-            patcher.relocate(ref, relocs, compStart);
+            processDataPatch(relocs, method, compilation, ref, patcher);
         }
+    }
+
+    protected void processDataPatch(RelocatableBuffer buffer, HostedMethod method, @SuppressWarnings("unused") CompilationResult compilation, Reference reference, HostedPatcher patcher) {
+        patcher.relocate(reference, buffer, method.getCodeAddressOffset());
     }
 
     private static void processImageHeapConstantsReferences(CompilationResult compilation, Map<Integer, HostedPatcher> patches) {

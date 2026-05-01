@@ -72,15 +72,16 @@ public class LayeredImageHeapMap<K, V> implements EconomicMap<K, V> {
         List<LayeredImageHeapMapStore> singletons = Arrays.stream(LayeredImageHeapMapStore.layeredSingletons()).toList();
         boolean first = true;
         for (var singleton : fromBaseToApp ? singletons : singletons.reversed()) {
-            V oldValue;
+            EconomicMap<K, V> singletonMap = getRuntimeMap(singleton);
             if (first) {
-                oldValue = getRuntimeMap(singleton).put(key, value);
+                boolean containsKey = singletonMap.containsKey(key);
+                V oldValue = singletonMap.put(key, value);
                 first = false;
-            } else {
-                oldValue = getRuntimeMap(singleton).get(key);
-            }
-            if (oldValue != null) {
-                return oldValue;
+                if (containsKey) {
+                    return oldValue;
+                }
+            } else if (singletonMap.containsKey(key)) {
+                return singletonMap.get(key);
             }
         }
         return null;
@@ -101,17 +102,25 @@ public class LayeredImageHeapMap<K, V> implements EconomicMap<K, V> {
          */
         List<LayeredImageHeapMapStore> singletons = Arrays.stream(LayeredImageHeapMapStore.layeredSingletons()).toList();
         V previousValue = null;
+        boolean returnOldValue = true;
         for (var singleton : fromBaseToApp ? singletons : singletons.reversed()) {
-            V oldValue = getRuntimeMap(singleton).removeKey(key);
-            if (oldValue != null && previousValue == null) {
-                previousValue = oldValue;
+            EconomicMap<K, V> singletonMap = getRuntimeMap(singleton);
+            if (returnOldValue && singletonMap.containsKey(key)) {
+                previousValue = singletonMap.get(key);
+                returnOldValue = false;
             }
+            singletonMap.removeKey(key);
         }
         return previousValue;
     }
 
     @Override
     public V get(K key) {
+        return get(key, null);
+    }
+
+    @Override
+    public V get(K key, V defaultValue) {
         List<LayeredImageHeapMapStore> singletons = Arrays.stream(LayeredImageHeapMapStore.layeredSingletons()).toList();
         for (var singleton : fromBaseToApp ? singletons : singletons.reversed()) {
             EconomicMap<K, V> singletonMap = getRuntimeMap(singleton);
@@ -119,7 +128,7 @@ public class LayeredImageHeapMap<K, V> implements EconomicMap<K, V> {
                 return singletonMap.get(key);
             }
         }
-        return null;
+        return defaultValue;
     }
 
     @Override

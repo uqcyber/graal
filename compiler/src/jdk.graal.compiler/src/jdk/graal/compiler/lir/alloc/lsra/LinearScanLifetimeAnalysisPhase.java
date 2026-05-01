@@ -253,12 +253,18 @@ public class LinearScanLifetimeAnalysisPhase extends LinearScanAllocationPhase {
 
                         try (Indent indent2 = debug.logAndIndent("handle op %d: %s", op.id(), op)) {
                             op.visitEachInput(useConsumer);
+                            // Local lifetime analysis models @UseKill as an input that is live on
+                            // instruction entry.
+                            op.visitEachUseKill(useConsumer);
                             op.visitEachAlive(useConsumer);
                             /*
                              * Add uses of live locals from interpreter's point of view for proper
                              * debug information generation.
                              */
                             op.visitEachState(stateConsumer);
+                            // A separate kill visit stops the @UseKill live range at this op
+                            // boundary.
+                            op.visitEachUseKill(defConsumer);
                             op.visitEachTemp(defConsumer);
                             op.visitEachOutput(defConsumer);
                         }
@@ -895,9 +901,15 @@ public class LinearScanLifetimeAnalysisPhase extends LinearScanAllocationPhase {
                             }
 
                             op.visitEachOutput(outputConsumer);
+                            // Treat @UseKill like a temp here so linear scan reserves a distinct
+                            // location for the kill/conflict part of the operand.
+                            op.visitEachUseKill(tempConsumer);
                             op.visitEachTemp(tempConsumer);
                             op.visitEachAlive(aliveConsumer);
                             op.visitEachInput(inputConsumer);
+                            // Treat @UseKill like an input as well because the value must be
+                            // available at instruction entry before the op kills it.
+                            op.visitEachUseKill(inputConsumer);
 
                             /*
                              * Add uses of live locals from interpreter's point of view for proper

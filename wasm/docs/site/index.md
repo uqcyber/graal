@@ -218,19 +218,19 @@ try (Context context = Context.create()) {
         <div class="guides__row">
           <div class="guides__column">
             <div class="guides__card">
-              <img src='{{ "/assets/img/downloads-new/miscellaneous-book.svg" | relative_url }}' alt="book icon">
+              <img src='{{ "/assets/img/downloads/miscellaneous-book.svg" | relative_url }}' alt="book icon">
               <a href="https://github.com/graalvm/graal-languages-demos/tree/main/graalwasm/graalwasm-embed-c-code-guide/" target="_blank">
                 <div class="guides__topics">Embed C in Java Using GraalWasm</div>
               </a>
             </div>
             <div class="guides__card">
-              <img src='{{ "/assets/img/downloads-new/miscellaneous-book.svg" | relative_url }}' alt="book icon">
+              <img src='{{ "/assets/img/downloads/miscellaneous-book.svg" | relative_url }}' alt="book icon">
               <a href="https://github.com/graalvm/graal-languages-demos/tree/main/graalwasm/graalwasm-embed-go-code-guide/" target="_blank">
                 <div class="guides__topics">Embed Go in Java Using GraalWasm</div>
               </a>
             </div>
             <div class="guides__card">
-              <img src='{{ "/assets/img/downloads-new/miscellaneous-book.svg" | relative_url }}' alt="book icon">
+              <img src='{{ "/assets/img/downloads/miscellaneous-book.svg" | relative_url }}' alt="book icon">
               <a href="https://github.com/graalvm/graal-languages-demos/blob/main/graalwasm/graalwasm-micronaut-photon/" target="_blank">
                 <div class="guides__topics">Embed Photon Image Processing Library with GraalWasm in Micronaut</div>
               </a>
@@ -238,13 +238,13 @@ try (Context context = Context.create()) {
           </div>
           <div class="guides__column">
             <div class="guides__card">
-              <img src='{{ "/assets/img/downloads-new/miscellaneous-book.svg" | relative_url }}' alt="book icon">
+              <img src='{{ "/assets/img/downloads/miscellaneous-book.svg" | relative_url }}' alt="book icon">
               <a href="https://github.com/graalvm/graal-languages-demos/tree/main/graalwasm/graalwasm-embed-rust-code-guide/" target="_blank">
                 <div class="guides__topics">Embed Rust in Java Using GraalWasm</div>
               </a>
             </div>
             <div class="guides__card">
-              <img src='{{ "/assets/img/downloads-new/miscellaneous-book.svg" | relative_url }}' alt="book icon">
+              <img src='{{ "/assets/img/downloads/miscellaneous-book.svg" | relative_url }}' alt="book icon">
               <a href="https://github.com/graalvm/graal-languages-demos/blob/main/graalwasm/graalwasm-spring-boot-photon/" target="_blank">
                 <div class="guides__topics">Embed Photon Image Processing Library with GraalWasm in Spring Boot</div>
               </a>
@@ -266,13 +266,13 @@ try (Context context = Context.create()) {
         <div class="guides__row">
           <div class="guides__column">
             <div class="guides__card">
-              <img src='{{ "/assets/img/downloads-new/miscellaneous-book.svg" | relative_url }}' alt="book icon">
+              <img src='{{ "/assets/img/downloads/miscellaneous-book.svg" | relative_url }}' alt="book icon">
               <a href="https://www.youtube.com/watch?v=uefc2t9AmQI" target="_blank">
                 <div class="guides__topics">Video: GraalVM meets WebAssembly at Devoxx 2025</div>
               </a>
             </div>
             <div class="guides__card">
-              <img src='{{ "/assets/img/downloads-new/miscellaneous-book.svg" | relative_url }}' alt="book icon">
+              <img src='{{ "/assets/img/downloads/miscellaneous-book.svg" | relative_url }}' alt="book icon">
               <a href="https://medium.com/graalvm/announcing-graalwasm-a-webassembly-engine-in-graalvm-25cd0400a7f2" target="_blank">
                 <div class="guides__topics">Blog: Announcing GraalWasm — a WebAssembly engine in GraalVM</div>
               </a>
@@ -280,7 +280,7 @@ try (Context context = Context.create()) {
           </div>
           <div class="guides__column">
             <div class="guides__card">
-              <img src='{{ "/assets/img/downloads-new/miscellaneous-book.svg" | relative_url }}' alt="book icon">
+              <img src='{{ "/assets/img/downloads/miscellaneous-book.svg" | relative_url }}' alt="book icon">
               <a href="https://www.youtube.com/watch?v=Z2SWSIThHXY" target="_blank">
                 <div class="guides__topics">Video: GraalWasm at Wasm I/O 2025</div>
               </a>

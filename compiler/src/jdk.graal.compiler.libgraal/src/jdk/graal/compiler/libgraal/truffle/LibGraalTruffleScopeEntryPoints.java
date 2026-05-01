@@ -40,9 +40,6 @@ final class LibGraalTruffleScopeEntryPoints {
     @CEntryPoint(name = "Java_com_oracle_truffle_runtime_hotspot_libgraal_LibGraalScope_getIsolateThreadIn", builtin = CEntryPoint.Builtin.GET_CURRENT_THREAD, include = LibGraalFeature.IsEnabled.class)
     private static native IsolateThread getIsolateThreadIn(PointerBase env, PointerBase hsClazz, @CEntryPoint.IsolateContext Isolate isolate);
 
-    @CEntryPoint(name = "Java_com_oracle_truffle_runtime_hotspot_libgraal_LibGraalScope_attachThreadTo", builtin = CEntryPoint.Builtin.ATTACH_THREAD, include = LibGraalFeature.IsEnabled.class)
-    static native long attachThreadTo(PointerBase env, PointerBase hsClazz, @CEntryPoint.IsolateContext long isolate);
-
     @CEntryPoint(name = "Java_com_oracle_truffle_runtime_hotspot_libgraal_LibGraalScope_detachThreadFrom", builtin = CEntryPoint.Builtin.DETACH_THREAD, include = LibGraalFeature.IsEnabled.class)
     static native void detachThreadFrom(PointerBase env, PointerBase hsClazz, @CEntryPoint.IsolateThreadContext long isolateThreadAddress);
 

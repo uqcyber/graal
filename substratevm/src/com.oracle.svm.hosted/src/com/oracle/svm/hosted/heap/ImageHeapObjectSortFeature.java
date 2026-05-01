@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.hosted.heap;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.image.DefaultImageHeapObjectSorter;
 import com.oracle.svm.core.image.ImageHeapObjectSorter;

@@ -28,7 +28,6 @@ import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.R
 
 import java.util.Arrays;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
@@ -59,12 +58,11 @@ import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.RuntimeCodeInfoHistory;
 import com.oracle.svm.core.code.RuntimeCodeInfoMemory;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.container.Container;
 import com.oracle.svm.core.container.OperatingSystem;
 import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.deopt.Deoptimizer;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
@@ -93,15 +91,17 @@ import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.threadlocal.FastThreadLocalBytes;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.VMThreadLocalInfos;
+import com.oracle.svm.core.util.AbstractImageHeapList;
+import com.oracle.svm.core.util.CounterSupport;
+import com.oracle.svm.core.util.ImageHeapList;
+import com.oracle.svm.core.util.TimeUtils;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.InitialLayerOnly;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-import com.oracle.svm.core.util.AbstractImageHeapList;
-import com.oracle.svm.core.util.CounterSupport;
-import com.oracle.svm.core.util.ImageHeapList;
-import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -498,7 +498,7 @@ public class SubstrateDiagnostics {
             stackBase = originalSp.add(32);
         }
 
-        int wordSize = ConfigurationValues.getWordSize();
+        int wordSize = SubstrateTarget.getWordSize();
         Pointer pos = originalSp;
         while (pos.belowThan(stackBase)) {
             CodePointer possibleIp = pos.readWord(0);
@@ -628,7 +628,7 @@ public class SubstrateDiagnostics {
                 hexDump(log, ip, bytesToPrint, bytesToPrint);
             } else if (invocationCount == 4) {
                 /* Just print one word starting at the ip. */
-                hexDump(log, ip, 0, ConfigurationValues.getWordSize());
+                hexDump(log, ip, 0, SubstrateTarget.getWordSize());
             }
             log.indent(false).newline();
         }
@@ -657,7 +657,7 @@ public class SubstrateDiagnostics {
             Pointer sp = context.getStackPointer();
             UnsignedWord stackEnd = VMThreads.StackEnd.get(); // low
             UnsignedWord stackBase = VMThreads.StackBase.get(); // high
-            int wordSize = ConfigurationValues.getWordSize();
+            int wordSize = SubstrateTarget.getWordSize();
 
             log.string("Top of stack (sp=").zhex(sp).string("):").indent(true);
             int bytesToPrintBelowSp = 32;
@@ -876,7 +876,7 @@ public class SubstrateDiagnostics {
                 log.string("Supports isolated compilation: ").bool(SubstrateOptions.supportCompileInIsolates()).newline();
             }
             log.string("Container support: ").bool(Container.isSupported()).newline();
-            log.string("Object reference size: ").signed(ConfigurationValues.getObjectLayout().getReferenceSize()).newline();
+            log.string("Object reference size: ").signed(ObjectLayout.singleton().getReferenceSize()).newline();
             log.string("CPU features used for AOT compiled code: ").string(getBuildTimeCpuFeatures()).newline();
             log.indent(false);
         }
@@ -1070,11 +1070,11 @@ public class SubstrateDiagnostics {
                  * If the stack pointer is not sufficiently aligned, then we might be in the middle
                  * of a call (i.e., only the arguments and the return address are on the stack).
                  */
-                int expectedStackAlignment = ConfigurationValues.getTarget().stackAlignment;
-                if (sp.unsignedRemainder(expectedStackAlignment).notEqual(0) && sp.unsignedRemainder(ConfigurationValues.getWordSize()).equal(0)) {
+                SubstrateTarget target = SubstrateTarget.singleton();
+                if (sp.unsignedRemainder(target.stackAlignment).notEqual(0) && sp.unsignedRemainder(target.wordSize).equal(0)) {
                     log.newline();
                     // Checkstyle: Allow raw info or warning printing - begin
-                    log.string("Warning: stack pointer is not aligned to ").signed(expectedStackAlignment).string(" bytes.").newline();
+                    log.string("Warning: stack pointer is not aligned to ").signed(target.stackAlignment).string(" bytes.").newline();
                     // Checkstyle: Allow raw info or warning printing - end
                 }
 
@@ -1108,8 +1108,10 @@ public class SubstrateDiagnostics {
         @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate while printing diagnostics.")
         public void printDiagnostics(Log log, ErrorContext context, int maxDiagnosticLevel, int invocationCount) {
             if (VMOperation.isInProgressAtSafepoint()) {
-                // Iterate all threads without checking if the thread mutex is locked (it should
-                // be locked by this thread though because we are at a safepoint).
+                /*
+                 * Iterate all threads without checking if current thread holds the ThreadsLock.
+                 * Most likely, we are at a safepoint anyway, but there is no guarantee.
+                 */
                 int printed = 0;
                 for (IsolateThread vmThread = VMThreads.firstThreadUnsafe(); vmThread.isNonNull(); vmThread = VMThreads.nextThread(vmThread)) {
                     if (vmThread == CurrentIsolate.getCurrentThread()) {

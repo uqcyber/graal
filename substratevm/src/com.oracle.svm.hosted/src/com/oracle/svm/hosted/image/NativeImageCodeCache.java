@@ -49,6 +49,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Pair;
 import org.graalvm.nativeimage.ImageSingletons;
@@ -66,6 +67,7 @@ import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
 import com.oracle.objectfile.ObjectFile;
+import com.oracle.svm.common.meta.MethodVariant;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.code.CodeInfo;
@@ -78,7 +80,6 @@ import com.oracle.svm.core.code.FrameInfoDecoder.ConstantAccess;
 import com.oracle.svm.core.code.FrameInfoEncoder;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.ImageCodeInfo.HostedImageCodeInfo;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.configure.ConditionalRuntimeValue;
 import com.oracle.svm.core.deopt.DeoptEntryInfopoint;
 import com.oracle.svm.core.graal.code.SubstrateDataBuilder;
@@ -104,7 +105,6 @@ import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.reflect.ReflectionHostedSupport;
-import com.oracle.svm.shared.meta.MethodVariant;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.util.ReflectionUtil;
@@ -138,7 +138,7 @@ public abstract class NativeImageCodeCache {
         public static final HostedOptionKey<Boolean> VerifyDeoptimizationEntryPoints = new HostedOptionKey<>(false);
     }
 
-    private int codeAreaSize;
+    private int codeAreaSize = -1;
 
     protected final NativeImageHeap imageHeap;
 
@@ -193,8 +193,10 @@ public abstract class NativeImageCodeCache {
         return codeAreaSize;
     }
 
-    public void setCodeAreaSize(int codeAreaSize) {
-        this.codeAreaSize = codeAreaSize;
+    public void setCodeAreaSize(int size) {
+        assert size >= 0;
+        assert codeAreaSize == -1;
+        codeAreaSize = size;
     }
 
     public Pair<HostedMethod, CompilationResult> getFirstCompilation() {
@@ -281,7 +283,7 @@ public abstract class NativeImageCodeCache {
             }
             watchdog.recordActivity();
         }
-        dataSection.close(HostedOptionValues.singleton(), 1);
+        dataSection.close(HostedOptionValues.singleton().get(), 1);
     }
 
     /** Get constants embedded in the data section and compilation results. */
@@ -359,7 +361,7 @@ public abstract class NativeImageCodeCache {
     }
 
     public int getAlignedConstantsSize() {
-        return ConfigurationValues.getObjectLayout().alignUp(getConstantsSize());
+        return ObjectLayout.singleton().alignUp(getConstantsSize());
     }
 
     public void buildRuntimeMetadata(DebugContext debug, SnippetReflectionProvider snippetReflectionProvider) {

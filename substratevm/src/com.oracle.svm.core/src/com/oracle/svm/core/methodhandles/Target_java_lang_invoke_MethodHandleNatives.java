@@ -42,13 +42,13 @@ import java.lang.reflect.Modifier;
 import org.graalvm.nativeimage.MissingReflectionRegistrationError;
 
 import com.oracle.svm.core.StaticFieldsSupport;
-import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.AnnotateOriginal;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.hub.RuntimeClassLoading.NoRuntimeClassLoading;
@@ -56,13 +56,15 @@ import com.oracle.svm.core.hub.RuntimeClassLoading.WithRuntimeClassLoading;
 import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
-import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.core.reflect.UnsafeFieldUtil;
 import com.oracle.svm.core.reflect.target.Target_java_lang_reflect_Field;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.debug.GraalError;
+import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import sun.invoke.util.VerifyAccess;
 
@@ -91,6 +93,9 @@ public final class Target_java_lang_invoke_MethodHandleNatives {
             /* The code calling this expects a getter, and will change it to a setter if needed */
             refKind = Modifier.isStatic(field.getModifiers()) ? Target_java_lang_invoke_MethodHandleNatives_Constants.REF_getStatic
                             : Target_java_lang_invoke_MethodHandleNatives_Constants.REF_getField;
+            if (RuntimeClassLoading.isSupported()) {
+                self.resolved = CremaSupport.singleton().toJVMCI(field);
+            }
         } else if (member instanceof Method) {
             Method method = (Method) member;
             Object[] typeInfo = new Object[2];
@@ -106,6 +111,9 @@ public final class Target_java_lang_invoke_MethodHandleNatives {
             } else {
                 refKind = Target_java_lang_invoke_MethodHandleNatives_Constants.REF_invokeVirtual;
             }
+            if (RuntimeClassLoading.isSupported()) {
+                self.resolved = CremaSupport.singleton().toJVMCI(method);
+            }
         } else if (member instanceof Constructor) {
             Constructor<?> constructor = (Constructor<?>) member;
             Object[] typeInfo = new Object[2];
@@ -114,6 +122,9 @@ public final class Target_java_lang_invoke_MethodHandleNatives {
             type = typeInfo;
             flags = Target_java_lang_invoke_MethodHandleNatives_Constants.MN_IS_CONSTRUCTOR | constructor.getModifiers();
             refKind = Target_java_lang_invoke_MethodHandleNatives_Constants.REF_newInvokeSpecial;
+            if (RuntimeClassLoading.isSupported()) {
+                self.resolved = CremaSupport.singleton().toJVMCI(constructor);
+            }
         } else {
             throw new InternalError("Unknown member type: " + member.getClass());
         }
@@ -206,10 +217,34 @@ public final class Target_java_lang_invoke_MethodHandleNatives {
     }
 
     @Delete
-    private static native void setCallSiteTargetNormal(CallSite site, MethodHandle target);
+    @TargetElement(name = "setCallSiteTargetNormal", onlyWith = NoRuntimeClassLoading.class)
+    private static native void deleteSetCallSiteTargetNormal(CallSite site, MethodHandle target);
 
     @Delete
-    private static native void setCallSiteTargetVolatile(CallSite site, MethodHandle target);
+    @TargetElement(name = "setCallSiteTargetVolatile", onlyWith = NoRuntimeClassLoading.class)
+    private static native void deleteSetCallSiteTargetVolatile(CallSite site, MethodHandle target);
+
+    @Substitute
+    @TargetElement(onlyWith = WithRuntimeClassLoading.class)
+    private static void setCallSiteTargetNormal(CallSite site, MethodHandle target) {
+        if (Heap.getHeap().isInImageHeap(site)) {
+            // GR-36064 The target might have been folded at build time
+            throw new UnsupportedOperationException("MethodHandleNatives.setCallSiteTargetNormal is not supported for sites created at build-time");
+        }
+        long offset = Target_java_lang_invoke_CallSite.getTargetOffset();
+        Unsafe.getUnsafe().putReference(site, offset, target);
+    }
+
+    @Substitute
+    @TargetElement(onlyWith = WithRuntimeClassLoading.class)
+    private static void setCallSiteTargetVolatile(CallSite site, MethodHandle target) {
+        if (Heap.getHeap().isInImageHeap(site)) {
+            // GR-36064 The target might have been folded at build time
+            throw new UnsupportedOperationException("MethodHandleNatives.setCallSiteTargetVolatile is not supported for sites created at build-time");
+        }
+        long offset = Target_java_lang_invoke_CallSite.getTargetOffset();
+        Unsafe.getUnsafe().putReferenceVolatile(site, offset, target);
+    }
 
     @Delete
     private static native void registerNatives();
@@ -250,6 +285,13 @@ public final class Target_java_lang_invoke_MethodHandleNatives {
 
     @Alias
     @TargetElement(onlyWith = WithRuntimeClassLoading.class)
+    public static native Object linkDynamicConstant(Object callerObj,
+                    Object bootstrapMethodObj,
+                    Object nameObj, Object typeObj,
+                    Object staticArguments);
+
+    @Alias
+    @TargetElement(onlyWith = WithRuntimeClassLoading.class)
     public static native MethodType findMethodHandleType(Class<?> rtype, Class<?>[] ptypes);
 
     @Delete
@@ -259,6 +301,12 @@ public final class Target_java_lang_invoke_MethodHandleNatives {
     @Alias
     @TargetElement(onlyWith = WithRuntimeClassLoading.class)
     public static native MethodHandle linkMethodHandleConstant(Class<?> callerClass, int refKind, Class<?> defc, String name, Object type);
+
+    @Alias
+    @TargetElement(onlyWith = WithRuntimeClassLoading.class)
+    public static native Target_java_lang_invoke_MemberName linkMethod(Class<?> callerClass, int refKind,
+                    Class<?> defc, String name, Object type,
+                    Object[] appendixResult);
 }
 
 /**
@@ -438,4 +486,10 @@ final class Util_java_lang_invoke_MethodHandleNatives {
             throw new GraalError(e);
         }
     }
+}
+
+@TargetClass(value = CallSite.class)
+final class Target_java_lang_invoke_CallSite {
+    @Alias
+    static native long getTargetOffset();
 }

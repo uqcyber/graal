@@ -48,9 +48,10 @@ import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
 import com.oracle.graal.pointsto.util.CompletionExecutor.DebugContextRunnable;
+import com.oracle.svm.common.meta.MethodVariant;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.UninterruptibleAnnotationUtils;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.deopt.DeoptTest;
 import com.oracle.svm.core.deopt.Specialize;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
@@ -72,7 +73,7 @@ import com.oracle.svm.hosted.FeatureHandler;
 import com.oracle.svm.hosted.NativeImageGenerator;
 import com.oracle.svm.hosted.NativeImageOptions;
 import com.oracle.svm.hosted.ProgressReporter;
-import com.oracle.svm.hosted.diagnostic.HostedHeapDumpFeature;
+import com.oracle.svm.hosted.diagnostic.HostedHeapDumpHandler;
 import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
 import com.oracle.svm.hosted.imagelayer.LayeredDispatchTableFeature;
 import com.oracle.svm.hosted.imagelayer.SVMImageLayerLoader;
@@ -80,7 +81,6 @@ import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.phases.ImageBuildStatisticsCounterPhase;
 import com.oracle.svm.hosted.phases.ImplicitAssertionsPhase;
-import com.oracle.svm.shared.meta.MethodVariant;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.VMError;
@@ -424,11 +424,12 @@ public class CompileQueue {
     }
 
     protected void callForReplacements(DebugContext debug, @SuppressWarnings("hiding") RuntimeConfiguration runtimeConfig) {
-        NativeImageGenerator.registerReplacements(debug, featureHandler, runtimeConfig, runtimeConfig.getProviders(), true, true, new GraphEncoder(ConfigurationValues.getTarget().arch));
+        NativeImageGenerator.registerReplacements(debug, featureHandler, runtimeConfig, runtimeConfig.getProviders(), true, true, new GraphEncoder(SubstrateTarget.getArchitecture()));
     }
 
     public void finish(DebugContext debug) {
         ProgressReporter reporter = ProgressReporter.singleton();
+        HostedHeapDumpHandler hostedHeapDumpHandler = ImageSingletons.contains(HostedHeapDumpHandler.class) ? HostedHeapDumpHandler.singleton() : null;
         try {
             try (ProgressReporter.ReporterClosable _ = reporter.printParsing()) {
                 parseAll();
@@ -453,14 +454,14 @@ public class CompileQueue {
                 method.wrapped.clearAnalyzedGraph();
             }
 
-            if (ImageSingletons.contains(HostedHeapDumpFeature.class)) {
-                ImageSingletons.lookup(HostedHeapDumpFeature.class).beforeInlining();
+            if (hostedHeapDumpHandler != null) {
+                hostedHeapDumpHandler.dumpBeforeInlining();
             }
             try (ProgressReporter.ReporterClosable _ = reporter.printInlining()) {
                 inlineTrivialMethods(debug);
             }
-            if (ImageSingletons.contains(HostedHeapDumpFeature.class)) {
-                ImageSingletons.lookup(HostedHeapDumpFeature.class).afterInlining();
+            if (hostedHeapDumpHandler != null) {
+                hostedHeapDumpHandler.dumpAfterInlining();
             }
 
             assert suitesNotCreated();
@@ -478,8 +479,8 @@ public class CompileQueue {
         if (printMethodHistogram) {
             printMethodHistogram();
         }
-        if (ImageSingletons.contains(HostedHeapDumpFeature.class)) {
-            ImageSingletons.lookup(HostedHeapDumpFeature.class).compileQueueAfterCompilation();
+        if (hostedHeapDumpHandler != null) {
+            hostedHeapDumpHandler.dumpAfterCompilation();
         }
         if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
             HostedImageLayerBuildingSupport.singleton().getLoader().cleanupAfterCompilation();

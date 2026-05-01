@@ -140,7 +140,7 @@ final class PolyglotThreadTask implements Runnable {
         private static Object executeImpl(PolyglotLanguageContext languageContext, PolyglotThreadTask polyglotThreadTask, Runnable runnable) {
             Object[] prev = languageContext.enterThread(polyglotThreadTask);
             assert prev == null; // is this assertion correct?
-            try (ThreadScope scope = languageContext.getImpl().getRootImpl().createThreadScope()) {
+            try (ThreadScope scope = languageContext.getImpl().createThreadScope()) {
                 runnable.run();
             } catch (CancelExecution cancel) {
                 if (PolyglotEngineOptions.TriggerUncaughtExceptionHandlerForCancel.getValue(languageContext.context.engine.getEngineOptionValues())) {

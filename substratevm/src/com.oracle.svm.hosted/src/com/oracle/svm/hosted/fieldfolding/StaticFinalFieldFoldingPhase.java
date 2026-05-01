@@ -30,7 +30,6 @@ import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.flow.AnalysisParsedGraph.Stage;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
 
 import jdk.graal.compiler.graph.Node;
@@ -127,11 +126,17 @@ public final class StaticFinalFieldFoldingPhase extends BasePhase<CoreProviders>
         }
 
         /*
-         * If this node is a candidate for static final field folding, the
-         * StaticFinalFieldFoldingNodePlugin already inserted a StateSplitProxyNode that we can use.
+         * Not every optimizable static final field load is created by
+         * StaticFinalFieldFoldingNodePlugin. Other node plugins can intercept the bytecode earlier
+         * and emit their own LoadFieldNode, e.g., fields handled by the word plugin. This includes
+         * both direct word-typed fields and array fields whose elemental type is a word type. In
+         * that case no StateSplitProxyNode is present. Without the proxy we cannot safely rewrite
+         * the load into the diamond below, so leave the original load in place.
          */
-        VMError.guarantee(loadFieldNode.next() instanceof StateSplitProxyNode, "missing StateSplitProxy");
-        StateSplitProxyNode stateSplitProxyNode = (StateSplitProxyNode) loadFieldNode.next();
+        if (!(loadFieldNode.next() instanceof StateSplitProxyNode stateSplitProxyNode)) {
+            assert aField.getType().getElementalType().isWordType() : "unexpected missing StateSplitProxy for " + aField.format("%H.%n");
+            return;
+        }
 
         /*
          * Query the folded field value for the AnalysisField. To ensure deterministic image builds,

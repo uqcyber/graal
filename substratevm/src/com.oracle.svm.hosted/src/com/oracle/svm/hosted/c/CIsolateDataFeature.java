@@ -28,48 +28,49 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Map;
 
-import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.impl.Word;
-
 import com.oracle.svm.core.c.CIsolateData;
 import com.oracle.svm.core.c.CIsolateDataStorage;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.shared.collections.ConcurrentIdentityHashMap;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
 
+import jdk.graal.compiler.core.common.NumUtil;
+
+/** See {@link CIsolateData} and {@link CIsolateDataStorage}. */
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public class CIsolateDataFeature implements InternalFeature {
 
     private final Map<String, CIsolateData<?>> usedEntries = new ConcurrentIdentityHashMap<>();
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
-        access.registerObjectReplacer(this::replaceObject);
+        access.registerObjectReachabilityHandler(this::collectCIsolateData, CIsolateData.class);
     }
 
-    private Object replaceObject(Object obj) {
-        if (obj instanceof CIsolateData<?> entry) {
-            usedEntries.compute(entry.getName(), (key, old) -> {
-                VMError.guarantee(old == null || old == entry, "The isolate data section already contains an entry for %s", key);
-                return entry;
-            });
-        }
-        return obj;
+    private void collectCIsolateData(CIsolateData<?> data) {
+        usedEntries.compute(data.getName(), (key, old) -> {
+            VMError.guarantee(old == null || old == data, "The isolate data section already contains an entry for %s", key);
+            return data;
+        });
     }
 
     @Override
     public void afterAnalysis(AfterAnalysisAccess access) {
-        UnsignedWord offset = Word.zero();
         CIsolateData<?>[] entries = usedEntries.values().toArray(new CIsolateData<?>[0]);
         Arrays.sort(entries, Comparator.comparing(CIsolateData<?>::getSize).thenComparing(CIsolateData<?>::getName));
-        for (CIsolateData<?> entry : entries) {
-            offset = UnsignedUtils.roundUp(offset, Word.unsigned(CIsolateDataStorage.ALIGNMENT));
-            entry.setOffset(offset);
-            offset = offset.add(Word.unsigned(entry.getSize()));
-        }
 
+        long offset = 0;
+        for (CIsolateData<?> entry : entries) {
+            offset = NumUtil.roundUp(offset, CIsolateDataStorage.ALIGNMENT);
+            entry.setOffset(offset);
+            offset += entry.getSize();
+        }
         CIsolateDataStorage.singleton().setSize(offset);
     }
 }

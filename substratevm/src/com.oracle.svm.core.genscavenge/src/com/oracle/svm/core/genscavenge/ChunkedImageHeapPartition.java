@@ -27,7 +27,7 @@ package com.oracle.svm.core.genscavenge;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.genscavenge.ChunkedImageHeapAllocator.AlignedChunk;
 import com.oracle.svm.core.image.ImageHeapLayouter.ImageHeapLayouterControl;
 import com.oracle.svm.core.image.ImageHeapObject;
@@ -59,7 +59,7 @@ final class ChunkedImageHeapPartition implements ImageHeapPartition {
         this.unalignedChunks = unalignedChunks;
 
         /* Cache to prevent frequent lookups of the object layout from ImageSingletons. */
-        this.minimumObjectSize = ConfigurationValues.getObjectLayout().getMinImageHeapObjectSize();
+        this.minimumObjectSize = ObjectLayout.singleton().getMinImageHeapObjectSize();
     }
 
     void assign(ImageHeapObject obj) {
@@ -167,7 +167,7 @@ final class ChunkedImageHeapPartition implements ImageHeapPartition {
     private void setOffsetOfAllocatedObject(ImageHeapObject info, long allocationOffset) {
         assert info.getPartition() == this;
         long offsetInPartition = allocationOffset - startOffset;
-        assert ConfigurationValues.getObjectLayout().isAligned(offsetInPartition) : "start: " + offsetInPartition + " must be aligned.";
+        assert ObjectLayout.singleton().isAligned(offsetInPartition) : "start: " + offsetInPartition + " must be aligned.";
         info.setOffsetInPartition(offsetInPartition);
     }
 

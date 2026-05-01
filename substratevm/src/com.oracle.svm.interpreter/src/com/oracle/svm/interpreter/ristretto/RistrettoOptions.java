@@ -24,8 +24,8 @@
  */
 package com.oracle.svm.interpreter.ristretto;
 
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionKey;
+import com.oracle.svm.shared.option.HostedOptionKey;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.options.Option;
@@ -50,14 +50,16 @@ public class RistrettoOptions {
     @Option(help = "Trace compilation events.")//
     public static final RuntimeOptionKey<Boolean> JITTraceCompilation = new RuntimeOptionKey<>(false);
 
+    @Option(help = "Print stack traces of compiler exceptions.")//
+    public static final RuntimeOptionKey<Boolean> JITPrintExceptions = new RuntimeOptionKey<>(false);
+
     public static final class ConcealedOptions {
-        // TODO - GR-71501 - enable deopts in ristretto
         @Option(help = "Use deoptimization for runtime compiled code optimizations.")//
-        public static final HostedOptionKey<Boolean> JITUseDeoptimization = new HostedOptionKey<>(false);
+        public static final HostedOptionKey<Boolean> JITUseDeoptimization = new HostedOptionKey<>(true);
     }
 
     @Fold
-    public static boolean getJITUseDeoptimization() {
+    public static boolean useDeoptimization() {
         return ConcealedOptions.JITUseDeoptimization.getValue();
     }
 }

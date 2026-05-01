@@ -52,26 +52,30 @@ import com.oracle.objectfile.io.AssemblyBuffer;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.ReservedRegisters;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.UniqueShortNameProvider;
 import com.oracle.svm.core.UniqueShortNameProviderDefaultImpl;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
 import com.oracle.svm.core.code.CodeInfoDecoder;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.debug.BFDNameProvider;
 import com.oracle.svm.core.debug.SubstrateDebugInfoInstaller;
 import com.oracle.svm.core.debug.SubstrateDebugTypeEntrySupport;
 import com.oracle.svm.core.debug.gdb.GdbJitInterface;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.JVMCIFieldValueTransformerWithAvailability;
 import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.ProgressReporter;
 import com.oracle.svm.hosted.c.CGlobalDataFeature;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.util.DiagnosticUtils;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.option.HostedOptionValues;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
@@ -85,6 +89,7 @@ import jdk.vm.ci.meta.ResolvedJavaField;
 
 @AutomaticallyRegisteredFeature
 @SuppressWarnings("unused")
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 class NativeImageDebugInfoFeature implements InternalFeature {
 
     public NativeLibraries nativeLibs;
@@ -189,7 +194,7 @@ class NativeImageDebugInfoFeature implements InternalFeature {
         CGlobalData<PointerBase> compressionShift = CGlobalDataFactory.createWord(Word.signed(compressEncoding.getShift()), "__svm_compression_shift");
         CGlobalData<PointerBase> useHeapBase = CGlobalDataFactory.createWord(Word.unsigned(compressEncoding.hasBase() ? 1 : 0), "__svm_use_heap_base");
         CGlobalData<PointerBase> reservedHubBitsMask = CGlobalDataFactory.createWord(Word.unsigned(Heap.getHeap().getObjectHeader().getReservedHubBitsMask()), "__svm_reserved_bits_mask");
-        CGlobalData<PointerBase> objectAlignment = CGlobalDataFactory.createWord(Word.unsigned(ConfigurationValues.getObjectLayout().getAlignment()), "__svm_object_alignment");
+        CGlobalData<PointerBase> objectAlignment = CGlobalDataFactory.createWord(Word.unsigned(ObjectLayout.singleton().getAlignment()), "__svm_object_alignment");
         CGlobalData<PointerBase> frameSizeStatusMask = CGlobalDataFactory.createWord(Word.unsigned(CodeInfoDecoder.FRAME_SIZE_STATUS_MASK), "__svm_frame_size_status_mask");
         CGlobalData<PointerBase> heapBaseRegnum = CGlobalDataFactory.createWord(Word.unsigned(ReservedRegisters.singleton().getHeapBaseRegister().number), "__svm_heap_base_regnum");
         CGlobalDataFeature.singleton().registerWithGlobalHiddenSymbol(compressionShift);
@@ -204,7 +209,7 @@ class NativeImageDebugInfoFeature implements InternalFeature {
          * GDB JIT compilation interface.
          */
         if (SubstrateDebugInfoInstaller.Options.hasRuntimeDebugInfoFormatSupport(SubstrateDebugInfoInstaller.DEBUG_INFO_OBJFILE_NAME)) {
-            Architecture arch = ConfigurationValues.getTarget().arch;
+            Architecture arch = SubstrateTarget.getArchitecture();
             ByteBuffer buffer = ByteBuffer.allocate(SizeOf.get(GdbJitInterface.JITDescriptor.class)).order(arch.getByteOrder());
 
             /*
@@ -261,7 +266,7 @@ class NativeImageDebugInfoFeature implements InternalFeature {
         try (Timer.StopTimer _ = timer.start()) {
             var accessImpl = (FeatureImpl.BeforeImageWriteAccessImpl) access;
             var image = accessImpl.getImage();
-            var debugContext = new DebugContext.Builder(HostedOptionValues.singleton(), new GraalDebugHandlersFactory(GuestAccess.get().getSnippetReflection())).build();
+            var debugContext = new DebugContext.Builder(HostedOptionValues.singleton().get(), new GraalDebugHandlersFactory(GuestAccess.get().getSnippetReflection())).build();
             DebugInfoProvider provider = new NativeImageDebugInfoProvider(debugContext, image.getCodeCache(), image.getHeap(), image.getNativeLibs(), accessImpl.getMetaAccess(),
                             accessImpl.getRuntimeConfiguration());
             var objectFile = image.getObjectFile();

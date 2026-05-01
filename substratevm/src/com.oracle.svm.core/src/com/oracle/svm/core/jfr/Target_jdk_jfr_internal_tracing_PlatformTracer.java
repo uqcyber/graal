@@ -26,16 +26,58 @@
 
 package com.oracle.svm.core.jfr;
 
+import java.util.List;
+
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 
 import jdk.jfr.internal.tracing.PlatformTracer;
+import jdk.jfr.internal.tracing.Modification;
 
 /**
- * This class is not supported at the moment. So, we completely replace it with an empty
- * implementation to reduce the image size.
+ * Platform method tracing is not supported at the moment. Keep an API-compatible no-op substitution
+ * here so analysis resolves reachable entry points without pulling in the unsupported method tracer
+ * implementation.
+ *
+ * JDK 25 added additional public entry points such as {@code emitTiming()} that are reached from
+ * JFR shutdown hooks, so this substitution must track the current public API surface.
  */
 @Substitute
 @TargetClass(value = PlatformTracer.class)
 public final class Target_jdk_jfr_internal_tracing_PlatformTracer {
+    @Substitute
+    public static byte[] onMethodTrace(@SuppressWarnings("unused") Module module,
+                    @SuppressWarnings("unused") ClassLoader classLoader,
+                    @SuppressWarnings("unused") String className,
+                    @SuppressWarnings("unused") byte[] oldBytecode,
+                    @SuppressWarnings("unused") long[] ids,
+                    @SuppressWarnings("unused") String[] names,
+                    @SuppressWarnings("unused") String[] signatures,
+                    @SuppressWarnings("unused") int[] modifications) {
+        return null;
+    }
+
+    @Substitute
+    public static void emitTiming() {
+    }
+
+    @Substitute
+    public static void addObjectTiming(@SuppressWarnings("unused") long duration) {
+    }
+
+    @Substitute
+    public static void addTiming(@SuppressWarnings("unused") long id, @SuppressWarnings("unused") long duration) {
+    }
+
+    @Substitute
+    public static void setFilters(@SuppressWarnings("unused") Modification modification, @SuppressWarnings("unused") List<String> filters) {
+    }
+
+    @Substitute
+    public static void publishClass(@SuppressWarnings("unused") long classId) {
+    }
+
+    @Substitute
+    public static void initialize() {
+    }
 }

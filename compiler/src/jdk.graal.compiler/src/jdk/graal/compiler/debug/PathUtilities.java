@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -202,7 +202,7 @@ public class PathUtilities {
      * way to get this in Java. Normally it is 255. But for AUFS it is 242. See AUFS_MAX_NAMELEN in
      * http://aufs.sourceforge.net/aufs3/man.html.
      */
-    private static final int MAX_FILE_NAME_LENGTH = 242;
+    public static final int MAX_FILE_NAME_LENGTH = 242;
 
     private static final String ELLIPSIS = "...";
 

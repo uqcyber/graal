@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -246,7 +246,7 @@ interface GraphPrinter extends Closeable, JavaConstantFormatter {
             DebugContext debug = graph.getDebug();
             StructuredGraph.ScheduleResult scheduleResult;
             try (Scope scope = debug.disable()) {
-                SchedulePhase.runWithoutContextOptimizations(sgraph);
+                SchedulePhase.runWithoutContextOptimizations(sgraph, SchedulePhase.getDefaultStrategy(sgraph.getOptions()), true);
                 scheduleResult = sgraph.getLastSchedule();
             } catch (Throwable t) {
                 scheduleResult = null;

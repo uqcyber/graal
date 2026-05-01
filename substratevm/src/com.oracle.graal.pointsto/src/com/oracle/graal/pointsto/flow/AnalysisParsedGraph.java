@@ -39,6 +39,7 @@ import jdk.graal.compiler.core.common.PermanentBailoutException;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.DebugContext.Builder;
 import jdk.graal.compiler.debug.DebugContext.Description;
+import jdk.graal.compiler.debug.DebugOptions;
 import jdk.graal.compiler.debug.Indent;
 import jdk.graal.compiler.nodes.EncodedGraph;
 import jdk.graal.compiler.nodes.GraphDecoder;
@@ -155,7 +156,9 @@ public final class AnalysisParsedGraph {
             throw AnalysisError.shouldNotReachHere("BigBang object required for parsing method " + method.format("%H.%p(%n)"));
         }
 
-        OptionValues options = bb.getOptions();
+        // Persisted analysis graphs do not consume the structured optimization log, so avoid
+        // capturing its debug-only state in encoded graphs.
+        OptionValues options = bb.getOptions().derive(DebugOptions.OptimizationLog, null);
         Description description = new Description(method, ClassUtil.getUnqualifiedName(method.getClass()) + ":" + method.getId());
         DebugContext debug = new Builder(options, new GraalDebugHandlersFactory(bb.getSnippetReflectionProvider())).description(description).build();
 
@@ -250,10 +253,13 @@ public final class AnalysisParsedGraph {
 
     @SuppressWarnings("try")
     private static StructuredGraph decodeParsedGraph(BigBang bb, AnalysisMethod method, AnalysisParsedGraph analysisParsedGraph) {
+        // Persisted analysis graphs do not consume the structured optimization log, so avoid
+        // recreating it while decoding a graph for re-encoding.
+        OptionValues options = bb.getOptions().derive(DebugOptions.OptimizationLog, null);
         DebugContext.Description description = new DebugContext.Description(method, ClassUtil.getUnqualifiedName(method.getClass()) + ":" + method.getId());
-        DebugContext debug = new DebugContext.Builder(bb.getOptions(), new GraalDebugHandlersFactory(bb.getSnippetReflectionProvider())).description(description).build();
+        DebugContext debug = new DebugContext.Builder(options, new GraalDebugHandlersFactory(bb.getSnippetReflectionProvider())).description(description).build();
 
-        StructuredGraph result = new StructuredGraph.Builder(bb.getOptions(), debug, bb.getHostVM().allowAssumptions(method))
+        StructuredGraph result = new StructuredGraph.Builder(options, debug, bb.getHostVM().allowAssumptions(method))
                         .method(method)
                         .trackNodeSourcePosition(analysisParsedGraph.encodedGraph.trackNodeSourcePosition())
                         .recordInlinedMethods(analysisParsedGraph.encodedGraph.isRecordingInlinedMethods())

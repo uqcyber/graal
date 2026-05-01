@@ -24,14 +24,11 @@
  */
 package com.oracle.svm.core.foreign;
 
-import java.lang.constant.DirectMethodHandleDesc;
-import java.lang.constant.MethodHandleDesc;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
-import java.util.Optional;
 
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -84,15 +81,10 @@ record UpcallStubFactoryDecorator(UpcallStubFactory delegate, FunctionDescriptor
 
         /*
          * We cannot do this in 'UpcallLinker.makeUpcallStub' because that one already gets a
-         * different method handle that will handle parameter/return value bindings. Further, method
-         * handles cannot be compared. If the provided method handle is a DirectMethodHandle, we use
-         * the MH descriptor to check if there is a registered direct upcall stub. Then, we will
-         * patch the already allocated trampoline with a different upcall stub pointer.
+         * different method handle that will handle parameter/return value bindings.
          */
-        Optional<MethodHandleDesc> methodHandleDesc = target.describeConstable();
-        if (methodHandleDesc.isPresent() && methodHandleDesc.get() instanceof DirectMethodHandleDesc desc) {
-            ForeignFunctionsRuntime.singleton().patchForDirectUpcall(segment.address(), desc, function, options);
-        }
+        ForeignFunctionsRuntime.singleton().patchForDirectUpcall(segment.address(), target, function, options);
+
         return segment;
     }
 }

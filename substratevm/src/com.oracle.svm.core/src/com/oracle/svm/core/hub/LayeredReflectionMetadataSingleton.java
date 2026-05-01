@@ -36,8 +36,8 @@ import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.imagelayer.BuildingImageLayerPredicate;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.ImageSingletonLoader;
 import com.oracle.svm.shared.singletons.ImageSingletonWriter;
 import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
@@ -109,7 +109,8 @@ public class LayeredReflectionMetadataSingleton {
 
     private static boolean isReflectionMetadataEmpty(ImageReflectionMetadata reflectionMetadata) {
         return reflectionMetadata.fieldsEncodingIndex == -1 && reflectionMetadata.methodsEncodingIndex == -1 &&
-                        reflectionMetadata.constructorsEncodingIndex == -1 && reflectionMetadata.recordComponentsEncodingIndex == -1;
+                        reflectionMetadata.constructorsEncodingIndex == -1 && reflectionMetadata.recordComponentsEncodingIndex == -1 &&
+                        reflectionMetadata.dynamicAccessIndex == -1 && reflectionMetadata.unsafeAllocatedIndex == -1;
     }
 
     public ImageReflectionMetadata getReflectionMetadata(DynamicHub hub) {

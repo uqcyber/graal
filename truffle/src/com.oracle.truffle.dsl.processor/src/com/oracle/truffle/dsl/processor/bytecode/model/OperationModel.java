@@ -191,9 +191,6 @@ public class OperationModel implements PrettyPrintable {
     public OperationArgument[] operationEndArguments = EMPTY_ARGUMENTS;
     public boolean operationBeginArgumentVarArgs = false;
 
-    // A unique identifier for instrumentation instructions.
-    public int instrumentationIndex;
-
     public OperationModel(BytecodeDSLModel parent, int id, OperationKind kind, String name, String builderName, String javadoc) {
         this.parent = parent;
         this.id = id;
@@ -213,10 +210,6 @@ public class OperationModel implements PrettyPrintable {
 
     public boolean hasChildren() {
         return isVariadic || numDynamicOperands() > 0;
-    }
-
-    public void setInstrumentationIndex(int instrumentationIndex) {
-        this.instrumentationIndex = instrumentationIndex;
     }
 
     public Signature getSpecializationSignature(SpecializationData specialization) {

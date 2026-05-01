@@ -37,6 +37,10 @@ import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.heap.ImageHeapScanner;
 import com.oracle.svm.graal.SubstrateGraalUtils;
 import com.oracle.svm.graal.hosted.runtimecompilation.RuntimeCompiledMethodSupport;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.graal.compiler.debug.DebugContext;
@@ -56,6 +60,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  * Truffle specific runtime compilation feature enriching runtime-compilation with truffle specific
  * parts.
  */
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public final class TruffleRuntimeCompiledMethodSupport extends RuntimeCompiledMethodSupport {
     @Override
     public DeoptimizeOnExceptionPhase getDeoptOnExceptionPhase(Predicate<ResolvedJavaMethod> deoptimizeOnExceptionPredicate) {

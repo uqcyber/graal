@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -83,6 +83,8 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 
+import com.oracle.truffle.api.RootCallTarget;
+import com.oracle.truffle.api.Truffle;
 import org.graalvm.collections.Pair;
 import org.graalvm.options.OptionValues;
 import org.graalvm.polyglot.Context;
@@ -892,7 +894,7 @@ final class PolyglotContextImpl implements com.oracle.truffle.polyglot.PolyglotI
             PolyglotThreadInfo current = getCurrentThreadInfo();
             LinkedList<Object[]> stack = current.explicitContextStack;
             if (stack.isEmpty() || current.getThread() == null) {
-                throw PolyglotEngineException.illegalState("The context is not entered explicity. A context can only be left if it was previously entered.");
+                throw PolyglotEngineException.illegalState("The context is not entered explicitly. A context can only be left if it was previously entered.");
             }
             engine.leave(stack.removeLast(), this);
             if (current.explicitContextStack.isEmpty()) {
@@ -2894,7 +2896,7 @@ final class PolyglotContextImpl implements com.oracle.truffle.polyglot.PolyglotI
         if (parent == null) {
             engine.polyglotHostService.notifyClearExplicitContextStack(this);
         }
-        if (isActive(Thread.currentThread()) && !engine.getImpl().getRootImpl().isInCurrentEngineHostCallback(engine)) {
+        if (isActive(Thread.currentThread()) && !isInCurrentEngineHostCallback(engine)) {
             PolyglotThreadInfo threadInfo = getCurrentThreadInfo();
             if (!threadInfo.explicitContextStack.isEmpty()) {
                 PolyglotContextImpl c = this;
@@ -2908,6 +2910,27 @@ final class PolyglotContextImpl implements com.oracle.truffle.polyglot.PolyglotI
                     }
                 }
             }
+        }
+    }
+
+    static boolean isInCurrentEngineHostCallback(Object engine) {
+        if (EngineAccessor.ISOLATE.isIsolateGuest()) {
+            // In polyglot isolate ask the host.
+            return EngineAccessor.ISOLATE.isInCurrentEngineHostCallback(engine);
+        }
+        RootNode topMostGuestToHostRootNode = Truffle.getRuntime().iterateFrames((f) -> {
+            RootNode root = ((RootCallTarget) f.getCallTarget()).getRootNode();
+            if (EngineAccessor.HOST.isGuestToHostRootNode(root)) {
+                return root;
+            }
+            return null;
+        });
+        if (topMostGuestToHostRootNode == null) {
+            return false;
+        } else {
+            PolyglotSharingLayer sharing = (PolyglotSharingLayer) EngineAccessor.NODES.getSharingLayer(topMostGuestToHostRootNode);
+            PolyglotEngineImpl rootEngine = sharing.engine;
+            return rootEngine == engine;
         }
     }
 
@@ -2926,8 +2949,8 @@ final class PolyglotContextImpl implements com.oracle.truffle.polyglot.PolyglotI
             assert !state.isClosed();
             Object[] prev;
             try {
-                boolean enterMustSuceed = cancelOrExitOperation;
-                prev = this.enterThreadChanged(false, true, enterMustSuceed, null, false);
+                boolean enterMustSucceed = cancelOrExitOperation;
+                prev = this.enterThreadChanged(false, true, enterMustSucceed, null, false);
             } catch (Throwable t) {
                 synchronized (this) {
                     restoreFromClosingState(cancelOrExitOperation);
@@ -3069,6 +3092,21 @@ final class PolyglotContextImpl implements com.oracle.truffle.polyglot.PolyglotI
                     PolyglotFastThreadLocals.cleanup(thread.fastThreadLocals);
                 }
                 localsCleared = true;
+                if (engine.inEnginePreInitialization) {
+                    /*
+                     * Remove references to the current thread from a closed inner context created
+                     * during context pre-initialization. Threads reachable from the image heap
+                     * cause native-image build failures, as build-time threads do not exist at
+                     * image runtime. Note: The top-level context remains active after
+                     * pre-initialization completes and its reference to the pre-initialization
+                     * thread is removed separately by leaveThreadChanged(prev, entered=true,
+                     * finalizeAndDispose=true) called from the preinitialize method.
+                     */
+                    PolyglotThreadInfo threadInfo = threads.get(Thread.currentThread());
+                    if (threadInfo != null) {
+                        finishThreadDispose(Thread.currentThread(), threadInfo, null);
+                    }
+                }
             }
         }
         Object defaultLoggers = EngineAccessor.LANGUAGE.getDefaultLoggers();
@@ -3881,6 +3919,21 @@ final class PolyglotContextImpl implements com.oracle.truffle.polyglot.PolyglotI
 
                 } finally {
                     context.leaveThreadChanged(prev, true, true);
+                }
+            }
+            /*
+             * Inner contexts created during pre-initialization must be closed before the image heap
+             * is snapshotted. An unclosed context retains references to threads active during image
+             * build, which are invalid at image runtime and will cause native-image build failures.
+             */
+            synchronized (context) {
+                if (!context.childContexts.isEmpty()) {
+                    PolyglotContextImpl childContext = context.childContexts.get(0);
+                    throw new IllegalStateException(String.format(
+                                    "An inner context created during context pre-initialization was not closed before " +
+                                                    "pre-initialization completed. All inner contexts must be explicitly closed. " +
+                                                    "Unclosed context: %s",
+                                    childContext));
                 }
             }
             return context;

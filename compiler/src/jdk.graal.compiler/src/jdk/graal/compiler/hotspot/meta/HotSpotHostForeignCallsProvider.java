@@ -31,8 +31,6 @@ import static jdk.graal.compiler.core.target.Backend.ARITHMETIC_FREM;
 import static jdk.graal.compiler.hotspot.EncodedSnippets.isAfterSnippetEncoding;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.ARRAY_PARTITION;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.ARRAY_SORT;
-import static jdk.graal.compiler.hotspot.HotSpotBackend.BASE64_DECODE_BLOCK;
-import static jdk.graal.compiler.hotspot.HotSpotBackend.BASE64_ENCODE_BLOCK;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.BIGINTEGER_LEFT_SHIFT_WORKER;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.BIGINTEGER_RIGHT_SHIFT_WORKER;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.CHACHA20Block;
@@ -43,8 +41,6 @@ import static jdk.graal.compiler.hotspot.HotSpotBackend.DILITHIUM_MONT_MUL_BY_CO
 import static jdk.graal.compiler.hotspot.HotSpotBackend.DILITHIUM_NTT_MULT;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.DOUBLE_KECCAK;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.DYNAMIC_NEW_INSTANCE_OR_NULL;
-import static jdk.graal.compiler.hotspot.HotSpotBackend.ELECTRONIC_CODEBOOK_DECRYPT_AESCRYPT;
-import static jdk.graal.compiler.hotspot.HotSpotBackend.ELECTRONIC_CODEBOOK_ENCRYPT_AESCRYPT;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.EXCEPTION_HANDLER;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.GALOIS_COUNTER_MODE_CRYPT;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.IC_MISS_HANDLER;
@@ -72,11 +68,10 @@ import static jdk.graal.compiler.hotspot.HotSpotBackend.SHAREDRUNTIME_NOTIFY_JVM
 import static jdk.graal.compiler.hotspot.HotSpotBackend.SHAREDRUNTIME_NOTIFY_JVMTI_VTHREAD_START;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.SHAREDRUNTIME_NOTIFY_JVMTI_VTHREAD_UNMOUNT;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.SHA_IMPL_COMPRESS_MB;
+import static jdk.graal.compiler.hotspot.HotSpotBackend.UNSAFE_ARRAYCOPY;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.UNSAFE_SETMEMORY;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.UNWIND_EXCEPTION_TO_CALLER;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.UPDATE_BYTES_ADLER32;
-import static jdk.graal.compiler.hotspot.HotSpotBackend.UPDATE_BYTES_CRC32;
-import static jdk.graal.compiler.hotspot.HotSpotBackend.UPDATE_BYTES_CRC32C;
 import static jdk.graal.compiler.hotspot.HotSpotBackend.VM_ERROR;
 import static jdk.graal.compiler.hotspot.HotSpotForeignCallLinkage.RegisterEffect.COMPUTES_REGISTERS_KILLED;
 import static jdk.graal.compiler.hotspot.HotSpotForeignCallLinkage.RegisterEffect.DESTROYS_ALL_CALLER_SAVE_REGISTERS;
@@ -161,13 +156,18 @@ import jdk.graal.compiler.replacements.nodes.ArrayEqualsWithMaskForeignCalls;
 import jdk.graal.compiler.replacements.nodes.ArrayFillNode;
 import jdk.graal.compiler.replacements.nodes.ArrayIndexOfForeignCalls;
 import jdk.graal.compiler.replacements.nodes.ArrayRegionCompareToForeignCalls;
+import jdk.graal.compiler.replacements.nodes.Base64DecodeBlockNode;
+import jdk.graal.compiler.replacements.nodes.Base64EncodeBlockNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMulAddNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMultiplyToLenNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerSquareToLenNode;
 import jdk.graal.compiler.replacements.nodes.CalcStringAttributesForeignCalls;
 import jdk.graal.compiler.replacements.nodes.CipherBlockChainingAESNode;
 import jdk.graal.compiler.replacements.nodes.CountPositivesNode;
+import jdk.graal.compiler.replacements.nodes.CRC32CUpdateBytesNode;
+import jdk.graal.compiler.replacements.nodes.CRC32UpdateBytesNode;
 import jdk.graal.compiler.replacements.nodes.CounterModeAESNode;
+import jdk.graal.compiler.replacements.nodes.ElectronicCodeBookAESNode;
 import jdk.graal.compiler.replacements.nodes.EncodeArrayNode;
 import jdk.graal.compiler.replacements.nodes.GHASHProcessBlocksNode;
 import jdk.graal.compiler.replacements.nodes.IndexOfZeroForeignCalls;
@@ -268,17 +268,6 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
     // void ShenandoahRuntime::write_barrier_pre(oopDesc*)
     public static final HotSpotForeignCallDescriptor SHENANDOAH_WRITE_BARRIER_PRE = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, NO_SIDE_EFFECT, NO_LOCATIONS,
                     "ShenandoahRuntime::write_barrier_pre_stack_only", void.class, Object.class);
-
-    /**
-     * Signature of an unsafe {@link System#arraycopy} stub.
-     *
-     * The signature is equivalent to {@link jdk.internal.misc.Unsafe#copyMemory(long, long, long)}.
-     * For the semantics refer to
-     * {@link jdk.internal.misc.Unsafe#copyMemory(Object, long, Object, long, long)}.
-     *
-     * @see jdk.internal.misc.Unsafe#copyMemory
-     */
-    public static final ForeignCallSignature UNSAFE_ARRAYCOPY = new ForeignCallSignature("unsafe_arraycopy", void.class, Word.class, Word.class, Word.class);
 
     /**
      * Signature of a generic {@link System#arraycopy} stub.
@@ -614,7 +603,9 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         registerCheckcastArraycopyDescriptor(false, c.checkcastArraycopy);
 
         registerForeignCall(createDescriptor(GENERIC_ARRAYCOPY, LEAF_NO_VZERO, HAS_SIDE_EFFECT, NamedLocationIdentity.any()), c.genericArraycopy, NativeCall);
-        registerForeignCall(createDescriptor(UNSAFE_ARRAYCOPY, LEAF_NO_VZERO, HAS_SIDE_EFFECT, NamedLocationIdentity.any()), c.unsafeArraycopy, NativeCall);
+        if (c.unsafeArraycopy != 0L) {
+            registerForeignCall(UNSAFE_ARRAYCOPY, c.unsafeArraycopy, NativeCall);
+        }
         if (c.unsafeSetMemory != 0L) {
             registerForeignCall(UNSAFE_SETMEMORY, c.unsafeSetMemory, NativeCall);
         }
@@ -634,24 +625,11 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         if (c.sha3ImplCompressMultiBlock != 0L) {
             registerForeignCall(SHA3_IMPL_COMPRESS_MB, c.sha3ImplCompressMultiBlock, NativeCall);
         }
-        if (c.base64EncodeBlock != 0L) {
-            registerForeignCall(BASE64_ENCODE_BLOCK, c.base64EncodeBlock, NativeCall);
-        }
-        if (c.base64DecodeBlock != 0L) {
-            registerForeignCall(BASE64_DECODE_BLOCK, c.base64DecodeBlock, NativeCall);
-        }
         if (c.montgomeryMultiply != 0L) {
             registerForeignCall(MONTGOMERY_MULTIPLY, c.montgomeryMultiply, NativeCall);
         }
         if (c.montgomerySquare != 0L) {
             registerForeignCall(MONTGOMERY_SQUARE, c.montgomerySquare, NativeCall);
-        }
-        if (c.updateBytesCRC32Stub != 0L) {
-            // This stub does callee saving
-            registerForeignCall(UPDATE_BYTES_CRC32, c.updateBytesCRC32Stub, NativeCall);
-        }
-        if (c.updateBytesCRC32C != 0L) {
-            registerForeignCall(UPDATE_BYTES_CRC32C, c.updateBytesCRC32C, NativeCall);
         }
         if (c.updateBytesAdler32 != 0L) {
             registerForeignCall(UPDATE_BYTES_ADLER32, c.updateBytesAdler32, NativeCall);
@@ -661,12 +639,6 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         }
         if (c.bigIntegerRightShiftWorker != 0L) {
             registerForeignCall(BIGINTEGER_RIGHT_SHIFT_WORKER, c.bigIntegerRightShiftWorker, NativeCall);
-        }
-        if (c.electronicCodeBookEncrypt != 0L) {
-            registerForeignCall(ELECTRONIC_CODEBOOK_ENCRYPT_AESCRYPT, c.electronicCodeBookEncrypt, NativeCall);
-        }
-        if (c.electronicCodeBookDecrypt != 0L) {
-            registerForeignCall(ELECTRONIC_CODEBOOK_DECRYPT_AESCRYPT, c.electronicCodeBookDecrypt, NativeCall);
         }
         if (c.galoisCounterModeCrypt != 0L) {
             registerForeignCall(GALOIS_COUNTER_MODE_CRYPT, c.galoisCounterModeCrypt, NativeCall);
@@ -764,6 +736,8 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, StringUTF16CompressNode.STUB);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, EncodeArrayNode.STUBS);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, CountPositivesNode.STUB);
+        linkSnippetStubs(providers, options, IntrinsicStubsGen::new, Base64EncodeBlockNode.STUB);
+        linkSnippetStubs(providers, options, IntrinsicStubsGen::new, Base64DecodeBlockNode.STUB);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, VectorizedMismatchNode.STUB);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, VectorizedHashCodeNode.STUBS);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, BigIntegerMultiplyToLenNode.STUB);
@@ -772,12 +746,15 @@ public abstract class HotSpotHostForeignCallsProvider extends HotSpotForeignCall
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, AESNode.STUBS);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, CounterModeAESNode.STUB);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, CipherBlockChainingAESNode.STUBS);
+        linkSnippetStubs(providers, options, IntrinsicStubsGen::new, ElectronicCodeBookAESNode.STUBS);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, GHASHProcessBlocksNode.STUB);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, MessageDigestNode.SHA1Node.STUB);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, MessageDigestNode.SHA256Node.STUB);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, MessageDigestNode.SHA3Node.STUB);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, MessageDigestNode.SHA512Node.STUB);
         linkSnippetStubs(providers, options, IntrinsicStubsGen::new, MessageDigestNode.MD5Node.STUB);
+        linkSnippetStubs(providers, options, IntrinsicStubsGen::new, CRC32UpdateBytesNode.STUB);
+        linkSnippetStubs(providers, options, IntrinsicStubsGen::new, CRC32CUpdateBytesNode.STUB);
     }
 
     @FunctionalInterface

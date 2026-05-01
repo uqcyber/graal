@@ -24,13 +24,13 @@
  */
 package com.oracle.svm.core.jfr;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.thread.JavaThreads;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.collections.EnumBitmask;
 
 /**
@@ -74,6 +74,7 @@ public final class JfrEvent {
     public static final JfrEvent ObjectAllocationSample = create("jdk.ObjectAllocationSample", 5, JfrEventFlags.SupportsThrottling);
     public static final JfrEvent NativeMemoryUsage = create("jdk.NativeMemoryUsage");
     public static final JfrEvent NativeMemoryUsageTotal = create("jdk.NativeMemoryUsageTotal");
+    public static final JfrEvent DumpReason = create("jdk.DumpReason");
 
     private final long id;
     private final String name;

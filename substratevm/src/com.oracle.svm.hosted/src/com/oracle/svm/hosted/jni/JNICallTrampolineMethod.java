@@ -41,6 +41,7 @@ import com.oracle.svm.core.jni.headers.JNIEnvironment;
 import com.oracle.svm.core.jni.headers.JNIMethodId;
 import com.oracle.svm.core.jni.headers.JNIObjectHandle;
 import com.oracle.svm.core.thread.VMThreads;
+import com.oracle.svm.core.threadlocal.VMThreadLocalOffsetProvider;
 import com.oracle.svm.hosted.annotation.CustomSubstitutionMethod;
 import com.oracle.svm.hosted.code.CompileQueue.CompileFunction;
 import com.oracle.svm.hosted.code.CompileQueue.ParseFunction;
@@ -48,7 +49,6 @@ import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.phases.HostedGraphKit;
-import com.oracle.svm.hosted.thread.VMThreadFeature;
 
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.nodes.StructuredGraph;
@@ -120,7 +120,7 @@ public class JNICallTrampolineMethod extends CustomSubstitutionMethod {
             CallingConvention callingConvention = backend.getCodeCache().getRegisterConfig().getCallingConvention(
                             SubstrateCallingConventionKind.Native.toType(true), returnType, parameters.toArray(new JavaType[0]), backend);
             RegisterValue threadArg = (RegisterValue) callingConvention.getArgument(0); // JNIEnv
-            int threadIsolateOffset = ImageSingletons.lookup(VMThreadFeature.class).offsetOf(VMThreads.IsolateTL);
+            int threadIsolateOffset = ImageSingletons.lookup(VMThreadLocalOffsetProvider.class).offsetOf(VMThreads.IsolateTL);
             RegisterValue methodIdArg = (RegisterValue) callingConvention.getArgument(parameters.size() - 1);
 
             return backend.createJNITrampolineMethod(method, identifier, threadArg, threadIsolateOffset, methodIdArg, getFieldOffset(providers));

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,26 +38,30 @@ import static jdk.vm.ci.amd64.AMD64.CPUFeature.SSSE3;
 
 import java.util.EnumSet;
 
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+
+import com.oracle.svm.core.SubstrateTarget;
+
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.replacements.nodes.AESNode;
+import jdk.graal.compiler.replacements.nodes.Base64DecodeBlockNode;
+import jdk.graal.compiler.replacements.nodes.Base64EncodeBlockNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMulAddNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMultiplyToLenNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerSquareToLenNode;
 import jdk.graal.compiler.replacements.nodes.CipherBlockChainingAESNode;
 import jdk.graal.compiler.replacements.nodes.CounterModeAESNode;
+import jdk.graal.compiler.replacements.nodes.CRC32CUpdateBytesNode;
+import jdk.graal.compiler.replacements.nodes.CRC32UpdateBytesNode;
+import jdk.graal.compiler.replacements.nodes.ElectronicCodeBookAESNode;
 import jdk.graal.compiler.replacements.nodes.GHASHProcessBlocksNode;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA1Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA256Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA3Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA512Node;
-import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
-
-import com.oracle.svm.core.SubstrateTargetDescription;
-
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.Architecture;
@@ -89,8 +93,17 @@ public final class Stubs {
             if (CipherBlockChainingAESNode.class.equals(klass)) {
                 return CipherBlockChainingAESNode.minFeaturesAMD64();
             }
+            if (ElectronicCodeBookAESNode.class.equals(klass)) {
+                return ElectronicCodeBookAESNode.minFeaturesAMD64();
+            }
             if (GHASHProcessBlocksNode.class.equals(klass)) {
                 return GHASH_CPU_FEATURES_AMD64;
+            }
+            if (Base64EncodeBlockNode.class.equals(klass)) {
+                return Base64EncodeBlockNode.minFeaturesAMD64();
+            }
+            if (Base64DecodeBlockNode.class.equals(klass)) {
+                return Base64DecodeBlockNode.minFeaturesAMD64();
             }
             if (BigIntegerMultiplyToLenNode.class.equals(klass)) {
                 return BIGINTEGER_MULTIPLY_TO_LEN_CPU_FEATURES_AMD64;
@@ -112,6 +125,12 @@ public final class Stubs {
             }
             if (SHA512Node.class.equals(klass)) {
                 return SHA512Node.minFeaturesAMD64();
+            }
+            if (CRC32UpdateBytesNode.class.equals(klass)) {
+                return CRC32UpdateBytesNode.maxFeaturesAMD64();
+            }
+            if (CRC32CUpdateBytesNode.class.equals(klass)) {
+                return CRC32CUpdateBytesNode.maxFeaturesAMD64();
             }
             return RUNTIME_CHECKED_CPU_FEATURES_AMD64;
         }
@@ -146,12 +165,15 @@ public final class Stubs {
             if (SHA512Node.class.equals(klass)) {
                 return SHA512Node.minFeaturesAARCH64();
             }
+            if (CRC32CUpdateBytesNode.class.equals(klass)) {
+                return CRC32CUpdateBytesNode.minFeaturesAARCH64();
+            }
             return EMPTY_CPU_FEATURES_AARCH64;
         }
     }
 
     public static EnumSet<?> getRequiredCPUFeatures(Class<? extends ValueNode> klass) {
-        Architecture arch = ImageSingletons.lookup(SubstrateTargetDescription.class).arch;
+        Architecture arch = SubstrateTarget.getArchitecture();
         if (arch instanceof AMD64) {
             return AMD64Features.getRequiredCPUFeatures(klass);
         }

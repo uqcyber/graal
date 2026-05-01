@@ -28,6 +28,8 @@ import static com.oracle.svm.interpreter.metadata.Bytecodes.INVOKEDYNAMIC;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Function;
@@ -41,7 +43,7 @@ import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.core.reflect.target.Target_java_lang_reflect_AccessibleObject;
 import com.oracle.svm.espresso.classfile.ConstantPool;
 import com.oracle.svm.espresso.classfile.ParserConstantPool;
 import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
@@ -50,6 +52,8 @@ import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
 import com.oracle.svm.interpreter.metadata.serialization.VisibleForSerialization;
+import com.oracle.svm.shared.util.SubstrateUtil;
+import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaField;
@@ -71,6 +75,7 @@ import jdk.vm.ci.meta.UnresolvedJavaType;
  * instead for AOT types.
  */
 public class InterpreterConstantPool extends ConstantPool implements jdk.vm.ci.meta.ConstantPool {
+    protected static final Object NULL_DYNAMIC_CONSTANT_SENTINEL = new Object();
 
     final InterpreterResolvedObjectType holder;
     final ParserConstantPool parserConstantPool;
@@ -168,35 +173,36 @@ public class InterpreterConstantPool extends ConstantPool implements jdk.vm.ci.m
     }
 
     @Override
-    @SuppressWarnings("fallthrough")
     public Object lookupConstant(int cpi, boolean resolve) {
         final Tag tag = tagAt(cpi);
-        switch (tag) {
-            case INTEGER:
-                return JavaConstant.forInt(this.intAt(cpi));
-            case FLOAT:
-                return JavaConstant.forFloat(this.floatAt(cpi));
-            case LONG:
-                return JavaConstant.forLong(this.longAt(cpi));
-            case DOUBLE:
-                return JavaConstant.forDouble(this.doubleAt(cpi));
-            case STRING:
-                return SubstrateObjectConstant.forObject(resolvedAt(cpi, holder));
-            case CLASS:
-                return objAt(cpi);
-            case METHODHANDLE:
-            case METHODTYPE:
-            case DYNAMIC:
-                Object ret = queryConstantPool(cpi, resolve);
-                if (ret == null) {
-                    // TODO GR-70200: support DYNAMIC resolving to null ?
-                    return ret;
+        return switch (tag) {
+            case INTEGER -> JavaConstant.forInt(this.intAt(cpi));
+            case FLOAT -> JavaConstant.forFloat(this.floatAt(cpi));
+            case LONG -> JavaConstant.forLong(this.longAt(cpi));
+            case DOUBLE -> JavaConstant.forDouble(this.doubleAt(cpi));
+            case STRING -> SubstrateObjectConstant.forObject(resolvedAt(cpi, holder));
+            case CLASS -> objAt(cpi);
+            case METHODHANDLE, METHODTYPE -> SubstrateObjectConstant.forObject(queryConstantPool(cpi, resolve));
+            case DYNAMIC -> {
+                if (!resolve && objAt(cpi) == null) {
+                    yield null;
                 }
-                return SubstrateObjectConstant.forObject(ret);
-            default: {
-                throw VMError.shouldNotReachHere("Unknown tag " + tag);
+                Object ret = resolvedDynamicConstantAt(cpi, getHolder());
+                yield switch (CremaTypeAccess.symbolToJvmciKind(dynamicType(cpi))) {
+                    case Boolean -> JavaConstant.forBoolean((Boolean) ret);
+                    case Byte -> JavaConstant.forByte((Byte) ret);
+                    case Short -> JavaConstant.forShort((Short) ret);
+                    case Char -> JavaConstant.forChar((Character) ret);
+                    case Int -> JavaConstant.forInt((Integer) ret);
+                    case Float -> JavaConstant.forFloat((Float) ret);
+                    case Long -> JavaConstant.forLong((Long) ret);
+                    case Double -> JavaConstant.forDouble((Double) ret);
+                    case Object -> SubstrateObjectConstant.forObject(ret);
+                    default -> throw VMError.shouldNotReachHere("Unexpected dynamic constant type " + dynamicType(cpi));
+                };
             }
-        }
+            default -> throw VMError.shouldNotReachHere("Unknown tag " + tag);
+        };
     }
 
     private Object queryConstantPool(int cpi, boolean resolve) {
@@ -228,7 +234,7 @@ public class InterpreterConstantPool extends ConstantPool implements jdk.vm.ci.m
     }
 
     @Override
-    public RuntimeException classFormatError(String message) {
+    public final RuntimeException classFormatError(String message) {
         throw new ClassFormatError(message);
     }
 
@@ -348,6 +354,81 @@ public class InterpreterConstantPool extends ConstantPool implements jdk.vm.ci.m
         Object resolvedEntry = resolvedAt(cpi, accessingClass);
         assert resolvedEntry != null;
         return (MethodType) resolvedEntry;
+    }
+
+    /**
+     * This is stored in the constant pool when a "sticky" failure happens while resolving a DYNAMIC
+     * entry. It is used to throw the correct exception on subsequent accesses to that entry.
+     */
+    public static final class DynamicConstantError {
+        private final LinkageError originalException;
+        private Constructor<? extends LinkageError> cachedConstructor;
+
+        public DynamicConstantError(LinkageError originalException) {
+            this.originalException = originalException;
+        }
+
+        /**
+         * Throws an exception when a failed DYNAMIC entry is accessed again. It tries to create a
+         * fresh exception to give an accurate stack trace.
+         */
+        LinkageError throwOnAccess() {
+            if (originalException.getClass().getClassLoader() == null) {
+                /*
+                 * Create a fresh exception for boot class loader exceptions. We avoid doing this
+                 * for other exception types because we don't control their constructor, getMessage,
+                 * and getCause implementations. See JDK-8349141.
+                 */
+                String message = originalException.getMessage();
+                var constructor = getConstructor();
+                if (constructor != null) {
+                    try {
+                        LinkageError error = constructor.newInstance(message);
+                        Throwable cause = originalException.getCause();
+                        if (cause != null) {
+                            error.initCause(cause);
+                        }
+                        throw error;
+                    } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
+                        VMError.shouldNotReachHere(e);
+                    }
+                }
+            }
+            throw originalException;
+        }
+
+        private Constructor<? extends LinkageError> getConstructor() {
+            if (cachedConstructor == null) {
+                Class<? extends LinkageError> exceptionType = originalException.getClass();
+                try {
+                    cachedConstructor = exceptionType.getConstructor(String.class);
+                } catch (NoSuchMethodException e) {
+                    /*
+                     * The only boot classes known to miss the String constructor are native image's
+                     * Missing*RegistrationError.
+                     */
+                    assert exceptionType.getName().startsWith("Missing") && exceptionType.getName().endsWith("RegistrationError");
+                    return null;
+                }
+                /*
+                 * We don't need any access checks for this constructor. It's safe to mutate this
+                 * instance since reflection returned a fresh copy that we own.
+                 */
+                SubstrateUtil.cast(cachedConstructor, Target_java_lang_reflect_AccessibleObject.class).override = true;
+            }
+            return cachedConstructor;
+        }
+    }
+
+    public Object resolvedDynamicConstantAt(int cpi, InterpreterResolvedObjectType accessingClass) {
+        Object resolvedEntry = resolvedAt(cpi, accessingClass);
+        if (resolvedEntry instanceof DynamicConstantError savedError) {
+            throw savedError.throwOnAccess();
+        }
+        if (resolvedEntry == NULL_DYNAMIC_CONSTANT_SENTINEL) {
+            return null;
+        }
+        return resolvedEntry;
     }
 
     @Override

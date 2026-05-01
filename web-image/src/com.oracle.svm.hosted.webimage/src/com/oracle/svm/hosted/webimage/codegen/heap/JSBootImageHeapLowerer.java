@@ -433,7 +433,7 @@ public class JSBootImageHeapLowerer {
             boolean emitBase64ByteArray = false;
 
             // Determine whether we should use a base64 representation for this array
-            if (WebImageOptions.EncodeImageHeapArraysBase64.getValue(HostedOptionValues.singleton())) {
+            if (WebImageOptions.EncodeImageHeapArraysBase64.getValue(HostedOptionValues.singleton().get())) {
                 int numBytes = len * bits / 8;
                 // Number of bytes this array uses in base64
                 float numBytesB64 = numBytes * 4.0f / 3;

@@ -57,8 +57,8 @@ import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.test.GCUtils;
 import com.oracle.truffle.api.test.OSUtils;
-import com.oracle.truffle.api.test.ReflectionUtils;
 import com.oracle.truffle.api.test.SubprocessTestUtils;
+import com.oracle.truffle.api.test.TestAPIAccessor;
 import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
 import com.oracle.truffle.api.test.common.TestUtils;
 import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
@@ -116,16 +116,6 @@ public class PolyglotGCTest {
 
     private static final AtomicBoolean languageInnerContextDisposed = new AtomicBoolean();
     private static final boolean CONCURRENT_GC_LOAD = Boolean.getBoolean(PolyglotGCTest.class.getSimpleName() + ".ConcurrentGCLoad");
-    private static final Class<?> ENTERPRISE_POLYGLOT_CLASS;
-    static {
-        Class<?> clz;
-        try {
-            clz = Class.forName("com.oracle.truffle.polyglot.enterprise.EnterprisePolyglotImpl");
-        } catch (ClassNotFoundException cnf) {
-            clz = null;
-        }
-        ENTERPRISE_POLYGLOT_CLASS = clz;
-    }
 
     private static volatile Thread gcLoadThread;
 
@@ -971,8 +961,7 @@ public class PolyglotGCTest {
 
     static Isolate<?> getEnginesIsolate(Engine engine) {
         if (TruffleTestAssumptions.isIsolateEncapsulation()) {
-            assertNotNull(ENTERPRISE_POLYGLOT_CLASS.getSimpleName() + " must be on classpath/module-path", ENTERPRISE_POLYGLOT_CLASS);
-            return (Isolate<?>) ReflectionUtils.invokeStatic(ENTERPRISE_POLYGLOT_CLASS, "getIsolate", new Class<?>[]{Object.class}, engine);
+            return (Isolate<?>) TestAPIAccessor.ISOLATE.getIsolate(engine);
         }
         return null;
     }

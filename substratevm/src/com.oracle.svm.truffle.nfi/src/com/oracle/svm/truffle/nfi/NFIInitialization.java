@@ -32,8 +32,8 @@ import org.graalvm.nativeimage.Platform.DARWIN;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.nativeimage.impl.InternalPlatform.WINDOWS_BASE;
 
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.truffle.nfi.NativeAPI.NativeTruffleContext;
 import com.oracle.svm.truffle.nfi.NativeAPI.NativeTruffleEnv;
 import com.oracle.svm.truffle.nfi.libffi.LibFFI.ffi_type;

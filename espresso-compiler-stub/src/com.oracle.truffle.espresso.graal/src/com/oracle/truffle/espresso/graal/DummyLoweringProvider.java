@@ -82,7 +82,11 @@ public final class DummyLoweringProvider implements LoweringProvider {
 
     @Override
     public boolean supportsImplicitNullChecks() {
-        throw GraalError.unimplementedOverride();
+        SuspiciousHostAccessCollector.onSuspiciousHostAccess();
+        /*
+         * Used at least by SchedulePhase.run in EffectsPhase.runAnalysis.
+         */
+        return false;
     }
 
     @Override

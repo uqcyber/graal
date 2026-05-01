@@ -24,12 +24,12 @@
  */
 package com.oracle.svm.core;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.Uninterruptible;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.shared.util.VMError;
 
@@ -460,7 +460,7 @@ public final class JavaMemoryUtil {
      * copying between arrays, it is up to the caller to ensure that the arrays are compatible).
      */
     public static void copyReferencesForward(Object from, UnsignedWord fromOffset, Object to, UnsignedWord toOffset, UnsignedWord length) {
-        int elementSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int elementSize = ObjectLayout.singleton().getReferenceSize();
         UnsignedWord size = length.multiply(elementSize);
         UnsignedWord copied = Word.zero();
         while (copied.belowThan(size)) {
@@ -475,7 +475,7 @@ public final class JavaMemoryUtil {
      * copying between arrays, it is up to the caller to ensure that the arrays are compatible).
      */
     public static void copyReferencesBackward(Object from, UnsignedWord fromOffset, Object to, UnsignedWord toOffset, UnsignedWord length) {
-        int elementSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int elementSize = ObjectLayout.singleton().getReferenceSize();
         UnsignedWord remaining = length.multiply(elementSize);
         while (remaining.aboveThan(0)) {
             remaining = remaining.subtract(elementSize);

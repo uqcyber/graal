@@ -37,7 +37,7 @@ import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.hub.ClassForNameSupport;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.shared.option.APIOption;
 import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
@@ -119,7 +119,7 @@ public class FutureDefaultsOptions {
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, AccumulatingLocatableMultiOptionValue.Strings oldValue, AccumulatingLocatableMultiOptionValue.Strings newValue) {
             super.onValueUpdate(values, oldValue, newValue);
             if (computeFutureDefaults(newValue.getValuesWithOrigins()).contains(CLASS_FOR_NAME_RESPECTS_CLASS_LOADER)) {
-                ClassForNameSupport.Options.ClassForNameRespectsClassLoader.update(values, true);
+                ClassRegistries.Options.ClassForNameRespectsClassLoader.update(values, true);
             }
         }
     };

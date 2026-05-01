@@ -50,12 +50,32 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class TruffleAPIFeature implements Feature {
+
+    private static final String[] OPTIONAL_ENTERPRISE_FEATURES = new String[]{
+                    "com.oracle.svm.enterprise.truffle.EnterpriseTruffleFeature",
+    };
 
     @Override
     public String getURL() {
         return "https://github.com/oracle/graal/tree/master/truffle/src/com.oracle.truffle.api/src/com/oracle/truffle/api/impl/TruffleAPIFeature.java";
+    }
+
+    @SuppressWarnings({"unchecked", "cast"})
+    @Override
+    public List<Class<? extends Feature>> getRequiredFeatures() {
+        List<Class<? extends Feature>> features = new ArrayList<>();
+        for (String feature : OPTIONAL_ENTERPRISE_FEATURES) {
+            try {
+                features.add((Class<Feature>) Class.forName(feature));
+            } catch (ReflectiveOperationException e) {
+                // Community GraalVM
+            }
+        }
+        return (List<Class<? extends Feature>>) features;
     }
 
     @Override
@@ -73,6 +93,11 @@ public final class TruffleAPIFeature implements Feature {
             out.printf("[%s] %s", getClass().getName(), result);
             throw new IllegalStateException(result);
         }
+    }
+
+    @Override
+    public void beforeAnalysis(BeforeAnalysisAccess access) {
+        DefaultRuntimeAccessor.ENGINE.collectNativeImagePresetOptions();
     }
 
     private static String doVersionCheck() {

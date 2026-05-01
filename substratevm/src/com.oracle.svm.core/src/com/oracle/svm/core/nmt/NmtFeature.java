@@ -29,16 +29,20 @@ package com.oracle.svm.core.nmt;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.VMInspectionOptions;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.RuntimeSupport;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
+import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 
 @AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = SingleLayer.class)
 public class NmtFeature implements InternalFeature {
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return VMInspectionOptions.hasNativeMemoryTrackingSupport();
+        return VMInspectionOptions.hasNativeMemoryTrackingSupport() && ImageLayerBuildingSupport.firstImageBuild();
     }
 
     @Override
@@ -48,9 +52,7 @@ public class NmtFeature implements InternalFeature {
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
-        if (ImageLayerBuildingSupport.firstImageBuild()) {
-            RuntimeSupport.getRuntimeSupport().addInitializationHook(NativeMemoryTracking.initializationHook());
-            RuntimeSupport.getRuntimeSupport().addShutdownHook(NativeMemoryTracking.shutdownHook());
-        }
+        RuntimeSupport.getRuntimeSupport().addInitializationHook(NativeMemoryTracking.initializationHook());
+        RuntimeSupport.getRuntimeSupport().addShutdownHook(NativeMemoryTracking.shutdownHook());
     }
 }

@@ -24,23 +24,25 @@
  */
 package com.oracle.svm.core.windows;
 
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CCharPointerPointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
 
-import com.oracle.svm.guest.staging.Uninterruptible;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.headers.LibCSupport;
+import com.oracle.svm.core.windows.headers.WindowsLibC;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-import com.oracle.svm.core.windows.headers.WindowsLibC;
 
-@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, other = Disallowed.class)
 @AutomaticallyRegisteredImageSingleton(LibCSupport.class)
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = SingleLayer.class, other = Disallowed.class)
 class WindowsLibCSupport implements LibCSupport {
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
@@ -124,6 +126,12 @@ class WindowsLibCSupport implements LibCSupport {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public int strcmp(CCharPointer s1, CCharPointer s2) {
         return WindowsLibC.strcmp(s1, s2);
+    }
+
+    @Override
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public int strncmp(CCharPointer s1, CCharPointer s2, UnsignedWord n) {
+        return WindowsLibC.strncmp(s1, s2, n);
     }
 
     @Override

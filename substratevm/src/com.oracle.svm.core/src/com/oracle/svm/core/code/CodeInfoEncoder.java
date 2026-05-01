@@ -43,18 +43,17 @@ import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.CalleeSavedRegisters;
 import com.oracle.svm.core.ReservedRegisters;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
 import com.oracle.svm.core.code.FrameInfoDecoder.ConstantAccess;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueInfo;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueType;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.deopt.DeoptEntryInfopoint;
 import com.oracle.svm.core.deopt.DeoptimizationSupport;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.heap.CodeReferenceMapDecoder;
 import com.oracle.svm.core.heap.CodeReferenceMapEncoder;
@@ -73,11 +72,13 @@ import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.util.ByteArrayReader;
 import com.oracle.svm.core.util.Counter;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.ImageSingletonLoader;
 import com.oracle.svm.shared.singletons.ImageSingletonWriter;
 import com.oracle.svm.shared.singletons.LayeredPersistFlags;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
@@ -116,6 +117,7 @@ public class CodeInfoEncoder {
         public static final HostedOptionKey<Boolean> CodeInfoEncoderCounters = new HostedOptionKey<>(false);
     }
 
+    @SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class)
     public static class Counters {
         public final Counter.Group group = new Counter.Group(Options.CodeInfoEncoderCounters, "CodeInfoEncoder");
         final Counter methodCount = new Counter(group, "Number of methods", "Number of methods encoded");
@@ -815,7 +817,7 @@ class CodeInfoVerifier {
         }
         visitedVirtualObjects.set(expectedObject.getId());
 
-        ObjectLayout objectLayout = ConfigurationValues.getObjectLayout();
+        ObjectLayout objectLayout = ObjectLayout.singleton();
         SharedType expectedType = (SharedType) expectedObject.getType();
 
         // TODO assertion does not hold for now because expectedHub is java.lang.Class, but
@@ -878,14 +880,14 @@ class CodeInfoVerifier {
 
     private ValueInfo findActualArrayElement(ValueInfo[] actualObject, UnsignedWord expectedOffset) {
         DynamicHub hub = (DynamicHub) constantAccess.asObject(actualObject[0].getValue());
-        ObjectLayout objectLayout = ConfigurationValues.getObjectLayout();
+        ObjectLayout objectLayout = ObjectLayout.singleton();
         assert LayoutEncoding.isArray(hub.getLayoutEncoding()) : hub;
         return findActualValue(actualObject, expectedOffset, objectLayout, LayoutEncoding.getArrayBaseOffset(hub.getLayoutEncoding()), 2);
     }
 
     private ValueInfo findActualField(ValueInfo[] actualObject, UnsignedWord expectedOffset) {
         DynamicHub hub = (DynamicHub) constantAccess.asObject(actualObject[0].getValue());
-        ObjectLayout objectLayout = ConfigurationValues.getObjectLayout();
+        ObjectLayout objectLayout = ObjectLayout.singleton();
         assert LayoutEncoding.isPureInstance(hub.getLayoutEncoding()) : hub;
         return findActualValue(actualObject, expectedOffset, objectLayout, Word.unsigned(objectLayout.getFirstFieldOffset()), 1);
     }
@@ -909,6 +911,7 @@ class CodeInfoVerifier {
         illegal.type = ValueType.Illegal;
         return illegal;
     }
+
 }
 
 @AutomaticallyRegisteredImageSingleton(onlyWith = BuildingImageLayerPredicate.class)

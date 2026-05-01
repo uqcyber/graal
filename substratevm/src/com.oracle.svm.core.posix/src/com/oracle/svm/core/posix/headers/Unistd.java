@@ -145,5 +145,8 @@ public class Unistd {
 
         @CFunction(transition = Transition.NO_TRANSITION)
         public static native int fsync(int fd);
+
+        @CFunction(transition = Transition.NO_TRANSITION)
+        public static native SignedWord pread(int fd, PointerBase buf, UnsignedWord nbytes, SignedWord offset);
     }
 }

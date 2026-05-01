@@ -35,7 +35,7 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.container.Container;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.PhysicalMemory;
 import com.oracle.svm.core.heap.PhysicalMemory.PhysicalMemorySupport;

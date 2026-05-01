@@ -35,7 +35,7 @@ import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.WordBase;
 
 import com.oracle.svm.core.BuildPhaseProvider.ReadyForCompilation;
-import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.thread.LoadVMThreadLocalNode;
 import com.oracle.svm.core.graal.thread.StoreVMThreadLocalNode;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
@@ -118,7 +118,7 @@ public class VMThreadLocalInfo {
         } else if (threadLocalClass == FastThreadLocalLong.class) {
             storageKind = JavaKind.Long;
         } else if (threadLocalClass == FastThreadLocalWord.class) {
-            storageKind = ConfigurationValues.getWordKind();
+            storageKind = SubstrateTarget.getWordKind();
         } else if (threadLocalClass == FastThreadLocalObject.class) {
             storageKind = JavaKind.Object;
         } else if (threadLocalClass == FastThreadLocalBytes.class) {

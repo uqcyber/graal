@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -68,12 +68,11 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
     @Def({OperandFlag.REG}) protected Value resultValue;
     @Alive({OperandFlag.REG}) protected Value arrayAValue;
     @Alive({OperandFlag.REG}) protected Value arrayBValue;
-    @Use({OperandFlag.REG}) protected Value lengthAValue;
-    @Use({OperandFlag.REG}) protected Value lengthBValue;
-    @Temp({OperandFlag.REG}) protected Value lengthAValueTemp;
-    @Temp({OperandFlag.REG}) protected Value lengthBValueTemp;
+    @UseKill({OperandFlag.REG}) protected Value lengthAValue;
+    @UseKill({OperandFlag.REG}) protected Value lengthBValue;
     @Temp({OperandFlag.REG}) protected Value temp1;
     @Temp({OperandFlag.REG}) protected Value temp2;
+    @Temp({OperandFlag.REG}) protected Value lengthDiffTemp;
 
     @Temp({OperandFlag.REG, OperandFlag.ILLEGAL}) protected Value vectorTemp1;
     @Temp({OperandFlag.REG, OperandFlag.ILLEGAL}) protected Value maskRegister;
@@ -93,16 +92,13 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
         this.resultValue = result;
         this.arrayAValue = arrayA;
         this.arrayBValue = arrayB;
-        /*
-         * The length values are inputs but are also killed like temporaries so need both Use and
-         * Temp annotations, which will only work with fixed registers.
-         */
-        this.lengthAValue = lengthAValueTemp = lengthA;
-        this.lengthBValue = lengthBValueTemp = lengthB;
+        this.lengthAValue = lengthA;
+        this.lengthBValue = lengthB;
 
         // Allocate some temporaries.
         this.temp1 = tool.newVariable(LIRKind.unknownReference(tool.target().arch.getWordKind()));
         this.temp2 = tool.newVariable(LIRKind.unknownReference(tool.target().arch.getWordKind()));
+        this.lengthDiffTemp = tool.newVariable(lengthA.getValueKind());
 
         // We only need the vector temporaries if we generate SSE code.
         if (supports(tool.target(), runtimeCheckedCPUFeatures, CPUFeature.SSE4_2)) {
@@ -136,6 +132,7 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
         Register result = asRegister(resultValue);
         Register str1 = asRegister(temp1);
         Register str2 = asRegister(temp2);
+        Register lengthDiff = asRegister(lengthDiffTemp);
 
         // Load array base addresses.
         masm.movq(str1, asRegister(arrayAValue));
@@ -144,7 +141,6 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
         Register cnt2 = asRegister(lengthBValue);
 
         Label labelLengthDiff = new Label();
-        Label labelPop = new Label();
         Label labelDone = new Label();
         Label labelWhileHead = new Label();
         Label labelCompareWideVectorsLoopFailed = new Label(); // used only _LP64 && AVX3
@@ -168,7 +164,7 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
         // Do the conditional move stuff
         masm.movl(result, cnt1);
         masm.subl(cnt1, cnt2);
-        masm.push(cnt1);
+        masm.movl(lengthDiff, cnt1);
         masm.cmovl(ConditionFlag.LessEqual, cnt2, result);    // cnt2 = min(cnt1, cnt2)
 
         // Is the minimum length zero?
@@ -186,7 +182,7 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
             masm.movzbl(result, new AMD64Address(str1, 0));
             masm.movzwl(cnt1, new AMD64Address(str2, 0));
         }
-        masm.sublAndJcc(result, cnt1, ConditionFlag.NotZero, labelPop, false);
+        masm.sublAndJcc(result, cnt1, ConditionFlag.NotZero, labelDone, false);
 
         if (strideA == Stride.S2 && strideB == Stride.S2) {
             // Divide length by 2 to get number of chars
@@ -249,7 +245,7 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
             masm.bind(labelCompareIndexChar); // cnt1 has the offset of the mismatching character
             loadNextElements(masm, result, cnt2, str1, str2, maxStride, scale1, scale2, cnt1);
             masm.subl(result, cnt2);
-            masm.jmp(labelPop);
+            masm.jmp(labelDone);
 
             // Setup the registers to start vector comparison loop
             masm.bind(labelCompareWideVectors);
@@ -423,7 +419,7 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
             masm.addq(cnt1, result);
             loadNextElements(masm, result, cnt2, str1, str2, maxStride, scale1, scale2, cnt1);
             masm.subl(result, cnt2);
-            masm.jmpb(labelPop);
+            masm.jmpb(labelDone);
 
             masm.bind(labelCompareTail); // limit is zero
             masm.movl(cnt2, result);
@@ -444,12 +440,12 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
         // Compare the rest of the elements
         masm.bind(labelWhileHead);
         loadNextElements(masm, result, cnt1, str1, str2, maxStride, scale1, scale2, cnt2);
-        masm.sublAndJcc(result, cnt1, ConditionFlag.NotZero, labelPop, true);
+        masm.sublAndJcc(result, cnt1, ConditionFlag.NotZero, labelDone, true);
         masm.incqAndJcc(cnt2, ConditionFlag.NotZero, labelWhileHead, true);
 
         // Strings are equal up to min length. Return the length difference.
         masm.bind(labelLengthDiff);
-        masm.pop(result);
+        masm.movl(result, lengthDiff);
         if (strideA == Stride.S2 && strideB == Stride.S2) {
             // Divide diff by 2 to get number of chars
             masm.sarl(result, 1);
@@ -479,12 +475,7 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
                 masm.movzbl(result, new AMD64Address(str1, result, scale1));
             }
             masm.subl(result, cnt1);
-            masm.jmpb(labelPop);
         }
-
-        // Discard the stored length difference
-        masm.bind(labelPop);
-        masm.pop(cnt1);
 
         // That's it
         masm.bind(labelDone);
@@ -519,10 +510,5 @@ public final class AMD64ArrayCompareToOp extends AMD64ComplexVectorOp {
         } else {
             masm.pcmpestri(vec, address, imm8);
         }
-    }
-
-    @Override
-    public boolean modifiesStackPointer() {
-        return true;
     }
 }

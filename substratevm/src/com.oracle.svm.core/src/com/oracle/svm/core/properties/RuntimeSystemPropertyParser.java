@@ -29,6 +29,7 @@ import java.util.Arrays;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.MapCursor;
 
+import com.oracle.svm.core.jdk.RuntimeBootModuleLayerSupport;
 import com.oracle.svm.core.jdk.SystemPropertiesSupport;
 
 public final class RuntimeSystemPropertyParser {
@@ -44,13 +45,20 @@ public final class RuntimeSystemPropertyParser {
     public static String[] parse(String[] args, String graalOptionPrefix, String legacyGraalOptionPrefix) {
         int newIdx = 0;
         EconomicMap<String, String> properties = EconomicMap.create();
-        for (int oldIdx = 0; oldIdx < args.length; oldIdx++) {
+        int oldIdx = 0;
+        while (oldIdx < args.length) {
+            int consumed = parseModuleOption(args, oldIdx, properties);
+            if (consumed > 0) {
+                oldIdx += consumed;
+                continue;
+            }
             String arg = args[oldIdx];
             if (!parseProperty(arg, properties, graalOptionPrefix, legacyGraalOptionPrefix)) {
                 assert newIdx <= oldIdx;
                 args[newIdx] = arg;
                 newIdx++;
             }
+            oldIdx++;
         }
         MapCursor<String, String> cursor = properties.getEntries();
         while (cursor.advance()) {
@@ -82,5 +90,38 @@ public final class RuntimeSystemPropertyParser {
         String value = property.substring(splitIndex + 1);
         parsedProperties.put(key, value);
         return true;
+    }
+
+    private static int parseModuleOption(String[] args, int index, EconomicMap<String, String> properties) {
+        String arg = args[index];
+        // The JVM only sees the long "=" forms after launcher/libjli normalization.
+        if (arg.startsWith(RuntimeBootModuleLayerSupport.MODULE_PATH_OPTION + "=")) {
+            properties.put(RuntimeBootModuleLayerSupport.MODULE_PATH_PROPERTY, arg.substring(RuntimeBootModuleLayerSupport.MODULE_PATH_OPTION.length() + 1));
+            return 1;
+        }
+        if (arg.startsWith(RuntimeBootModuleLayerSupport.ADD_MODULES_OPTION + "=")) {
+            addNumberedProperty(RuntimeBootModuleLayerSupport.ADD_MODULES_PROPERTY_PREFIX,
+                            arg.substring(RuntimeBootModuleLayerSupport.ADD_MODULES_OPTION.length() + 1), properties);
+            return 1;
+        }
+        if (arg.startsWith(RuntimeBootModuleLayerSupport.ADD_EXPORTS_OPTION + "=")) {
+            addNumberedProperty(RuntimeBootModuleLayerSupport.ADD_EXPORTS_PROPERTY_PREFIX,
+                            arg.substring(RuntimeBootModuleLayerSupport.ADD_EXPORTS_OPTION.length() + 1), properties);
+            return 1;
+        }
+        if (arg.startsWith(RuntimeBootModuleLayerSupport.ADD_OPENS_OPTION + "=")) {
+            addNumberedProperty(RuntimeBootModuleLayerSupport.ADD_OPENS_PROPERTY_PREFIX,
+                            arg.substring(RuntimeBootModuleLayerSupport.ADD_OPENS_OPTION.length() + 1), properties);
+            return 1;
+        }
+        return 0;
+    }
+
+    private static void addNumberedProperty(String prefix, String value, EconomicMap<String, String> properties) {
+        int index = 0;
+        while (properties.containsKey(prefix + index)) {
+            index++;
+        }
+        properties.put(prefix + index, value);
     }
 }

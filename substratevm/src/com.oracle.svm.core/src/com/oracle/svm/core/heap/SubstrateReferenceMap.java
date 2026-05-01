@@ -30,13 +30,13 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 
+import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
 import org.graalvm.nativeimage.ImageInfo;
 
 import com.oracle.svm.core.FrameAccess;
-import com.oracle.svm.core.config.ConfigurationValues;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.vm.ci.code.ReferenceMap;
@@ -64,7 +64,7 @@ public class SubstrateReferenceMap extends ReferenceMap implements ReferenceMapE
     private Map<Integer, Object> debugAllUsedStackSlots;
 
     public SubstrateReferenceMap() {
-        assert !ImageInfo.inImageCode() || ConfigurationValues.getObjectLayout().getReferenceSize() > 2 : "needs to be three bits or more for encoding and validation";
+        assert !ImageInfo.inImageCode() || ObjectLayout.singleton().getReferenceSize() > 2 : "needs to be three bits or more for encoding and validation";
     }
 
     public boolean isOffsetMarked(int offset) {
@@ -122,7 +122,7 @@ public class SubstrateReferenceMap extends ReferenceMap implements ReferenceMapE
 
     private boolean isValidToMark(int offset, boolean isCompressed) {
         int uncompressedSize = FrameAccess.uncompressedReferenceSize();
-        int compressedSize = ConfigurationValues.getObjectLayout().getReferenceSize();
+        int compressedSize = ObjectLayout.singleton().getReferenceSize();
 
         int previousShiftedOffset = shiftedOffsets.previousSetBit(offset - 1 + shift);
         if (previousShiftedOffset != -1) {

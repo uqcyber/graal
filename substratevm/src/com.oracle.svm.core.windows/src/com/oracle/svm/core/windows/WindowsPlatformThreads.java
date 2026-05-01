@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.windows;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.Platform.HOSTED_ONLY;
 import org.graalvm.nativeimage.Platforms;
@@ -37,27 +37,28 @@ import org.graalvm.word.PointerBase;
 import org.graalvm.word.WordBase;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.Parker;
 import com.oracle.svm.core.thread.Parker.ParkerFactory;
 import com.oracle.svm.core.thread.PlatformThreads;
 import com.oracle.svm.core.thread.VMThreads.OSThreadHandle;
+import com.oracle.svm.core.util.TimeUtils;
+import com.oracle.svm.core.windows.headers.Process;
+import com.oracle.svm.core.windows.headers.SynchAPI;
+import com.oracle.svm.core.windows.headers.WinBase;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
-import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.core.windows.headers.Process;
-import com.oracle.svm.core.windows.headers.SynchAPI;
-import com.oracle.svm.core.windows.headers.WinBase;
-import com.oracle.svm.guest.staging.Uninterruptible;
 
 import jdk.graal.compiler.core.common.NumUtil;
 
 @AutomaticallyRegisteredImageSingleton(PlatformThreads.class)
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public final class WindowsPlatformThreads extends PlatformThreads {
     @Platforms(HOSTED_ONLY.class)
     WindowsPlatformThreads() {
@@ -284,8 +285,8 @@ class WindowsParker extends Parker {
     }
 }
 
-@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 @AutomaticallyRegisteredImageSingleton(ParkerFactory.class)
+@SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 class WindowsParkerFactory implements ParkerFactory {
     @Override
     public Parker acquire() {

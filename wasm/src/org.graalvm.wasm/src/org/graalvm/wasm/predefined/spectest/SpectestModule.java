@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -57,7 +57,7 @@ public class SpectestModule extends BuiltinModule {
 
     @Override
     protected WasmModule createModule(WasmLanguage language, WasmContext context, String name) {
-        WasmModule module = WasmModule.createBuiltin(name);
+        WasmModule module = WasmModule.createBuiltin(language, name);
         defineFunction(context, module, "print", types(), types(), new PrintNode(language, module));
         defineFunction(context, module, "print_i32", types(I32_TYPE), types(), new PrintNode(language, module));
         defineFunction(context, module, "print_i64", types(I64_TYPE), types(), new PrintNode(language, module));

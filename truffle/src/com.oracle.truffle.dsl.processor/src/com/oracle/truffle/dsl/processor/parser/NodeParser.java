@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -4333,24 +4333,26 @@ public final class NodeParser extends AbstractParser<NodeData> {
                 return null;
             }
 
-            Map<String, ExecutableElement> inlineSignatureCache = context.getInlineSignatureCache();
-            String id = ElementUtils.getUniqueIdentifier(parameterType.asType());
-            ExecutableElement cachedInline;
-            if (inlineSignatureCache.containsKey(id)) {
-                cachedInline = inlineSignatureCache.get(id);
-            } else {
-                NodeData inlinedNode = lookupNodeData(node, type, errorTarget);
-                if (inlinedNode != null && inlinedNode.isGenerateInline()) {
-                    CodeExecutableElement method = NodeFactoryFactory.createInlineMethod(inlinedNode, null);
-                    method.setEnclosingElement(NodeCodeGenerator.nodeElement(inlinedNode));
-                    cachedInline = method;
+            if (inlineMethod == null) {
+                Map<String, ExecutableElement> inlineSignatureCache = context.getInlineSignatureCache();
+                String id = ElementUtils.getUniqueIdentifier(parameterType.asType());
+                ExecutableElement cachedInline;
+                if (inlineSignatureCache.containsKey(id)) {
+                    cachedInline = inlineSignatureCache.get(id);
                 } else {
-                    cachedInline = null;
+                    NodeData inlinedNode = lookupNodeData(node, type, errorTarget);
+                    if (inlinedNode != null && inlinedNode.isGenerateInline()) {
+                        CodeExecutableElement method = NodeFactoryFactory.createInlineMethod(inlinedNode, null);
+                        method.setEnclosingElement(NodeCodeGenerator.nodeElement(inlinedNode));
+                        cachedInline = method;
+                    } else {
+                        cachedInline = null;
+                    }
+                    inlineSignatureCache.put(id, cachedInline);
                 }
-                inlineSignatureCache.put(id, cachedInline);
-            }
-            if (cachedInline != null) {
-                inlineMethod = cachedInline;
+                if (cachedInline != null) {
+                    inlineMethod = cachedInline;
+                }
             }
         }
         return inlineMethod;
@@ -4361,8 +4363,7 @@ public final class NodeParser extends AbstractParser<NodeData> {
         if (parameterType == null) {
             return false;
         }
-        ExecutableElement createMethod = ElementUtils.findStaticMethod(parameterType, "create");
-        if (createMethod != null) {
+        if (ElementUtils.hasStaticMethod(parameterType, "create")) {
             return true;
         }
         AnnotationMirror annotation = findGenerateAnnotation(parameterType.asType(), ProcessorContext.getInstance().getTypes().GenerateCached);

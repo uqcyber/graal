@@ -26,7 +26,7 @@ package com.oracle.svm.hosted.jni;
 
 import com.oracle.graal.pointsto.infrastructure.ResolvedSignature;
 import com.oracle.graal.pointsto.meta.HostedProviders;
-import com.oracle.svm.core.c.function.CEntryPointSetup.LeaveEpilogue;
+import com.oracle.svm.guest.staging.c.function.CEntryPointSetup.LeaveEpilogue;
 import com.oracle.svm.core.jni.JNIGeneratedMethodSupport;
 import com.oracle.svm.core.jni.access.JNIAccessibleMethod;
 import com.oracle.svm.core.jni.access.JNIReflectionDictionary;

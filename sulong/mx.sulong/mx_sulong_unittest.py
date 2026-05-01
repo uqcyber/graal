@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016, 2024, Oracle and/or its affiliates.
+# Copyright (c) 2016, 2026, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -54,13 +54,13 @@ _sulong_test_configs = {}
 
 def register_sulong_test_config(cfg):
     name = cfg.name
-    assert not name in _sulong_test_configs, 'duplicate sulong test config'
+    assert name not in _sulong_test_configs, 'duplicate sulong test config'
     _sulong_test_configs[name] = cfg
 
 
 class NativeSulongTestConfig(SulongTestConfig):
     def __init__(self, name):
-        super(NativeSulongTestConfig, self).__init__(name=name,
+        super().__init__(name=name,
                                                      sulongHome="SULONG_HOME",
                                                      configRoot=os.path.join(_suite.dir, "tests", "configs"),
                                                      runtimeDeps=["SULONG_NATIVE"],
@@ -126,10 +126,10 @@ class SulongUnittestConfigBase(mx_unittest.MxUnittestConfig):
 # unittest config for Sulong tests that depend only on the embedders API
 class SulongUnittestConfig(SulongUnittestConfigBase):
     def __init__(self):
-        super(SulongUnittestConfig, self).__init__(name="sulong")
+        super().__init__(name="sulong")
 
     def apply(self, config, **kwArgs):
-        (vmArgs, mainClass, mainClassArgs) = super(SulongUnittestConfig, self).apply(config, **kwArgs)
+        (vmArgs, mainClass, mainClassArgs) = super().apply(config, **kwArgs)
         newVmArgs = []
         i = 0
         while i < len(vmArgs):
@@ -151,10 +151,10 @@ class SulongUnittestConfig(SulongUnittestConfigBase):
 # unittest config for Sulong tests that depend on sulong internals
 class SulongInternalUnittestConfig(SulongUnittestConfigBase):
     def __init__(self):
-        super(SulongInternalUnittestConfig, self).__init__(name="sulong-internal")
+        super().__init__(name="sulong-internal")
 
     def apply(self, config, **kwArgs):
-        (vmArgs, mainClass, mainClassArgs) = super(SulongInternalUnittestConfig, self).apply(config, **kwArgs)
+        (vmArgs, mainClass, mainClassArgs) = super().apply(config, **kwArgs)
         mainClassArgs.extend(['-JUnitOpenPackages', 'org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED'])  # for TruffleRunner
         mainClassArgs.extend(['-JUnitOpenPackages', 'org.graalvm.llvm_community/*=ALL-UNNAMED'])  # for Sulong internals
         return (vmArgs, mainClass, mainClassArgs)
@@ -168,7 +168,7 @@ class SelectSulongConfigAction(argparse.Action):
     def __init__(self, **kwargs):
         kwargs['required'] = False
         SulongUnittestConfigBase.sulongConfig = _sulong_test_configs["Native"]
-        super(SelectSulongConfigAction, self).__init__(**kwargs)
+        super().__init__(**kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
         if values in _sulong_test_configs:
@@ -181,7 +181,7 @@ class SulongResourceConfigAction(argparse.Action):
         kwargs['required'] = False
         kwargs['nargs'] = 0
         SulongUnittestConfigBase.useResources = False
-        super(SulongResourceConfigAction, self).__init__(**kwargs)
+        super().__init__(**kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
         SulongUnittestConfigBase.useResources = True
@@ -199,7 +199,7 @@ def get_vm_args_for_native():
 class _LLVMNFITestConfig(mx_truffle.NFITestConfig):
 
     def __init__(self):
-        super(_LLVMNFITestConfig, self).__init__('llvm', ['SULONG_NFI', 'SULONG_NATIVE'])
+        super().__init__('llvm', ['SULONG_NFI', 'SULONG_NATIVE'])
 
     def vm_args(self):
         testPath = mx.distribution('SULONG_NFI_TESTS').output

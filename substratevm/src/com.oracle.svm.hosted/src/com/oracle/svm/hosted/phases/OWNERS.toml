@@ -1,6 +1,5 @@
 [[rule]]
-files = "*"
+files = ["CInterfaceEnumTool.java", "CInterfaceInvocationPlugin.java"]
 all = [
-    "peter.hofer@oracle.com",
     "christian.haeubl@oracle.com",
 ]

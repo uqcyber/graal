@@ -31,16 +31,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.c.CGlobalDataImpl;
+import org.graalvm.collections.EconomicSet;
+import org.graalvm.collections.UnmodifiableEconomicSet;
+
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.guest.staging.c.CGlobalData;
+import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
+import com.oracle.svm.guest.staging.c.CGlobalDataImpl;
 import com.oracle.svm.hosted.imagelayer.CodeLocation;
 import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
 import com.oracle.svm.hosted.imagelayer.SharedLayerSnapshotCapnProtoSchemaHolder;
-import org.graalvm.collections.EconomicSet;
-import org.graalvm.collections.UnmodifiableEconomicSet;
+import com.oracle.svm.shared.util.VMError;
 
 /**
  * Discovers and links CGlobals that were also installed in a prior layer. This is needed to ensure

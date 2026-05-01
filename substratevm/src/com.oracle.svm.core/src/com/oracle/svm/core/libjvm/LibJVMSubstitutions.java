@@ -62,7 +62,7 @@ class LibJVMSubstitutions {
                 return null;
             }
 
-            LibJVMMainMethodWrappers.singleton().setValidMainClass(mainMethod.getDeclaringClass());
+            LibJVMMainMethodWrappers.singleton().setValidMainMethod(mainMethod);
             return mainMethod;
         }
 

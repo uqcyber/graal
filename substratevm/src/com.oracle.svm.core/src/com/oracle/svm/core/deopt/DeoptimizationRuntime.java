@@ -33,6 +33,7 @@ import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 
+import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.code.CodeInfoTable;
@@ -78,7 +79,8 @@ public class DeoptimizationRuntime {
             }
 
             if (action.doesInvalidateCompilation()) {
-                Deoptimizer.invalidateMethodOfFrame(CurrentIsolate.getCurrentThread(), sp, speculation);
+                boolean reprofile = (action == DeoptimizationAction.InvalidateReprofile);
+                Deoptimizer.invalidateMethodOfFrame(CurrentIsolate.getCurrentThread(), sp, speculation, reprofile);
             } else {
                 Deoptimizer.deoptimizeFrame(sp, false, speculation);
             }
@@ -106,6 +108,8 @@ public class DeoptimizationRuntime {
             log.string("    name: ").string(installedCode.getName()).newline();
         }
         log.string("    sp: ").hex(sp).string("  ip: ").hex(ip).newline();
+        CodePointer deoptIp = FrameAccess.singleton().readReturnAddress(CurrentIsolate.getCurrentThread(), sp);
+        log.string("    callerIp(callerRet)=deoptingFrame: ").hex(deoptIp).newline();
 
         DeoptimizationReason reason = Deoptimizer.decodeDeoptReason(actionAndReason);
         log.string("    reason: ").string(reason.toString()).string("  action: ").string(action.toString()).newline();
@@ -118,7 +122,9 @@ public class DeoptimizationRuntime {
             log.string("    To see the stack trace that triggered deoptimization, build the native image with -H:+IncludeNodeSourcePositions and run with --engine.NodeSourcePositions");
             log.newline();
         } else {
-            log.string("    stack trace that triggered deoptimization:").newline();
+            log.string("    stack trace that triggered deoptimization " +
+                            "{BEWARE: this is based on node source positions which does not necessarily reflect the actual source root compilation unit and BCI}:")
+                            .newline();
             NodeSourcePosition cur = sourcePosition;
             while (cur != null) {
                 log.string("        at ");

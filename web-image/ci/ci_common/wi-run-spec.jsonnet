@@ -145,7 +145,6 @@ local os_arch_jdk_mixin(mapping) = r.task_spec(r.evaluate_late({
   // Adds web image flags to the job
   web_image_flags(flags=[]): r.task_spec({ webimage_flags+: flags }),
 
-  eclipse: r.task_spec(common.eclipse),
   jdt: r.task_spec(common.jdt),
   spotbugs: r.task_spec(common.spotbugs),
 

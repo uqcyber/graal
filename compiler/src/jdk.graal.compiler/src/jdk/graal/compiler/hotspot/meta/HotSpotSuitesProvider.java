@@ -47,7 +47,12 @@ import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.BasePhase;
 import jdk.graal.compiler.phases.PhaseSuite;
 import jdk.graal.compiler.phases.common.AddressLoweringPhase;
+import jdk.graal.compiler.phases.common.LoweringPhase;
 import jdk.graal.compiler.phases.common.UseTrappingNullChecksPhase;
+import jdk.graal.compiler.phases.constantblinding.ConstantBlindingPhase;
+import jdk.graal.compiler.phases.constantblinding.ConstantPreBlindingPhase;
+import jdk.graal.compiler.phases.constantblinding.DefaultConstantBlindingPhase;
+import jdk.graal.compiler.phases.schedule.SchedulePhase.FinalSchedulePhase;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.phases.tiers.LowTierContext;
 import jdk.graal.compiler.phases.tiers.Suites;
@@ -81,7 +86,23 @@ public class HotSpotSuitesProvider extends SuitesProviderBase {
             position.previous();
             position.add(new UseTrappingNullChecksPhase());
         }
+        if (ConstantBlindingPhase.Options.BlindConstants.getValue(options)) {
+            addPhaseBefore(suites.getLowTier(), FinalSchedulePhase.class, new DefaultConstantBlindingPhase());
+            addPhaseBefore(suites.getLowTier(), LoweringPhase.class, new ConstantPreBlindingPhase());
+        }
         return suites;
+    }
+
+    private static <C> void addPhaseBefore(PhaseSuite<C> phaseSuite, Class<? extends BasePhase<? super C>> findPhase, BasePhase<? super C> insertPhase) {
+        insertPhase(phaseSuite, findPhase, insertPhase, true);
+    }
+
+    private static <C> void insertPhase(PhaseSuite<C> phaseSuite, Class<? extends BasePhase<? super C>> findPhase, BasePhase<? super C> insertPhase, boolean insertBefore) {
+        ListIterator<BasePhase<? super C>> position = phaseSuite.findPhase(findPhase);
+        if (insertBefore) {
+            position.previous();
+        }
+        position.add(insertPhase);
     }
 
     protected PhaseSuite<HighTierContext> createGraphBuilderSuite() {

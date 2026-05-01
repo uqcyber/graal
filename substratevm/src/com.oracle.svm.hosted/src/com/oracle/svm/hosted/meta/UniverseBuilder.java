@@ -64,12 +64,12 @@ import com.oracle.graal.pointsto.meta.BaseLayerMethod;
 import com.oracle.graal.pointsto.meta.BaseLayerType;
 import com.oracle.graal.pointsto.results.StrengthenGraphs;
 import com.oracle.svm.core.FunctionPointerHolder;
+import com.oracle.svm.core.MethodRefHolder;
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.BoxedRelocatedPointer;
-import com.oracle.svm.core.c.function.CFunctionOptions;
+import com.oracle.svm.guest.staging.c.function.CFunctionOptions;
 import com.oracle.svm.core.classinitialization.ClassInitializationInfo;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.heap.ExcludeFromReferenceMap;
 import com.oracle.svm.core.heap.FillerArray;
@@ -93,7 +93,7 @@ import com.oracle.svm.core.reflect.SubstrateMethodAccessor;
 import com.oracle.svm.hosted.DeadlockWatchdog;
 import com.oracle.svm.hosted.HostedConfiguration;
 import com.oracle.svm.hosted.NativeImageOptions;
-import com.oracle.svm.hosted.OpenTypeWorldFeature;
+import com.oracle.svm.hosted.OpenTypeWorldSupport;
 import com.oracle.svm.hosted.annotation.CustomSubstitutionMethod;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.hosted.config.DynamicHubLayout;
@@ -104,7 +104,7 @@ import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
 import com.oracle.svm.hosted.imagelayer.LayeredStaticFieldSupport;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 import com.oracle.svm.hosted.substitute.DeletedMethod;
-import com.oracle.svm.shared.meta.MethodVariant;
+import com.oracle.svm.common.meta.MethodVariant;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
@@ -185,7 +185,7 @@ public class UniverseBuilder {
 
             // see SharedMethod#getIndirectCallTarget for more information
             if (!SubstrateOptions.useClosedTypeWorldHubLayout()) {
-                OpenTypeWorldFeature.singleton().computeIndirectCallTargets(hUniverse, hUniverse.methods);
+                OpenTypeWorldSupport.singleton().computeIndirectCallTargets(hUniverse, hUniverse.methods);
             } else {
                 hUniverse.methods.forEach((aMethod, hMethod) -> {
                     assert aMethod.isOriginalMethod();
@@ -469,6 +469,7 @@ public class UniverseBuilder {
                     CEntryPointLiteral.class,
                     BoxedRelocatedPointer.class,
                     FunctionPointerHolder.class,
+                    MethodRefHolder.class,
                     StoredContinuation.class,
                     SubstrateMethodAccessor.class,
                     SubstrateConstructorAccessor.class,
@@ -495,7 +496,7 @@ public class UniverseBuilder {
 
     private void layoutInstanceFields(int numTypeCheckSlots) {
         BitSet usedBytes = new BitSet();
-        usedBytes.set(0, ConfigurationValues.getObjectLayout().getFirstFieldOffset());
+        usedBytes.set(0, ObjectLayout.singleton().getFirstFieldOffset());
         layoutInstanceFields(hUniverse.getObjectClass(), HostedField.EMPTY_ARRAY, usedBytes, numTypeCheckSlots);
     }
 
@@ -526,7 +527,7 @@ public class UniverseBuilder {
     private void layoutInstanceFields(HostedInstanceClass clazz, HostedField[] superFields, BitSet usedBytes, int numTypeCheckSlots) {
         ArrayList<HostedField> rawFields = new ArrayList<>();
         ArrayList<HostedField> allFields = new ArrayList<>();
-        ObjectLayout layout = ConfigurationValues.getObjectLayout();
+        ObjectLayout layout = ObjectLayout.singleton();
 
         HostedConfiguration.instance().findAllFieldsForLayout(hUniverse, hMetaAccess, hUniverse.fields, rawFields, allFields, clazz);
 
@@ -811,7 +812,7 @@ public class UniverseBuilder {
         // Sort so that a) all Object fields are consecutive, and b) bigger types come first.
         Collections.sort(staticFields, HostedUniverse.FIELD_COMPARATOR_RELAXED);
 
-        ObjectLayout layout = ConfigurationValues.getObjectLayout();
+        ObjectLayout layout = ObjectLayout.singleton();
 
         StaticFieldOffsets currentLayerOffsets = new StaticFieldOffsets();
         LayeredStaticFieldSupport layeredStaticFieldSupport = null;
@@ -931,7 +932,7 @@ public class UniverseBuilder {
         }
         DynamicHubSupport.currentLayer().setReferenceMapEncoding(referenceMapEncoder.encodeAll());
 
-        ObjectLayout ol = ConfigurationValues.getObjectLayout();
+        ObjectLayout ol = ObjectLayout.singleton();
         DynamicHubLayout dynamicHubLayout = DynamicHubLayout.singleton();
         boolean closedTypeWorldHubLayout = SubstrateOptions.useClosedTypeWorldHubLayout();
         boolean useOffsets = SubstrateOptions.useRelativeCodePointers();
@@ -955,7 +956,7 @@ public class UniverseBuilder {
                     boolean isObject = (storageKind == JavaKind.Object);
                     layoutHelper = LayoutEncoding.forHybrid(type, isObject, hybridLayout.getArrayBaseOffset(), ol.getArrayIndexShift(storageKind));
                 } else {
-                    layoutHelper = LayoutEncoding.forPureInstance(type, ConfigurationValues.getObjectLayout().alignUp(instanceClass.getInstanceSize()));
+                    layoutHelper = LayoutEncoding.forPureInstance(type, ObjectLayout.singleton().alignUp(instanceClass.getInstanceSize()));
                 }
                 monitorOffset = instanceClass.getMonitorFieldOffset();
                 identityHashOffset = instanceClass.getIdentityHashOffset();
@@ -979,7 +980,7 @@ public class UniverseBuilder {
             assert referenceMap != null;
             assert ((SubstrateReferenceMap) referenceMap).hasNoDerivedOffsets();
             ReferenceMapEncoder.OffsetIterator iter = referenceMap.getOffsets();
-            assert !iter.hasNext() || iter.nextInt() >= ConfigurationValues.getObjectLayout().getFirstFieldOffset();
+            assert !iter.hasNext() || iter.nextInt() >= ObjectLayout.singleton().getFirstFieldOffset();
 
             long referenceMapIndex = referenceMapEncoder.lookupEncoding(referenceMap);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -68,7 +68,7 @@ import javax.lang.model.type.TypeVariable;
 import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.Types;
 
-import org.graalvm.nativebridge.processor.AbstractBridgeParser.AbstractTypeCache;
+import org.graalvm.nativebridge.processor.AbstractBridgeParser.BaseTypeCache;
 
 final class CodeBuilder {
 
@@ -78,14 +78,14 @@ final class CodeBuilder {
     private final CodeBuilder parent;
     private final PackageElement pkg;
     final Types types;
-    final AbstractTypeCache typeCache;
+    final BaseTypeCache typeCache;
     private final Collection<TypeElement> toImport;
     private final Map<String, TypeElement> importedTypeNames;
     private final StringBuilder body;
     private int indentLevel;
     private Scope scope;
 
-    CodeBuilder(PackageElement pkg, Types types, AbstractTypeCache typeCache) {
+    CodeBuilder(PackageElement pkg, Types types, BaseTypeCache typeCache) {
         this(null, pkg, types, typeCache, new TreeSet<>(FQN_COMPARATOR), new StringBuilder(), null);
     }
 
@@ -93,7 +93,7 @@ final class CodeBuilder {
         this(parent, parent.pkg, parent.types, parent.typeCache, parent.toImport, new StringBuilder(), parent.scope);
     }
 
-    CodeBuilder(CodeBuilder parent, PackageElement pkg, Types types, AbstractTypeCache typeCache, Collection<TypeElement> toImport, StringBuilder body, Scope scope) {
+    CodeBuilder(CodeBuilder parent, PackageElement pkg, Types types, BaseTypeCache typeCache, Collection<TypeElement> toImport, StringBuilder body, Scope scope) {
         this.parent = parent;
         this.pkg = pkg;
         this.types = types;

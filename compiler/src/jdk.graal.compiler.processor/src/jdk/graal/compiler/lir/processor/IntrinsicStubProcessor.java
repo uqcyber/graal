@@ -297,14 +297,13 @@ public class IntrinsicStubProcessor extends AbstractProcessor {
                         break;
                     case substrate:
                         imports.addAll(List.of(
-                                        "com.oracle.svm.core.SubstrateTargetDescription",
-                                        "com.oracle.svm.guest.staging.Uninterruptible",
+                                        "com.oracle.svm.core.SubstrateTarget",
+                                        "com.oracle.svm.shared.Uninterruptible",
                                         "com.oracle.svm.core.snippets.SubstrateForeignCallTarget",
                                         "com.oracle.svm.core.cpufeature.Stubs",
                                         "com.oracle.svm.graal.RuntimeCPUFeatureRegion",
                                         "jdk.graal.compiler.api.replacements.Fold",
                                         "jdk.graal.compiler.debug.GraalError",
-                                        "org.graalvm.nativeimage.ImageSingletons",
                                         "java.util.EnumSet",
                                         "jdk.vm.ci.code.Architecture",
                                         "jdk.vm.ci.aarch64.AArch64",
@@ -351,7 +350,7 @@ public class IntrinsicStubProcessor extends AbstractProcessor {
                             featuresGetter.setName(String.format("%s_getMinimumFeatures%s", genClass.clazz.getSimpleName(), n++ > 0 ? "_" + n : ""));
                             out.printf("    @Fold\n");
                             out.printf("    public static EnumSet<?> %s() {\n", featuresGetter.getName());
-                            out.printf("        Architecture arch = ImageSingletons.lookup(SubstrateTargetDescription.class).arch;\n");
+                            out.printf("        Architecture arch = SubstrateTarget.getArchitecture();\n");
                             out.printf("        if (arch instanceof jdk.vm.ci.amd64.AMD64) {\n");
                             if (featuresGetter.amd64Getter.isEmpty()) {
                                 out.printf("            return EMPTY_CPU_FEATURES_AMD64;\n");

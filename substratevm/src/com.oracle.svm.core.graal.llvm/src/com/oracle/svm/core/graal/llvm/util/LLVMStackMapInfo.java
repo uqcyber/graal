@@ -32,14 +32,15 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import jdk.graal.compiler.core.common.NumUtil;
+import org.graalvm.collections.EconomicSet;
 
-import com.oracle.svm.core.FrameAccess;
-import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMRelocationIteratorRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.LLVM.LLVMSectionIteratorRef;
 import com.oracle.svm.shadowed.org.bytedeco.llvm.global.LLVM;
-import org.graalvm.collections.EconomicSet;
+import com.oracle.svm.shared.util.VMError;
+
+import jdk.graal.compiler.core.common.NumUtil;
 
 public class LLVMStackMapInfo {
     public static final long DEFAULT_PATCHPOINT_ID = 0xABCDEF00L;
@@ -321,8 +322,9 @@ public class LLVMStackMapInfo {
     }
 
     private int[] getStackOffsets(long patchpointID, Location location) {
-        assert location.size % FrameAccess.wordSize() == 0;
-        int numLocations = location.size / FrameAccess.wordSize();
+        int wordSize = SubstrateTarget.getWordSize();
+        assert location.size % wordSize == 0;
+        int numLocations = location.size / wordSize;
         assert numLocations > 0;
 
         int baseOffset;
@@ -340,7 +342,7 @@ public class LLVMStackMapInfo {
 
         int[] offsets = new int[numLocations];
         for (int i = 0; i < numLocations; ++i) {
-            offsets[i] = baseOffset + i * FrameAccess.wordSize();
+            offsets[i] = baseOffset + i * wordSize;
         }
 
         return offsets;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
@@ -40,23 +41,29 @@ import org.graalvm.collections.UnmodifiableMapCursor;
 /**
  * A context for obtaining values for {@link OptionKey}s.
  */
-public class OptionValues {
+public final class OptionValues {
 
     private final UnmodifiableEconomicMap<OptionKey<?>, Object> values;
 
-    protected boolean containsKey(OptionKey<?> key) {
+    public boolean containsKey(OptionKey<?> key) {
         return values.containsKey(key);
     }
 
+    /**
+     * Please use method {@link #derive(UnmodifiableEconomicMap)} instead.
+     */
     public OptionValues(OptionValues initialValues, UnmodifiableEconomicMap<OptionKey<?>, Object> extraPairs) {
         EconomicMap<OptionKey<?>, Object> map = newOptionMap();
         if (initialValues != null) {
-            map.putAll(initialValues.getMap());
+            initMap(map, initialValues.getMap());
         }
         initMap(map, extraPairs);
         this.values = map;
     }
 
+    /**
+     * Please use method {@link #derive(OptionKey, Object)} instead.
+     */
     public OptionValues(OptionValues initialValues, OptionKey<?> key1, Object value1, Object... extraPairs) {
         this(initialValues, asMap(key1, value1, extraPairs));
     }
@@ -69,8 +76,7 @@ public class OptionValues {
     }
 
     /**
-     * Gets an immutable view of the key/value pairs in this object. Values read from this view
-     * should be {@linkplain #decodeNull(Object) decoded} before being used.
+     * Gets an immutable view of the key/value pairs in this object.
      */
     public UnmodifiableEconomicMap<OptionKey<?>, Object> getMap() {
         return values;
@@ -99,37 +105,12 @@ public class OptionValues {
         this.values = map;
     }
 
-    protected static void initMap(EconomicMap<OptionKey<?>, Object> map, UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
+    private static void initMap(EconomicMap<OptionKey<?>, Object> map, UnmodifiableEconomicMap<OptionKey<?>, Object> values) {
         UnmodifiableMapCursor<OptionKey<?>, Object> cursor = values.getEntries();
         while (cursor.advance()) {
-            map.put(cursor.getKey(), encodeNull(cursor.getValue()));
+            cursor.getKey().notifySet();
+            map.put(cursor.getKey(), cursor.getValue());
         }
-    }
-
-    protected <T> T get(OptionKey<T> key) {
-        return get(values, key);
-    }
-
-    @SuppressWarnings("unchecked")
-    protected static <T> T get(UnmodifiableEconomicMap<OptionKey<?>, Object> values, OptionKey<T> key) {
-        Object value = values.get(key);
-        if (value == null) {
-            return key.getDefaultValue();
-        }
-        return (T) decodeNull(value);
-    }
-
-    private static final Object NULL = new Object();
-
-    protected static Object encodeNull(Object value) {
-        return value == null ? NULL : value;
-    }
-
-    /**
-     * Decodes a value that may be the sentinel value for {@code null} in a map.
-     */
-    public static Object decodeNull(Object value) {
-        return value == NULL ? null : value;
     }
 
     @Override
@@ -142,7 +123,7 @@ public class OptionValues {
         SortedMap<OptionKey<?>, Object> sorted = new TreeMap<>(comparator);
         UnmodifiableMapCursor<OptionKey<?>, Object> cursor = values.getEntries();
         while (cursor.advance()) {
-            sorted.put(cursor.getKey(), decodeNull(cursor.getValue()));
+            sorted.put(cursor.getKey(), cursor.getValue());
         }
         return sorted.toString();
     }
@@ -267,5 +248,29 @@ public class OptionValues {
     private static boolean excludeOptionFromHelp(OptionDescriptor desc) {
         /* Filter out debug options. */
         return desc.getOptionType() == OptionType.Debug;
+    }
+
+    /**
+     * Derives new option values where the respective keys are set to the respective values. The
+     * values are set also if they would be the default value for their respective key.
+     */
+    public OptionValues derive(UnmodifiableEconomicMap<OptionKey<?>, Object> changedValues) {
+        return changedValues.isEmpty() ? this : new OptionValues(this, changedValues);
+    }
+
+    /**
+     * Derives new option values where the given key is set to the given value.
+     * <p>
+     * The key is omitted if its current effective value already equals {@code value}. For keys with
+     * a computed {@link OptionKey#getValue(OptionValues)} implementation, this means that the
+     * derived options preserve the current "unset" state instead of forcing an explicit setting.
+     * Callers that need to materialize several interacting option updates at once should use
+     * {@link #derive(UnmodifiableEconomicMap)} or chain calls in the desired order.
+     */
+    public OptionValues derive(OptionKey<?> key, Object value) {
+        if (Objects.equals(key.getValue(this), value)) {
+            return this;
+        }
+        return new OptionValues(this, key, value);
     }
 }

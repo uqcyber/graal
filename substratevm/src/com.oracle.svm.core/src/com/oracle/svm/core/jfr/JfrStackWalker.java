@@ -25,7 +25,7 @@
 
 package com.oracle.svm.core.jfr;
 
-import static com.oracle.svm.guest.staging.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
@@ -34,15 +34,15 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.guest.staging.Uninterruptible;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.CodeInfoQueryResult;
 import com.oracle.svm.core.code.CodeInfoTable;
-import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.sampler.SamplerSampleWriter;
@@ -56,8 +56,8 @@ import com.oracle.svm.core.stack.JavaStackWalk;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.util.PointerUtils;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
-import org.graalvm.word.impl.Word;
 
 /**
  * Does a stack walk and records the instruction pointers of the physical Java frames that it
@@ -155,6 +155,7 @@ public final class JfrStackWalker {
                     anchor = anchor.getPreviousAnchor();
                 } else {
                     /* Both the top frame and its caller are probably Java frames. */
+                    int wordSize = SubstrateTarget.getWordSize();
                     if (isSPAligned(sp)) {
                         UnsignedWord topFrameSize = Word.unsigned(CodeInfoQueryResult.getTotalFrameSize(topFrameEncodedSize));
                         if (SubstrateOptions.hasFramePointer() && !hasValidCaller(sp, topFrameSize, topFrameIsEntryPoint, anchor)) {
@@ -165,7 +166,7 @@ public final class JfrStackWalker {
                              * frame is missing). We should reach the caller if we skip the
                              * incomplete top frame (frame pointer and return address).
                              */
-                            sp = sp.add(FrameAccess.wordSize() * 2);
+                            sp = sp.add(wordSize * 2);
                         } else {
                             /*
                              * Stack looks walkable - skip the top frame as we already recorded the
@@ -180,7 +181,7 @@ public final class JfrStackWalker {
                          * likely, there is a valid return address at the top of the stack that we
                          * can just skip.
                          */
-                        sp = sp.add(FrameAccess.wordSize());
+                        sp = sp.add(wordSize);
                     }
 
                     /* Do a basic sanity check and decide if it makes sense to continue. */
@@ -365,7 +366,7 @@ public final class JfrStackWalker {
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static boolean isSPAligned(Pointer sp) {
-        return PointerUtils.isAMultiple(sp, Word.unsigned(ConfigurationValues.getTarget().stackAlignment));
+        return PointerUtils.isAMultiple(sp, Word.unsigned(SubstrateTarget.singleton().stackAlignment));
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
