@@ -189,11 +189,13 @@ public final class IntegerBelowNode extends IntegerLowerThanNode {
                      *
                      * x < n - C
                      */
-                    // veriopt: BelowLess: "(x |<| ((y |<| z)? const 0 : (y - z))) |-> x < (y-z)
-                    //                      when ((isStampPos (stamp_expr x)) & (wf_stamp x) &
-                    //                           (isStampPos (stamp_expr y)) & (wf_stamp y) &
-                    //                           (isStampPos (stamp_expr z)) & (wf_stamp z)) &
-                    //                           stamp_expr y = IntegerStamp b lo hi"
+                    // veriopt: BelowLess: (x |<| ((n |<| c) ? const 0 : (n + c'))) |-> x < (n - c)
+                    //                      when (is_stamp_positive (stamp_expr x) & (wf_stamp x)              &
+                    //                            is_stamp_positive (stamp_expr n) & (wf_stamp n)              &
+                    //                            stamp_expr n = IntegerStamp b l h                            &
+                    //                            c = const (new_int cb cv) & c' = const (new_int c'b c'v)     &
+                    //                            c'v <s 0 & c'v == -cv
+                    // TODO unsure
                     return IntegerLessThanNode.create(forX, SubNode.create(n, c, view), view);
                 }
             }
