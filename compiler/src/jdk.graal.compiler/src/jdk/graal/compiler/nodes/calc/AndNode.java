@@ -221,7 +221,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             return reassociateMatchedValues(self != null ? self : (AndNode) new AndNode(forX, forY).maybeCommuteInputs(), ValueNode.isConstantPredicate(), forX, forY, view);
         }
         if (forX instanceof NotNode && forY instanceof NotNode) {
-            // veriopt: AndNots: ~x & ~y = ~(x | y)
+            // veriopt: AndNots: ~x & ~y |-> ~(x | y)
             return new NotNode(OrNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
         }
         if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX && rawXStamp instanceof IntegerStamp) {
