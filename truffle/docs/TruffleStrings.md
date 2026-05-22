@@ -117,7 +117,7 @@ Conversion:
 * [CopyToNativeMemory](https://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/strings/TruffleString.CopyToNativeMemoryNode.html):
   Copy a string's content into a native pointer.
 * [GetInternalNativePointer](https://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/strings/TruffleString.GetInternalNativePointerNode.html):
-  Get a native string's pointer object.
+  Get a native string's pointer object, or a boxed raw pointer if no pointer object exists.
 * [ToJavaString](https://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/strings/TruffleString.ToJavaStringNode.html):
   Convert a string to a `java.lang.String`.
 * [ParseInt](https://www.graalvm.org/truffle/javadoc/com/oracle/truffle/api/strings/TruffleString.ParseIntNode.html):

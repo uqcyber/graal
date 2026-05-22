@@ -50,7 +50,7 @@ import com.oracle.truffle.espresso.shared.meta.TypeAccess;
 public interface PartialType<C extends TypeAccess<C, M, F>, M extends MethodAccess<C, M, F>, F extends FieldAccess<C, M, F>> extends Named {
     /**
      * The vtable of the declared superclass of this type, as would be constructed by a previous
-     * call to {@link VTable#create(PartialType, boolean, boolean, boolean)}.
+     * call to {@link VTable#create(PartialType)}.
      * <p>
      * If this type does not have a superclass, this method should return an empty list, and not
      * {@code null}.
@@ -79,20 +79,18 @@ public interface PartialType<C extends TypeAccess<C, M, F>, M extends MethodAcce
     boolean sameRuntimePackage(C otherType);
 
     /**
-     * If the runtime allows selecting private methods for interface invokes (For java versions <=
-     * 8), this method should be implemented.
-     * <p>
-     * It can be left as unimplemented for runtimes that do not support this behavior.
-     * <p>
-     * <p>
      * This method searches for a declaration of an instance method with the given {@code name} and
      * {@code signature} starting with this type, and continuing with the direct superclass of that
      * class, and so forth, until a method is found or no further superclasses exist.
      * <p>
      * If a method is found, it is the selected method. This method may be
      * {@link ModifiersProvider#isPrivate() private}.
+     * <p>
+     * This method is needed for runtimes that do not use the default
+     * {@link VTable#create(PartialType)}
      */
-    default PartialMethod<C, M, F> lookupOverrideWithPrivate(@SuppressWarnings("unused") Symbol<Name> name, @SuppressWarnings("unused") Symbol<Signature> signature) {
+    default PartialMethod<C, M, F> fallbackLookup(@SuppressWarnings("unused") Symbol<Name> name, @SuppressWarnings("unused") Symbol<Signature> signature,
+                    @SuppressWarnings("unused") boolean includePrivate) {
         return null;
     }
 }

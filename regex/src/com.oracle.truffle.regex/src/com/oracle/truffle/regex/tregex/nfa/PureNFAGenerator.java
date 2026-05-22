@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,6 +44,7 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
 
+import com.oracle.truffle.regex.RegexRootNode;
 import com.oracle.truffle.regex.tregex.TRegexOptions;
 import com.oracle.truffle.regex.tregex.parser.Counter;
 import com.oracle.truffle.regex.tregex.parser.ast.GroupBoundaries;
@@ -78,6 +79,7 @@ public final class PureNFAGenerator {
         Deque<PureNFA> subtreeExpansionQueue = new ArrayDeque<>();
         subtreeExpansionQueue.push(rootNFA);
         while (!subtreeExpansionQueue.isEmpty()) {
+            RegexRootNode.checkThreadInterrupted();
             PureNFA parentNFA = subtreeExpansionQueue.pop();
             RegexASTSubtreeRootNode parentRoot = parentNFA.getASTSubtree(ast);
             for (int i = 0; i < parentNFA.getSubtrees().length; i++) {
@@ -183,6 +185,7 @@ public final class PureNFAGenerator {
 
     private void expandAllStates() {
         while (!expansionQueue.isEmpty()) {
+            RegexRootNode.checkThreadInterrupted();
             expandNFAState(expansionQueue.pop());
         }
     }

@@ -29,7 +29,6 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
@@ -42,7 +41,7 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 public class JfrExecutionSamplerSupported {
     public static boolean isSupported() {
         if (ImageSingletons.contains(JfrExecutionSamplerSupported.class)) {
-            return !RuntimeCompilation.isEnabled() && ImageSingletons.lookup(JfrExecutionSamplerSupported.class).isSupported0();
+            return ImageSingletons.lookup(JfrExecutionSamplerSupported.class).isSupported0();
         }
         return false;
     }

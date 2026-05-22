@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -244,6 +244,13 @@ public class InterpreterFeature implements InternalFeature {
         LocalVariableTable interpreterVariableTable = interpreterRoot.getLocalVariableTable();
         int interpreterMethodSlot = findLocalSlotByName("method", interpreterVariableTable.getLocalsAt(0)); // parameter
         int interpreterFrameSlot = findLocalSlotByName("frame", interpreterVariableTable.getLocalsAt(0)); // parameter
+        /*
+         * Stack walking can observe executeBodyFromBCI after the root frame exists but before
+         * curBCI has been written into it, e.g. on a stack-overflow edge through the interpreter
+         * prologue. Preserve startBCI as well so reporting can still recover the bytecode entry
+         * point for that root frame.
+         */
+        int interpreterStartBCISlot = findLocalSlotByName("startBCI", interpreterVariableTable.getLocalsAt(0)); // parameter
         // Local variable, search all locals.
         int bciSlot = findLocalSlotByName("curBCI", interpreterVariableTable.getLocals());
 
@@ -254,7 +261,8 @@ public class InterpreterFeature implements InternalFeature {
         int intrinsicMethodSlot = findLocalSlotByName("method", intrinsicVariableTable.getLocalsAt(0)); // parameter
         int intrinsicFrameSlot = findLocalSlotByName("frame", intrinsicVariableTable.getLocalsAt(0)); // parameter
 
-        ImageSingletons.add(InterpreterSupport.class, new InterpreterSupportImpl(bciSlot, interpreterMethodSlot, interpreterFrameSlot, intrinsicMethodSlot, intrinsicFrameSlot));
+        ImageSingletons.add(InterpreterSupport.class, new InterpreterSupportImpl(bciSlot, interpreterStartBCISlot, interpreterMethodSlot, interpreterFrameSlot,
+                        intrinsicMethodSlot, intrinsicFrameSlot));
         ImageSingletons.add(InterpreterDirectivesSupport.class, new InterpreterDirectivesSupportImpl());
         ImageSingletons.add(InterpreterNotCompiledMethodPointerHolder.class, new InterpreterNotCompiledMethodPointerHolder(accessImpl.getMetaAccess()));
 

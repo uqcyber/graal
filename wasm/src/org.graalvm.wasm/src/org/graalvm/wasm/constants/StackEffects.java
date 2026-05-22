@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -126,6 +126,13 @@ public final class StackEffects {
         miscOpStackEffects[Bytecode.THROW] = UNREACHABLE;
         // unused, because stack effect is followed by throw
         miscOpStackEffects[Bytecode.THROW_REF] = UNREACHABLE;
+        // unused, because stack effect is followed by throw
+        miscOpStackEffects[Bytecode.RETHROW] = UNREACHABLE;
+        miscOpStackEffects[Bytecode.LEGACY_CATCH_DROP] = NO_EFFECT;
+        miscOpStackEffects[Bytecode.LEGACY_CATCH_UNWIND] = NO_EFFECT;
+        miscOpStackEffects[Bytecode.LEGACY_SKIP_LABEL_U8] = NO_EFFECT;
+        miscOpStackEffects[Bytecode.LEGACY_SKIP_LABEL_U16] = NO_EFFECT;
+        miscOpStackEffects[Bytecode.LEGACY_SKIP_LABEL_I32] = NO_EFFECT;
         miscOpStackEffects[Bytecode.TABLE_GET] = NO_EFFECT;
         miscOpStackEffects[Bytecode.TABLE_SET] = POP_2;
         miscOpStackEffects[Bytecode.REF_AS_NON_NULL] = NO_EFFECT;

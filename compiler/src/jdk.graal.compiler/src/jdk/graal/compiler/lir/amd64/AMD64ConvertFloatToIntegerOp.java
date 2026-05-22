@@ -306,7 +306,7 @@ public class AMD64ConvertFloatToIntegerOp extends AMD64LIRInstruction {
          * Check for the happiest path: If the result is >= 0, the input was in the range
          * 0..signed_max, and we are done.
          */
-        masm.cmpAndJcc(integerBytes == 4 ? OperandSize.DWORD : OperandSize.QWORD, dst, 0, AMD64Assembler.ConditionFlag.GreaterEqual, done, true);
+        masm.cmpAndJcc(integerBytes == 4 ? OperandSize.DWORD : OperandSize.QWORD, dst, 0, AMD64Assembler.ConditionFlag.GreaterEqual, done, !canOverflow);
         if (canOverflow) {
             /*-
              * If we're above the signed range, subtract the signed max value + 1 (as a float),

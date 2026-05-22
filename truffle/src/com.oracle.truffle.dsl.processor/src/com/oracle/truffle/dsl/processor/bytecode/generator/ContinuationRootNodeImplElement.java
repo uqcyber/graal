@@ -116,12 +116,6 @@ final class ContinuationRootNodeImplElement extends AbstractElement {
         b.startGroup().cast(parent.abstractBytecodeNode.asType()).string("bytecodeLocation.getBytecodeNode()").end();
         b.end();
 
-        if (parent.model.usesBoxingElimination()) {
-            b.startIf().string("!bytecodeNode.checkStableTagsAssumption()").end().startBlock();
-            b.tree(GeneratorUtils.createTransferToInterpreterAndInvalidate());
-            b.end();
-        }
-
         b.statement("Object[] args = frame.getArguments()");
         b.startIf().string("args.length != 2").end().startBlock();
         BytecodeRootNodeElement.emitThrowIllegalArgumentException(b, "Expected 2 arguments: (parentFrame, inputValue)");
@@ -135,6 +129,21 @@ final class ContinuationRootNodeImplElement extends AbstractElement {
         b.startIf().string("parentFrame.getFrameDescriptor() != root.getFrameDescriptor()").end().startBlock();
         BytecodeRootNodeElement.emitThrowIllegalArgumentException(b, "Invalid continuation parent frame passed");
         b.end();
+
+        if (parent.model.usesBoxingElimination()) {
+            b.startIf().string("bytecodeNode.getTier() == ").staticReference(types.BytecodeTier, "CACHED").end().startBlock();
+            b.startDeclaration(parent.cachedBytecodeNode.asType(), "cachedBytecodeNode");
+            b.tree(BytecodeRootNodeElement.uncheckedCast(parent.cachedBytecodeNode.asType(), "bytecodeNode"));
+            b.end();
+            b.startIf().string("!cachedBytecodeNode.checkStableTagsAssumption()").end().startBlock();
+            b.tree(GeneratorUtils.createTransferToInterpreterAndInvalidate());
+            b.end();
+            b.startStatement().startCall("cachedBytecodeNode", "reconcileContinuationLocals");
+            b.string("bytecodeLocation.getBytecodeIndex()");
+            b.string("parentFrame");
+            b.end(2);
+            b.end();
+        }
 
         b.declaration(types.FrameWithoutBoxing, "targetFrame", "parentFrame");
 

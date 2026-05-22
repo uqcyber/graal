@@ -402,7 +402,20 @@ final class PolyglotIsolateHostSupport {
             foreignEngine.close();
             // Parfait_ALLOW toctou-race-condition-warning (prevented by NativeIsolate#create)
             l.unregisterEngine(foreignEngine.getKey());
-            foreignEngine.getPolyglotIsolateServices().onIsolateTearDown();
+            IsolateThread isolateThread = isolate.tryEnter();
+            /*
+             * ForeignEngineDispatch#onEngineCollected can call Isolate#shutdown for an already
+             * terminated external isolate. In that case the shutdown path invokes this
+             * teardown hook for host-side cleanup, but the isolate cannot be entered anymore.
+             * Run guest-side teardown when the isolate is still enterable.
+             */
+            if (isolateThread != null) {
+                try {
+                    foreignEngine.getPolyglotIsolateServices().onIsolateTearDown();
+                } finally {
+                    isolateThread.leave();
+                }
+            }
         }
     }
 

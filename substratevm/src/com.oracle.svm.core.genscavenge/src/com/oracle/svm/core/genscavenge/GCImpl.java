@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,7 +43,6 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.RuntimeAssertionsSupport;
@@ -109,11 +108,13 @@ import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.threadlocal.VMThreadLocalSupport;
 import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.core.util.Timer;
+import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -134,11 +135,12 @@ public final class GCImpl implements GC {
 
     private final GCAccounting accounting = new GCAccounting();
     private final Timers timers = new Timers();
+    private final CollectionPolicies policies = new CollectionPolicies();
 
     private final CollectionVMOperation collectOperation = new CollectionVMOperation();
     private final ChunkReleaser chunkReleaser = new ChunkReleaser();
 
-    private final CollectionPolicy policy;
+    private CollectionPolicy policy;
     private boolean completeCollection = false;
     private boolean outOfMemoryCollection = false;
     private UnsignedWord collectionEpoch = Word.zero();
@@ -146,10 +148,15 @@ public final class GCImpl implements GC {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     GCImpl() {
-        this.policy = CollectionPolicy.getInitialPolicy();
         if (ImageLayerBuildingSupport.firstImageBuild()) {
             RuntimeSupport.getRuntimeSupport().addShutdownHook(_ -> printGCSummary());
         }
+    }
+
+    /** Updates the {@link CollectionPolicy}, according to the option value. */
+    @Uninterruptible(reason = "Called during startup.")
+    void updatePolicy() {
+        policy = policies.getSelectedPolicy();
     }
 
     @Uninterruptible(reason = "Tear-down in progress.")
@@ -1208,12 +1215,13 @@ public final class GCImpl implements GC {
         return GCImpl.getGCImpl().accounting;
     }
 
-    @Fold
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static CollectionPolicy getPolicy() {
+        SubstrateUtil.guaranteeRuntimeOnly();
         return GCImpl.getGCImpl().policy;
     }
 
-    @Fold
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static boolean hasNeverCollectPolicy() {
         return getPolicy() instanceof NeverCollect;
     }

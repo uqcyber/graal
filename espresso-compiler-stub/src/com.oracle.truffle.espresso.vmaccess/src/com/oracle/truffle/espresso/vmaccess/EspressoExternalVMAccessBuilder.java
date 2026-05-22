@@ -46,6 +46,7 @@ import jdk.graal.compiler.vmaccess.ModuleSupport;
 import jdk.graal.compiler.vmaccess.VMAccess;
 
 public final class EspressoExternalVMAccessBuilder implements VMAccess.Builder {
+    private static final String JAVA_LANGUAGE_ID = "java";
     private static Engine tempEngine;
 
     private List<String> classpath;
@@ -123,6 +124,7 @@ public final class EspressoExternalVMAccessBuilder implements VMAccess.Builder {
     @Override
     public VMAccess build() {
         ModuleAccess.ensureModuleAccess();
+        ensureJavaLanguageAvailable();
         Context.Builder builder = Context.newBuilder();
         builder.option("java.ExposeJVMCIHelper", "true");
         builder.allowAllAccess(true);
@@ -210,8 +212,8 @@ public final class EspressoExternalVMAccessBuilder implements VMAccess.Builder {
         }
         OptionDescriptor descriptor = findOptionDescriptor(group, key);
         if (descriptor == null) {
-            key = "java." + key;
-            descriptor = findOptionDescriptor("java", key);
+            key = JAVA_LANGUAGE_ID + "." + key;
+            descriptor = findOptionDescriptor(JAVA_LANGUAGE_ID, key);
             if (descriptor == null) {
                 throw new IllegalArgumentException("Unrecognized VM option: '" + vmOption);
             }
@@ -244,6 +246,18 @@ public final class EspressoExternalVMAccessBuilder implements VMAccess.Builder {
             return null;
         }
         return descriptors.get(key);
+    }
+
+    /**
+     * Fail before processing {@code java.*} options when Espresso is not available to the temporary
+     * engine. Otherwise missing Espresso dependencies surface later as a generic
+     * unrecognized-option error for the first {@code java.*} option.
+     */
+    private static void ensureJavaLanguageAvailable() {
+        if (!getTempEngine().getLanguages().containsKey(JAVA_LANGUAGE_ID)) {
+            throw new IllegalStateException("Espresso VMAccess cannot be built because the Polyglot engine does not expose the '" + JAVA_LANGUAGE_ID +
+                            "' language. Check that the Espresso language is installed and visible on the module path.");
+        }
     }
 
     private static Engine getTempEngine() {

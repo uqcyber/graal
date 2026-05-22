@@ -672,7 +672,7 @@ For example:
 {
    "resources": [
       {
-        "module:": "library.module",
+        "module": "library.module",
         "glob": "resource-file.txt" 
       }
    ]
@@ -691,6 +691,8 @@ InputStream resource = ModuleLayer.boot().findModule("library.module").getResour
 
 It will always work as expected for resources registered as described above (even if the module does not contain any code that is considered reachable by static analysis).
 
+Module-qualified resource metadata is also used for lookups that go through module-aware class loaders or module readers, such as `ClassLoader#getResource`, `Class#getResource`, and `ModuleReader#open`.
+When a resource is registered with a `module` field, Native Image keeps enough module identity to resolve the embedded resource even when the original module location is not available at run time.
 
 ### Embedded Resources Information
 

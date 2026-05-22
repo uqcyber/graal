@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,10 +24,17 @@
  */
 package com.oracle.svm.interpreter.ristretto.compile;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Constructor;
+
+import com.oracle.svm.core.jdk.StackTraceUtils;
 import com.oracle.svm.core.graal.snippets.SubstrateSharedGraphBuilderPlugins;
 import com.oracle.svm.interpreter.ristretto.IsInRuntimeCompiledCodeNode;
 import com.oracle.svm.interpreter.ristretto.RistrettoDirectives;
+import com.oracle.svm.interpreter.ristretto.RistrettoUtils;
+import com.oracle.svm.shared.util.ReflectionUtil;
 
+import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin;
@@ -40,10 +47,17 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * Registers Ristretto-specific graph builder plugins for hosted and runtime parse configurations.
  *
  * <p>
- *
- * The runtime plugin set mirrors hosted SVM semantics for runtime-safe user-facing APIs.
+ * Hosted SVM already wires many of these semantics while building the image. Runtime parsing needs
+ * a small parallel set because the caller may be a runtime-loaded class whose lookup, assertion, or
+ * class-name behavior cannot be taken from hosted metadata.
  */
 public final class RistrettoGraphBuilderPlugins {
+    /*
+     * Recreates the caller-sensitive MethodHandles.lookup() constant that hosted parsing normally
+     * bakes into graphs for image methods. Runtime parsing cannot reuse a hosted singleton because
+     * the lookup class depends on the runtime-loaded caller currently being compiled.
+     */
+    private static final Constructor<MethodHandles.Lookup> LOOKUP_CONSTRUCTOR = ReflectionUtil.lookupConstructor(MethodHandles.Lookup.class, Class.class);
 
     /**
      * Registers hosted-only Ristretto directive plugins.
@@ -85,6 +99,7 @@ public final class RistrettoGraphBuilderPlugins {
         SubstrateSharedGraphBuilderPlugins.registerSecurityManagerPlugin(invocationPlugins);
         SubstrateSharedGraphBuilderPlugins.registerSystemIdentityHashCodePlugin(invocationPlugins);
         SubstrateSharedGraphBuilderPlugins.registerObjectPlugins(invocationPlugins);
+        registerMethodHandlesPlugins(invocationPlugins);
         /*
          * registerClassPlugins(...) accepts two optional hosted hooks. We intentionally disable
          * both here for semantic correctness of runtime-loaded code, not just because hosted
@@ -104,4 +119,25 @@ public final class RistrettoGraphBuilderPlugins {
         SubstrateSharedGraphBuilderPlugins.registerClassPlugins(invocationPlugins, null, null);
     }
 
+    private static void registerMethodHandlesPlugins(InvocationPlugins invocationPlugins) {
+        /*
+         * Hosted SVM can bake MethodHandles.lookup() as a constant for the image-built caller
+         * during image generation. Runtime compilation must synthesize that same constant from the
+         * runtime-loaded caller currently being parsed; otherwise lookupClass() and private-access
+         * semantics drift back to hosted metadata.
+         */
+        Registration registration = new Registration(invocationPlugins, MethodHandles.class);
+        registration.register(new InvocationPlugin.RequiredInlineOnlyInvocationPlugin("lookup") {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, InvocationPlugin.Receiver receiver) {
+                if (StackTraceUtils.ignoredBySecurityStackWalk(b.getMetaAccess(), b.getMethod())) {
+                    return false;
+                }
+                // Build the lookup from the current parse caller, not from image-build metadata.
+                MethodHandles.Lookup lookup = ReflectionUtil.newInstance(LOOKUP_CONSTRUCTOR, RistrettoUtils.getDeclaringJavaClass(b.getMethod()));
+                b.addPush(JavaKind.Object, ConstantNode.forConstant(b.getSnippetReflection().forObject(lookup), b.getMetaAccess(), b.getGraph()));
+                return true;
+            }
+        });
+    }
 }

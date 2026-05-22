@@ -52,6 +52,12 @@ public interface EventFactory {
 
     CompilationEvent createCompilationEvent();
 
+    CompilationQueuedEvent createCompilationQueuedEvent();
+
+    CompilationDequeuedEvent createCompilationDequeuedEvent();
+
+    CompilationStartedEvent createCompilationStartedEvent();
+
     DeoptimizationEvent createDeoptimizationEvent();
 
     ProfileResetEvent createProfileResetEvent();

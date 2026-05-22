@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -69,8 +69,11 @@ public class RistrettoProfileSupport {
      * <ul>
      * <li><strong>Atomic State Transitions:</strong> All state changes use
      * {@link AtomicIntegerFieldUpdater#compareAndSet} to ensure thread-safe updates</li>
-     * <li><strong>Single Compilation Guarantee:</strong> Each method is compiled exactly once. Once
-     * in SUBMITTED or COMPILED state, no further profiling occurs</li>
+     * <li><strong>Single Compilation Guarantee:</strong> Each method is compiled exactly once. The
+     * first thread that crosses the invocation threshold wins the INTERPRETED-&gt;SUBMITTED
+     * transition; duplicate submitters must observe the advanced state and return instead of
+     * retrying the submission CAS forever. Once in SUBMITTED or COMPILED state, no further
+     * profiling occurs</li>
      * <li><strong>Profile Initialization:</strong> Only one thread can initialize the profile
      * (transition from INIT_VAL to INITIALIZING), others wait for completion</li>
      * <li><strong>Approximate Counting:</strong> Invocation counter increments are unsynchronized,
@@ -166,9 +169,22 @@ public class RistrettoProfileSupport {
         if (methodProfile.profileMethodEntry() > RistrettoOptions.JITCompilerInvocationThreshold.getValue()) {
             trace(RistrettoOptions.JITTraceCompilationQueuing, "[Ristretto Compile Queue]Entering state %s for %s, profile overflown, trying to submit compile%n",
                             RistrettoCompileStateMachine.toString(oldState), iMethod);
-            while (!COMPILATION_STATE_UPDATER.compareAndSet(rMethod, RistrettoConstants.COMPILE_STATE_INTERPRETED, RistrettoConstants.COMPILE_STATE_SUBMITTED)) {
-                // wait until we are allowed to submit
-                PauseNode.pause();
+            /*
+             * A failed CAS only proves that this caller lost ownership of the INTERPRETED ->
+             * SUBMITTED transition. The follow-up load may observe SUBMITTED or a later COMPILED
+             * state if the winning thread kept advancing the method. An eventual invalidation can
+             * move the method back to INTERPRETED in a later compile epoch, but this caller must
+             * not spin waiting for that separate future cycle here.
+             */
+            if (!COMPILATION_STATE_UPDATER.compareAndSet(rMethod, RistrettoConstants.COMPILE_STATE_INTERPRETED, RistrettoConstants.COMPILE_STATE_SUBMITTED)) {
+                int observedState = COMPILATION_STATE_UPDATER.get(rMethod);
+                assert observedState == RistrettoConstants.COMPILE_STATE_SUBMITTED || observedState == RistrettoConstants.COMPILE_STATE_COMPILED : String.format(
+                                "Unexpected compile state after duplicate submission race for %s: %s", iMethod,
+                                RistrettoCompileStateMachine.toString(observedState));
+                trace(RistrettoOptions.JITTraceCompilationQueuing,
+                                "[Ristretto Compile Queue]Another thread already advanced %s to %s, skipping duplicate submission%n",
+                                iMethod, RistrettoCompileStateMachine.toString(observedState));
+                return;
             }
             trace(RistrettoOptions.JITTraceCompilationQueuing, "[Ristretto Compile Queue]Entering state %s for %s%n",
                             RistrettoCompileStateMachine.toString(COMPILATION_STATE_UPDATER.get(rMethod)), iMethod);

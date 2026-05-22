@@ -186,12 +186,6 @@ public abstract class HotSpotBackend extends Backend implements FrameMap.Referen
     public static final HotSpotForeignCallDescriptor UPDATE_BYTES_ADLER32 = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "updateBytesAdler32", int.class, int.class,
                     WordBase.class, int.class);
 
-    public static final HotSpotForeignCallDescriptor BIGINTEGER_LEFT_SHIFT_WORKER = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "bigIntegerLeftShiftWorker", void.class,
-                    WordBase.class, WordBase.class, int.class, int.class, int.class);
-
-    public static final HotSpotForeignCallDescriptor BIGINTEGER_RIGHT_SHIFT_WORKER = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "bigIntegerRightShiftWorker", void.class,
-                    WordBase.class, WordBase.class, int.class, int.class, int.class);
-
     public static final HotSpotForeignCallDescriptor GALOIS_COUNTER_MODE_CRYPT = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_galoisCounterMode_AESCrypt", int.class,
                     WordBase.class, int.class, WordBase.class, WordBase.class, WordBase.class, WordBase.class, WordBase.class, WordBase.class);
 

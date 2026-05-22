@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -356,7 +356,7 @@ def wasm_polybench_runner(polybench_run: mx_polybench.PolybenchRunFunction, tags
         bench(["interpreter/*.wasm", "--experimental-options", "--engine.Compilation=false"])
         bench(["interpreter/*.wasm"])
         bench(["simd/*.wasm"])
-        bench(["exceptions/*.wasm", "--experimental-options", "--wasm.Exceptions=true"])
+        bench(["exceptions/*.wasm", "--experimental-options", "--wasm.Exceptions=true", "--wasm.LegacyExceptions=true"])
         bench_jvm(["interpreter/*.wasm", "--metric=metaspace-memory"])
         bench_jvm(["interpreter/*.wasm", "--metric=application-memory"])
         bench(["interpreter/*.wasm", "--metric=allocated-bytes", "-w", "40", "-i", "10", "--experimental-options", "--engine.Compilation=false"])

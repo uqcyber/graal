@@ -1511,24 +1511,26 @@ public class PolyglotIsolateTest {
                 future = executorService.submit(() -> {
                     try {
                         callback.running.await();
+                        context.close(true);
                     } catch (InterruptedException ie) {
                         throw new RuntimeException(ie);
+                    } finally {
+                        callback.done.countDown();
                     }
-                    context.close(true);
                 });
-                AbstractPolyglotTest.assertFails(() -> context.eval("triste", "hostObjectCall(sleep(1)," + Integer.MAX_VALUE + ")"), PolyglotException.class,
+                AbstractPolyglotTest.assertFails(() -> context.eval("triste", "hostObjectCall(awaitDone(10)," + Integer.MAX_VALUE + ")"), PolyglotException.class,
                                 (pe) -> {
                                     assertFalse(pe.isInternalError());
                                     assertTrue(pe.isCancelled());
                                     assertFalse(pe.isResourceExhausted());
                                     assertNotNull(pe.getMessage());
                                 });
+                future.get();
             } catch (PolyglotException pe) {
                 if (!pe.isCancelled()) {
                     throw pe;
                 }
             }
-            future.get();
         } finally {
             executorService.shutdownNow();
             executorService.awaitTermination(100, TimeUnit.SECONDS);
@@ -2292,12 +2294,14 @@ public class PolyglotIsolateTest {
 
         private final Context context;
         private final CountDownLatch running;
+        private final CountDownLatch done;
         final List<String> storedParameters = new ArrayList<>();
         String value;
 
         CancelCallBack(Context context) {
             this.context = context;
             this.running = new CountDownLatch(1);
+            this.done = new CountDownLatch(1);
         }
 
         public String cancel(String arg) {
@@ -2321,10 +2325,12 @@ public class PolyglotIsolateTest {
             return value;
         }
 
-        public void sleep(String millisString) {
+        public void awaitDone(String maxSeconds) {
             enter();
             try {
-                Thread.sleep(Long.parseLong(millisString));
+                if (!done.await(Long.parseLong(maxSeconds), TimeUnit.SECONDS)) {
+                    throw new AssertionError("Timeout " + maxSeconds + " seconds");
+                }
             } catch (InterruptedException ie) {
             }
         }

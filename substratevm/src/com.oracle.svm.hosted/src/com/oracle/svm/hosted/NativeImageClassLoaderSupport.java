@@ -109,6 +109,7 @@ import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.StringUtil;
 import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.AnnotationUtil;
 import com.oracle.svm.util.HostedModuleSupport;
 
 import jdk.graal.compiler.debug.GraalError;
@@ -141,6 +142,12 @@ public final class NativeImageClassLoaderSupport {
     public final ModuleFinder upgradeAndSystemModuleFinder;
     public final ModuleLayer moduleLayerForImageBuild;
     public final ModuleFinder modulepathModuleFinder;
+    /**
+     * System modules that are transitively read by real application modules on the image module
+     * path. These modules are not necessarily explicit image roots, but runtime module metadata and
+     * runtime class loading can still need them in the image.
+     */
+    public final Set<String> imageModulePathRequiredSystemModules;
 
     public final SubstrateAnnotationExtractor annotationExtractor;
 
@@ -273,6 +280,7 @@ public final class NativeImageClassLoaderSupport {
 
         ModuleLayer moduleLayer = ModuleLayer.defineModules(configuration, List.of(ModuleLayer.boot()), _ -> classLoader).layer();
         adjustBootLayerQualifiedExports(moduleLayer);
+        imageModulePathRequiredSystemModules = computeImageModulePathRequiredSystemModules(configuration, moduleNames);
         moduleLayerForImageBuild = moduleLayer;
         allLayers(moduleLayerForImageBuild).stream()
                         .flatMap(layer -> layer.modules().stream())
@@ -281,6 +289,7 @@ public final class NativeImageClassLoaderSupport {
         modulepathModuleFinder = ModuleFinder.of(modulepath().toArray(Path[]::new));
 
         annotationExtractor = new SubstrateAnnotationExtractor();
+        AnnotationUtil.installHostedAnnotationExtractor(annotationExtractor);
 
         includeConfigSealed = false;
 
@@ -544,6 +553,54 @@ public final class NativeImageClassLoaderSupport {
 
     protected List<Path> applicationModulePath() {
         return imagemp;
+    }
+
+    /**
+     * Computes the system modules that are transitively read by application modules passed via
+     * {@code -imagemp}.
+     *
+     * @param configuration module graph resolved from the image module path
+     * @param applicationModuleNames module names discovered directly from the image module path
+     * @return names of system modules read transitively by application modules
+     */
+    private Set<String> computeImageModulePathRequiredSystemModules(Configuration configuration, Set<String> applicationModuleNames) {
+        Set<ResolvedModule> applicationModules = applicationModuleNames.stream()
+                        .map(configuration::findModule)
+                        .flatMap(Optional::stream)
+                        .filter(module -> !hasFileLocation(module, imageProvidedJars::contains))
+                        .collect(Collectors.toSet());
+        Set<String> requiredSystemModules = transitiveReads(applicationModules).stream()
+                        .map(ResolvedModule::name)
+                        .filter(moduleName -> upgradeAndSystemModuleFinder.find(moduleName).isPresent())
+                        .collect(Collectors.toUnmodifiableSet());
+        return requiredSystemModules;
+    }
+
+    /**
+     * Returns the transitive closure of {@link ResolvedModule#reads()} for {@code modules}.
+     */
+    private static Set<ResolvedModule> transitiveReads(Collection<ResolvedModule> modules) {
+        Set<ResolvedModule> reads = new LinkedHashSet<>();
+        Deque<ResolvedModule> worklist = modules.stream()
+                        .flatMap(module -> module.reads().stream())
+                        .collect(Collectors.toCollection(ArrayDeque::new));
+        while (!worklist.isEmpty()) {
+            ResolvedModule module = worklist.removeFirst();
+            if (reads.add(module)) {
+                module.reads().forEach(worklist::add);
+            }
+        }
+        return Set.copyOf(reads);
+    }
+
+    /**
+     * Tests whether {@code module} has a {@code file:} location accepted by {@code matches}.
+     */
+    private static boolean hasFileLocation(ResolvedModule module, Predicate<Path> matches) {
+        return module.reference().location().stream()
+                        .filter(uri -> "file".equalsIgnoreCase(uri.getScheme()))
+                        .map(Path::of)
+                        .anyMatch(matches);
     }
 
     public Optional<Module> findModule(String moduleName) {
@@ -962,6 +1019,18 @@ public final class NativeImageClassLoaderSupport {
                                 .distinct().forEach(mn -> modulesRequiringInitModule.putIfAbsent(mn, InitModuleAction.LoadLinkAndRegisterTypes));
 
                 Set<String> explicitlyAddedModules = HostedModuleSupport.parseModuleSetModifierProperty(HostedModuleSupport.PROPERTY_IMAGE_EXPLICITLY_ADDED_MODULES);
+                for (String moduleName : imageModulePathRequiredSystemModules) {
+                    /*
+                     * Application module-path entries can require system modules that are already
+                     * visible to the builder VM. ClassRegistries snapshots BootLoader.packages()
+                     * into ClassRegistries.bootPackageToModule, which BootClassRegistry uses to map
+                     * a runtime-loaded boot class' package to its jimage module, e.g.
+                     * javax.xml.namespace.QName to java.xml. Load and link these modules so their
+                     * packages are present in that map, without registering their classes as
+                     * analysis types.
+                     */
+                    modulesRequiringInitModule.putIfAbsent(moduleName, InitModuleAction.LoadLink);
+                }
 
                 for (ModuleReference moduleReference : upgradeAndSystemModuleFinder.findAll()) {
                     String moduleName = moduleReference.descriptor().name();

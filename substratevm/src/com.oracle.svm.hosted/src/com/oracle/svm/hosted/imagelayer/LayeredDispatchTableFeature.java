@@ -67,6 +67,9 @@ import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.meta.VTableBuilder;
+import com.oracle.svm.hosted.snapshot.dynamichub.DispatchSlotInfoData;
+import com.oracle.svm.hosted.snapshot.dynamichub.DynamicHubInfoData;
+import com.oracle.svm.hosted.snapshot.elements.PersistedHostedMethodData;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
@@ -172,7 +175,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
         return priorDispatchMethodCache.computeIfAbsent(index, i -> {
             var loader = HostedImageLayerBuildingSupport.singleton().getLoader();
             var reader = loader.getHostedMethodData(i);
-            return new PriorDispatchMethod(reader.getMethodId(), reader.getSymbolName().toString(), reader.getVTableIndex(), reader.getIsVirtualCallTarget());
+            return new PriorDispatchMethod(reader.getMethodId(), reader.getSymbolName(), reader.getVTableIndex(), reader.getIsVirtualCallTarget());
         });
     }
 
@@ -197,7 +200,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
                     resolvedMethod = createPriorDispatchMethodInfo(slotInfo.getResolvedHostedMethodIndex());
                 }
                 SlotResolutionStatus status = SlotResolutionStatus.values()[slotInfo.getResolutionStatus()];
-                String slotSymbolName = slotInfo.getSlotSymbolName().toString();
+                String slotSymbolName = slotInfo.getSlotSymbolName();
                 var dispatchSlot = new PriorDispatchSlot(declaredMethod, resolvedMethod, slotInfo.getSlotIndex(), status, slotSymbolName);
                 dispatchSlots[i] = dispatchSlot;
             }
@@ -224,7 +227,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
                 var dispatchSlots = hubInfo.getDispatchTableSlotValues();
                 for (var slotInfo : dispatchSlots) {
                     SlotResolutionStatus status = SlotResolutionStatus.values()[slotInfo.getResolutionStatus()];
-                    String slotSymbolName = slotInfo.getSlotSymbolName().toString();
+                    String slotSymbolName = slotInfo.getSlotSymbolName();
                     if (status == SlotResolutionStatus.UNRESOLVED || status == SlotResolutionStatus.NOT_COMPILED) {
                         assert !slotSymbolName.equals(PriorDispatchSlot.INVALID_SYMBOL_NAME);
                         unresolvedSymbols.add(slotSymbolName);
@@ -238,7 +241,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
     static Stream<AnalysisMethod> getPriorVirtualCallTargets() {
         var loader = HostedImageLayerBuildingSupport.singleton().getLoader();
         var methods = loader.getHostedMethods();
-        return StreamSupport.stream(methods.spliterator(), false).filter(SharedLayerSnapshotCapnProtoSchemaHolder.PersistedHostedMethod.Reader::getIsVirtualCallTarget).map(data -> {
+        return StreamSupport.stream(methods.spliterator(), false).filter(PersistedHostedMethodData.Loader::getIsVirtualCallTarget).map(data -> {
             assert data.getMethodId() != PriorDispatchMethod.UNPERSISTED_METHOD_ID;
             return loader.getAnalysisMethodForBaseLayerId(data.getMethodId());
         });
@@ -650,7 +653,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
         persistedHostedMethodIndexMap = null;
     }
 
-    public void persistHostedMethod(HostedMethod hMethod, Supplier<SharedLayerSnapshotCapnProtoSchemaHolder.PersistedHostedMethod.Builder> methodInfoBuilderSupplier) {
+    public void persistHostedMethod(HostedMethod hMethod, Supplier<PersistedHostedMethodData.Writer> methodInfoBuilderSupplier) {
         assert persistedHostedMethodIndexMap.containsKey(hMethod);
 
         boolean persistedMethod = hMethod.getWrapped().isTrackedAcrossLayers();
@@ -673,7 +676,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
         return persistedHostedMethodIndexMap.get(hMethod);
     }
 
-    public void persistDynamicHubInfo(HostedType hType, Supplier<SharedLayerSnapshotCapnProtoSchemaHolder.DynamicHubInfo.Builder> typeInfoBuilderSupplier) {
+    public void persistDynamicHubInfo(HostedType hType, Supplier<DynamicHubInfoData.Writer> typeInfoBuilderSupplier) {
         var typeInfoBuilder = typeInfoBuilderSupplier.get();
         typeInfoBuilder.setTypeId(hType.getWrapped().getId());
 
@@ -681,7 +684,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
         typeInfoBuilder.setTypecheckId(hType.getTypeID());
         typeInfoBuilder.setNumClassTypes(hType.getNumClassTypes());
         typeInfoBuilder.setNumIterableInterfaceTypes(hType.getNumInterfaceTypes());
-        SVMImageLayerWriter.initInts(typeInfoBuilder::initTypecheckSlotValues, Arrays.stream(hType.getOpenTypeWorldTypeCheckSlots()));
+        SnapshotWriters.initInts(typeInfoBuilder::initTypecheckSlotValues, Arrays.stream(hType.getOpenTypeWorldTypeCheckSlots()));
         typeInfoBuilder.setInterfaceId(hType.getInterfaceID());
 
         // dispatch table info
@@ -690,12 +693,12 @@ public class LayeredDispatchTableFeature implements InternalFeature {
             boolean hubInstalled = hDispatchTable.status == HubStatus.INSTALLED_CURRENT_LAYER;
             typeInfoBuilder.setInstalled(hubInstalled);
 
-            SVMImageLayerWriter.initInts(typeInfoBuilder::initLocallyDeclaredSlotsHostedMethodIndexes,
+            SnapshotWriters.initInts(typeInfoBuilder::initLocallyDeclaredSlotsHostedMethodIndexes,
                             Arrays.stream(hDispatchTable.locallyDeclaredSlots).mapToInt(this::getPersistedHostedMethodIndex));
 
             assert !(hDispatchTable.status == HubStatus.UNINITIALIZED && hDispatchTable.slots != null) : hType;
             if (hDispatchTable.slots != null) {
-                SVMImageLayerWriter.initSortedArray(typeInfoBuilder::initDispatchTableSlotValues, hDispatchTable.slots, (dispatchSlot, dispatchSlotInfoSupplier) -> {
+                SnapshotWriters.initSortedArray(typeInfoBuilder::initDispatchTableSlotValues, hDispatchTable.slots, (dispatchSlot, dispatchSlotInfoSupplier) -> {
                     persistDynamicSlot(dispatchSlot, dispatchSlotInfoSupplier, hubInstalled);
                 });
             }
@@ -704,7 +707,7 @@ public class LayeredDispatchTableFeature implements InternalFeature {
         }
     }
 
-    private void persistDynamicSlot(HostedDispatchSlot dispatchSlot, Supplier<SharedLayerSnapshotCapnProtoSchemaHolder.DispatchSlotInfo.Builder> dispatchSlotInfoSupplier, boolean hubInstalled) {
+    private void persistDynamicSlot(HostedDispatchSlot dispatchSlot, Supplier<DispatchSlotInfoData.Writer> dispatchSlotInfoSupplier, boolean hubInstalled) {
         var dispatchSlotBuilder = dispatchSlotInfoSupplier.get();
 
         dispatchSlotBuilder.setSlotIndex(dispatchSlot.slotIndex);

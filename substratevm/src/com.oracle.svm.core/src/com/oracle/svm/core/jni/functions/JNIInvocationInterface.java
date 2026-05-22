@@ -404,7 +404,7 @@ public final class JNIInvocationInterface {
                 } catch (Exception | Error e) {
                     PrintStream log = Log.logStream();
                     log.println("Error occurred during initialization of boot layer");
-                    e.printStackTrace(log);
+                    printErrorWithoutStackTrace(log, e);
                     return JNIErrors.JNI_ERR();
                 }
             }
@@ -424,6 +424,19 @@ public final class JNIInvocationInterface {
             vmBuf.write(javaVm);
             penv.write(JNIThreadLocalEnvironment.getAddress());
             return JNIErrors.JNI_OK();
+        }
+
+        private static void printErrorWithoutStackTrace(PrintStream log, Throwable error) {
+            // Match the launcher-style boot-layer diagnostics without volatile Java stack frames.
+            Throwable current = error;
+            while (current != null) {
+                if (current == error) {
+                    log.println(current);
+                } else {
+                    log.println("Caused by: " + current);
+                }
+                current = current.getCause();
+            }
         }
 
         static WordPointer parseVMOptions(JNIJavaVMInitArgs vmArgs) {

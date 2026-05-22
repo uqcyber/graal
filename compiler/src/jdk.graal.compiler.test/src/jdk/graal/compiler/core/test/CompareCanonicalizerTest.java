@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,14 +24,27 @@
  */
 package jdk.graal.compiler.core.test;
 
+import org.junit.Test;
+
+import jdk.graal.compiler.core.common.type.StampFactory;
+import jdk.graal.compiler.core.common.type.StampPair;
+import jdk.graal.compiler.nodes.ConstantNode;
+import jdk.graal.compiler.nodes.LogicConstantNode;
+import jdk.graal.compiler.nodes.LogicNegationNode;
+import jdk.graal.compiler.nodes.LogicNode;
+import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ParameterNode;
 import jdk.graal.compiler.nodes.ReturnNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.StructuredGraph.AllowAssumptions;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.calc.ConditionalNode;
+import jdk.graal.compiler.nodes.calc.FloatEqualsNode;
+import jdk.graal.compiler.nodes.calc.FloatLessThanNode;
+import jdk.graal.compiler.nodes.calc.IntegerLessThanNode;
+import jdk.graal.compiler.nodes.calc.IntegerNormalizeCompareNode;
 import jdk.graal.compiler.nodes.calc.IntegerTestNode;
-import org.junit.Test;
+import jdk.vm.ci.meta.JavaKind;
 
 public class CompareCanonicalizerTest extends GraalCompilerTest {
 
@@ -94,6 +107,28 @@ public class CompareCanonicalizerTest extends GraalCompilerTest {
     }
 
     @Test
+    public void testCompareImplications() {
+        StructuredGraph graph = parseEager("floatCompare", AllowAssumptions.NO);
+        ValueNode a = graph.getParameter(0);
+        ValueNode b = graph.getParameter(1);
+        LogicNode lessThan = graph.addOrUniqueWithInputs(FloatLessThanNode.create(a, b, false, NodeView.DEFAULT));
+        LogicNode unorderedLessThan = graph.addOrUniqueWithInputs(FloatLessThanNode.create(a, b, true, NodeView.DEFAULT));
+        LogicNode equals = graph.addOrUniqueWithInputs(FloatEqualsNode.create(a, b, NodeView.DEFAULT));
+
+        assertTrue(equals.implies(false, lessThan).isFalse());
+        assertTrue(equals.implies(false, LogicNegationNode.create(lessThan)).isTrue());
+        assertTrue(lessThan.implies(false, equals).isFalse());
+        assertTrue(lessThan.implies(false, LogicNegationNode.create(equals)).isTrue());
+        assertTrue(lessThan.implies(true, equals).isUnknown());
+        assertTrue(unorderedLessThan.implies(false, lessThan).isUnknown());
+        assertTrue(lessThan.implies(true, unorderedLessThan).isUnknown());
+    }
+
+    public static boolean floatCompare(float a, float b) {
+        return a < b;
+    }
+
+    @Test
     public void testIntegerTest() {
         for (int i = 1; i <= 4; i++) {
             StructuredGraph graph = getCanonicalizedGraph("integerTest" + i);
@@ -123,6 +158,17 @@ public class CompareCanonicalizerTest extends GraalCompilerTest {
     public static boolean integerTest4(int x, int y) {
         int c = 10;
         return (x & y) == (10 - c);
+    }
+
+    @Test
+    public void testLongMinValueLessThanNormalizeCompare() {
+        ParameterNode x = new ParameterNode(0, StampPair.createSingle(StampFactory.forKind(JavaKind.Long)));
+        ParameterNode y = new ParameterNode(1, StampPair.createSingle(StampFactory.forKind(JavaKind.Long)));
+        IntegerNormalizeCompareNode normalizeCompare = new IntegerNormalizeCompareNode(x, y, JavaKind.Long, false);
+        LogicNode result = IntegerLessThanNode.create(getConstantReflection(), getMetaAccess(), getInitialOptions(), null, ConstantNode.forLong(Long.MIN_VALUE), normalizeCompare, NodeView.DEFAULT);
+
+        assertTrue(result instanceof LogicConstantNode);
+        assertTrue(((LogicConstantNode) result).getValue());
     }
 
     @Test

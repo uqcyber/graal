@@ -25,10 +25,14 @@
  */
 package com.oracle.svm.test;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
+
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.MissingReflectionRegistrationError;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
 import org.graalvm.nativeimage.impl.RuntimeReflectionSupport;
@@ -40,6 +44,12 @@ import com.oracle.svm.hosted.substitute.SubstitutionReflectivityFilter;
  * Tests the {@link RuntimeReflection}.
  */
 public class ReflectionRegistrationTest {
+
+    private static final int FIELD_LOOKUP_TEST_VALUE = 42;
+
+    public static class FieldLookupTarget {
+        public int value = FIELD_LOOKUP_TEST_VALUE;
+    }
 
     public static class TestFeature implements Feature {
 
@@ -109,6 +119,8 @@ public class ReflectionRegistrationTest {
             } catch (NullPointerException e) {
                 // expected
             }
+
+            RuntimeReflection.registerFieldLookup(FieldLookupTarget.class, "value");
         }
 
     }
@@ -116,5 +128,35 @@ public class ReflectionRegistrationTest {
     @Test
     public void test() {
         // nothing to do
+    }
+
+    @Test
+    public void testFieldLookupAllowsAccess() throws ReflectiveOperationException {
+        Field field = FieldLookupTarget.class.getDeclaredField("value");
+        assertEquals(FIELD_LOOKUP_TEST_VALUE, field.get(new FieldLookupTarget()));
+    }
+
+    @NativeImageBuildArgs({
+                    "--exact-reachability-metadata=com.oracle.svm.test",
+                    "--features=com.oracle.svm.test.ReflectionRegistrationTest$ExactReachabilityTest$TestFeature"
+    })
+    public static class ExactReachabilityTest {
+        public static class TestFeature implements Feature {
+            @Override
+            public void beforeAnalysis(BeforeAnalysisAccess access) {
+                RuntimeReflection.registerFieldLookup(FieldLookupTarget.class, "value");
+            }
+        }
+
+        @Test
+        public void testFieldLookupAllowsQueryOnly() throws NoSuchFieldException {
+            Field field = FieldLookupTarget.class.getDeclaredField(fieldName());
+            assertEquals(fieldName(), field.getName());
+            assertThrows(MissingReflectionRegistrationError.class, () -> field.get(new FieldLookupTarget()));
+        }
+
+        private static String fieldName() {
+            return System.nanoTime() == Long.MIN_VALUE ? "missing" : "value";
+        }
     }
 }

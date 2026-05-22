@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -83,6 +83,7 @@ import jdk.graal.compiler.nodes.loop.Loop;
 import jdk.graal.compiler.nodes.loop.LoopFragment;
 import jdk.graal.compiler.nodes.loop.LoopFragmentInside;
 import jdk.graal.compiler.nodes.loop.LoopFragmentWhole;
+import jdk.graal.compiler.nodes.loop.LoopsData;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.nodes.spi.Simplifiable;
 import jdk.graal.compiler.nodes.spi.SimplifierTool;
@@ -97,6 +98,14 @@ public abstract class LoopTransformations {
 
     private LoopTransformations() {
         // does not need to be instantiated
+    }
+
+    private static int saturatedConstantMaxTripCount(Loop loop) {
+        try {
+            return Math.toIntExact(LoopUtility.tripCountSignedExact(loop.counted()));
+        } catch (ArithmeticException e) {
+            return Integer.MAX_VALUE;
+        }
     }
 
     public static LoopFragmentInside peel(Loop loop) {
@@ -123,9 +132,21 @@ public abstract class LoopTransformations {
 
     @SuppressWarnings("try")
     public static void fullUnroll(Loop loop, CoreProviders context, CanonicalizerPhase canonicalizer) {
-        // assert loop.isCounted(); //TODO (gd) strengthen : counted with known trip count
+        fullUnroll(loop, context, canonicalizer, true);
+    }
+
+    @SuppressWarnings("try")
+    public static void fullUnroll(Loop loop, CoreProviders context, CanonicalizerPhase canonicalizer, boolean requireCounted) {
         LoopBeginNode loopBegin = loop.loopBegin();
         StructuredGraph graph = loopBegin.graph();
+        loop.detectCounted();
+        if (loop.isCounted() && loop.counted().isConstantMaxTripCount()) {
+            LoopsData loopsData = context.getLoopsDataProvider().getLoopsData(graph);
+            int fullUnrollFactor = saturatedConstantMaxTripCount(loop);
+            LoopUtility.updateDescendantLoopCloneFactors(loopsData, loop, fullUnrollFactor);
+        } else {
+            GraalError.guarantee(!requireCounted, "Full unroll requires a counted loop with a constant max trip count: %s", loop);
+        }
         int initialNodeCount = graph.getNodeCount();
         SimplifierTool defaultSimplifier = GraphUtil.getDefaultSimplifier(context, canonicalizer.getCanonicalizeReads(), graph.getAssumptions(), graph.getOptions());
         /*
@@ -233,6 +254,7 @@ public abstract class LoopTransformations {
     public static void partialUnroll(Loop loop, EconomicMap<LoopBeginNode, OpaqueNode> opaqueUnrolledStrides) {
         assert loop.loopBegin().isMainLoop();
         adaptCountedLoopExitProbability(loop.counted().getCountedExit(), loop.localLoopFrequency() / 2D);
+        LoopUtility.updateDescendantLoopCloneFactors(loop.loopsData(), loop, 2);
         LoopFragmentInside newSegment = loop.inside().duplicate();
         newSegment.insertWithinAfter(loop, opaqueUnrolledStrides);
         loop.loopBegin().graph().getOptimizationLog().withProperty("unrollFactor", loop.loopBegin().getUnrollFactor()).report(LoopTransformations.class, "LoopPartialUnroll", loop.loopBegin());
@@ -352,6 +374,8 @@ public abstract class LoopTransformations {
 
         assert preLoop.nodes().contains(preLoopBegin);
         assert preLoop.nodes().contains(preLoopExitNode);
+
+        LoopUtility.updateDescendantLoopCloneFactors(loop.loopsData(), loop, 2);
 
         /*
          * Duplicate the original loop two times, each duplication will create a merge for the loop

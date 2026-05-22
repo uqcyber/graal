@@ -30,7 +30,7 @@ To build Web Image applications, you need:
 
 ### Advantages
 
-Web Image opens new use-cases for JVM ecosystem such as:
+Web Image opens new use cases for the JVM ecosystem such as:
 
 * Running JVM applications in browsers or on Wasm-enabled runtimes such as Node.js
 * Producing portable artifacts that can run across multiple environments
@@ -52,7 +52,7 @@ At present, Web Image is best suited for application-style builds hosted by a Ja
 
 ## Usage
 
-1. Create a simple Java application. Save the following code to _HelloWasm.java_:
+1. Create a simple application entry point. Save the following code to _HelloWasm.java_:
 
     ```java
     public class HelloWasm {
@@ -65,7 +65,7 @@ At present, Web Image is best suited for application-style builds hosted by a Ja
         }
     }
     ```
-2. Compile the Java source file:
+2. Compile the source file:
 
     ```bash
     javac HelloWasm.java
@@ -119,7 +119,7 @@ Browsers restrict loading Wasm modules from the local filesystem, so opening via
     ```
     Instead of just loading the script, you can attach some logic after the runtime is ready.
 
-2. Start a local server using your Java or Python environment:
+2. Start a local server using either `jwebserver` or Python:
     ```bash
     jwebserver -p 8000
     ```

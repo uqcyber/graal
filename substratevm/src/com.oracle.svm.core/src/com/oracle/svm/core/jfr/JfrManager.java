@@ -33,7 +33,6 @@ import static com.oracle.svm.core.jfr.JfrArgumentParser.parseMaxSize;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Map;
 
 import org.graalvm.nativeimage.ImageSingletons;
@@ -154,7 +153,7 @@ public class JfrManager {
 
         try {
             if (dumpPath != null) {
-                Options.setDumpPath(Paths.get(dumpPath));
+                Options.setDumpPath(Path.of(dumpPath));
             } else {
                 Options.setDumpPath(null);
             }
@@ -164,7 +163,7 @@ public class JfrManager {
     }
 
     private static void setRepositoryBasePath(String repositoryPath) throws IOException {
-        Path path = Paths.get(repositoryPath);
+        Path path = Path.of(repositoryPath);
         SubstrateUtil.cast(Repository.getRepository(), Target_jdk_jfr_internal_Repository.class).setBasePath(path);
     }
 

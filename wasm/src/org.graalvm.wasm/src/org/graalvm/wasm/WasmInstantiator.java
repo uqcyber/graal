@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -517,9 +517,9 @@ public class WasmInstantiator {
         }
     }
 
-    private static FrameDescriptor createFrameDescriptor(int[] localTypes, int maxStackSize) {
+    private static FrameDescriptor createFrameDescriptor(int[] localTypes, int maxLegacyCatchDepth, int maxStackSize) {
         FrameDescriptor.Builder builder = FrameDescriptor.newBuilder(localTypes.length);
-        builder.addSlots(localTypes.length + maxStackSize, FrameSlotKind.Static);
+        builder.addSlots(localTypes.length + maxLegacyCatchDepth + maxStackSize, FrameSlotKind.Static);
         return builder.build();
     }
 
@@ -542,8 +542,9 @@ public class WasmInstantiator {
     }
 
     private WasmFunctionRootNode instantiateCodeEntryRootNode(WasmStore store, WasmModule module, CodeEntry codeEntry, WasmFunction function) {
-        final WasmCodeEntry wasmCodeEntry = new WasmCodeEntry(function, module.bytecode(), codeEntry.localTypes(), codeEntry.resultTypes(), codeEntry.usesMemoryZero());
-        final FrameDescriptor frameDescriptor = createFrameDescriptor(codeEntry.localTypes(), codeEntry.maxStackSize());
+        final WasmCodeEntry wasmCodeEntry = new WasmCodeEntry(function, module.bytecode(), codeEntry.localTypes(), codeEntry.resultTypes(), codeEntry.maxLegacyCatchDepth(),
+                        codeEntry.usesMemoryZero());
+        final FrameDescriptor frameDescriptor = createFrameDescriptor(codeEntry.localTypes(), codeEntry.maxLegacyCatchDepth(), codeEntry.maxStackSize());
         final Node[] callNodes = setupCallNodes(module, codeEntry);
         final WasmFixedMemoryImplFunctionNode functionNode = WasmFixedMemoryImplFunctionNode.create(module, wasmCodeEntry, codeEntry.bytecodeStartOffset(), codeEntry.bytecodeEndOffset(),
                         codeEntry.exceptionTableOffset(), callNodes);

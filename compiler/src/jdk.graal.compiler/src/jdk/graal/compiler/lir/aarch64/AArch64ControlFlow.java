@@ -372,7 +372,7 @@ public class AArch64ControlFlow {
                         break;
                     case Object:
                         /* Comparing against ptr */
-                        emitCompareHelper(crb, masm, 64, key, jc);
+                        emitObjectComparison(crb, masm, key, keyRegister, jc);
                         break;
                     default:
                         throw new GraalError("switch only supported for int, long and object");
@@ -383,6 +383,15 @@ public class AArch64ControlFlow {
             protected void conditionalJump(int index, Condition condition, Label target) {
                 emitComparison(keyConstants[index]);
                 masm.branchConditionally(converter.apply(condition), target);
+            }
+        }
+
+        protected void emitObjectComparison(CompilationResultBuilder crb, AArch64MacroAssembler masm, Value keyValue, Register keyRegister, JavaConstant jc) {
+            int cmpSize = keyValue.getPlatformKind().getSizeInBytes() * Byte.SIZE;
+            try (ScratchRegister scratch = masm.getScratchRegister()) {
+                Register scratchReg = scratch.getRegister();
+                AArch64Move.const2reg((AArch64Kind) keyValue.getPlatformKind(), crb, masm, scratchReg, jc);
+                masm.cmp(cmpSize, keyRegister, scratchReg);
             }
         }
 

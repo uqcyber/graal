@@ -44,6 +44,7 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
+import com.oracle.svm.core.image.ImageHeapLayoutInfo;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
@@ -933,11 +934,14 @@ public class FeatureImpl {
     public static class AfterHeapLayoutAccessImpl extends HostedFeatureAccessImpl implements Feature.AfterHeapLayoutAccess {
         protected final HostedMetaAccess hMetaAccess;
         protected final NativeImageHeap heap;
+        protected final ImageHeapLayoutInfo heapLayout;
 
-        public AfterHeapLayoutAccessImpl(FeatureHandler featureHandler, ImageClassLoader imageClassLoader, NativeImageHeap heap, HostedMetaAccess hMetaAccess, DebugContext debugContext) {
+        public AfterHeapLayoutAccessImpl(FeatureHandler featureHandler, ImageClassLoader imageClassLoader, NativeImageHeap heap, ImageHeapLayoutInfo heapLayout, HostedMetaAccess hMetaAccess,
+                        DebugContext debugContext) {
             super(featureHandler, imageClassLoader, debugContext);
             this.heap = heap;
             this.hMetaAccess = hMetaAccess;
+            this.heapLayout = heapLayout;
         }
 
         @Override
@@ -947,6 +951,10 @@ public class FeatureImpl {
 
         public NativeImageHeap getHeap() {
             return heap;
+        }
+
+        public ImageHeapLayoutInfo getHeapLayout() {
+            return heapLayout;
         }
     }
 
@@ -1017,13 +1025,15 @@ public class FeatureImpl {
         protected final AbstractImage abstractImage;
         protected final RuntimeConfiguration runtimeConfiguration;
         private final HostedMetaAccess hMetaAccess;
+        protected final ImageHeapLayoutInfo heapLayout;
 
         AfterAbstractImageCreationAccessImpl(FeatureHandler featureHandler, ImageClassLoader imageClassLoader, HostedMetaAccess hMetaAccess, DebugContext debugContext, AbstractImage abstractImage,
-                        RuntimeConfiguration runtimeConfiguration) {
+                        ImageHeapLayoutInfo heapLayout, RuntimeConfiguration runtimeConfiguration) {
             super(featureHandler, imageClassLoader, debugContext);
             this.abstractImage = abstractImage;
             this.runtimeConfiguration = runtimeConfiguration;
             this.hMetaAccess = hMetaAccess;
+            this.heapLayout = heapLayout;
         }
 
         public AbstractImage getImage() {
@@ -1033,6 +1043,10 @@ public class FeatureImpl {
         @Override
         public HostedMetaAccess getMetaAccess() {
             return hMetaAccess;
+        }
+
+        public ImageHeapLayoutInfo getHeapLayout() {
+            return heapLayout;
         }
 
         public RuntimeConfiguration getRuntimeConfiguration() {
@@ -1045,16 +1059,16 @@ public class FeatureImpl {
         protected final LinkerInvocation linkerInvocation;
         protected final Path tempDirectory;
         protected final NativeImageKind imageKind;
-        private final HostedMetaAccess hMetaAcces;
+        private final HostedMetaAccess hMetaAccess;
 
         AfterImageWriteAccessImpl(FeatureHandler featureHandler, ImageClassLoader imageClassLoader, HostedUniverse hUniverse, LinkerInvocation linkerInvocation, Path tempDirectory,
-                        NativeImageKind imageKind, HostedMetaAccess hMetaAcces, DebugContext debugContext) {
+                        NativeImageKind imageKind, HostedMetaAccess hMetaAccess, DebugContext debugContext) {
             super(featureHandler, imageClassLoader, debugContext);
             this.hUniverse = hUniverse;
             this.linkerInvocation = linkerInvocation;
             this.tempDirectory = tempDirectory;
             this.imageKind = imageKind;
-            this.hMetaAcces = hMetaAcces;
+            this.hMetaAccess = hMetaAccess;
         }
 
         public HostedUniverse getUniverse() {
@@ -1084,7 +1098,7 @@ public class FeatureImpl {
 
         @Override
         public HostedMetaAccess getMetaAccess() {
-            return hMetaAcces;
+            return hMetaAccess;
         }
     }
 }

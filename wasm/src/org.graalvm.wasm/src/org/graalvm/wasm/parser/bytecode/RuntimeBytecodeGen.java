@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -300,20 +300,25 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param stackSize The stack size at the start of the block.
      * @param commonResultType The most common result type of the result types of the block. See
      *            {@link WasmType#getCommonValueType(int[])}.
+     * @param legacyCatchDepth The number of active legacy catches that must remain active when
+     *            control transfers to this label. If non-zero, the label is immediately followed by
+     *            a {@code LEGACY_CATCH_UNWIND} helper bytecode. Non-legacy labels keep their
+     *            previous encoding unchanged.
      * @return The location of the label in the bytecode.
      */
-    public int addLabel(int resultCount, int stackSize, int commonResultType) {
+    public int addLabel(int resultCount, int stackSize, int commonResultType, int legacyCatchDepth) {
         assert commonResultType == WasmType.NONE_COMMON_TYPE || commonResultType == WasmType.NUM_COMMON_TYPE || commonResultType == WasmType.OBJ_COMMON_TYPE ||
                         commonResultType == WasmType.MIX_COMMON_TYPE : "invalid result type";
+        final boolean hasLegacyCatchUnwind = legacyCatchDepth != 0;
         final int location;
         if (resultCount == 0 && stackSize <= 63) {
-            add1(Bytecode.SKIP_LABEL_U8);
+            addSkipLabel(hasLegacyCatchUnwind, Bytecode.SKIP_LABEL_U8, Bytecode.LEGACY_SKIP_LABEL_U8);
             location = location();
             add1(Bytecode.LABEL_U8);
             add1(stackSize);
         } else if (resultCount == 1 && stackSize <= 63) {
             assert commonResultType != BytecodeBitEncoding.LABEL_RESULT_TYPE_MIX : "Single result value must either have number or reference type.";
-            add1(Bytecode.SKIP_LABEL_U8);
+            addSkipLabel(hasLegacyCatchUnwind, Bytecode.SKIP_LABEL_U8, Bytecode.LEGACY_SKIP_LABEL_U8);
             location = location();
             add1(Bytecode.LABEL_U8);
             if (commonResultType == BytecodeBitEncoding.LABEL_RESULT_TYPE_NUM) {
@@ -322,20 +327,38 @@ public class RuntimeBytecodeGen extends BytecodeGen {
                 add1(BytecodeBitEncoding.LABEL_U8_RESULT_OBJ | stackSize);
             }
         } else if (resultCount <= 63 && fitsIntoUnsignedByte(stackSize)) {
-            add1(Bytecode.SKIP_LABEL_U16);
+            addSkipLabel(hasLegacyCatchUnwind, Bytecode.SKIP_LABEL_U16, Bytecode.LEGACY_SKIP_LABEL_U16);
             location = location();
             add1(Bytecode.LABEL_U16);
             add1(commonResultType << BytecodeBitEncoding.LABEL_U16_RESULT_TYPE_SHIFT | resultCount);
             add1(stackSize);
         } else {
-            add1(Bytecode.SKIP_LABEL_I32);
+            addSkipLabel(hasLegacyCatchUnwind, Bytecode.SKIP_LABEL_I32, Bytecode.LEGACY_SKIP_LABEL_I32);
             location = location();
             add1(Bytecode.LABEL_I32);
             add1(commonResultType);
             add4(resultCount);
             add4(stackSize);
         }
+        if (hasLegacyCatchUnwind) {
+            add1(Bytecode.MISC);
+            add1(Bytecode.LEGACY_CATCH_UNWIND);
+            add4(legacyCatchDepth);
+        }
         return location;
+    }
+
+    private void addSkipLabel(boolean hasLegacyCatchUnwind, int skipOpcode, int legacySkipOpcode) {
+        if (hasLegacyCatchUnwind) {
+            add1(Bytecode.MISC);
+            add1(legacySkipOpcode);
+        } else {
+            add1(skipOpcode);
+        }
+    }
+
+    public int addLabel(int resultCount, int stackSize, int commonResultType) {
+        return addLabel(resultCount, stackSize, commonResultType, 0);
     }
 
     /**
@@ -345,12 +368,18 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * @param stackSize The stack size at the start of the loop.
      * @param commonResultType The most common result type of the result types of the loop. See
      *            {@link WasmType#getCommonValueType(int[])}.
+     * @param legacyCatchDepth The number of active legacy catches that must remain active when
+     *            control transfers to this loop label.
      * @return The location of the loop label in the bytecode.
      */
-    public int addLoopLabel(int resultCount, int stackSize, int commonResultType) {
-        int loopLabel = addLabel(resultCount, stackSize, commonResultType);
+    public int addLoopLabel(int resultCount, int stackSize, int commonResultType, int legacyCatchDepth) {
+        int loopLabel = addLabel(resultCount, stackSize, commonResultType, legacyCatchDepth);
         addOp(Bytecode.LOOP);
         return loopLabel;
+    }
+
+    public int addLoopLabel(int resultCount, int stackSize, int commonResultType) {
+        return addLoopLabel(resultCount, stackSize, commonResultType, 0);
     }
 
     /**
@@ -550,8 +579,8 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * from (4 byte) | to (4 byte) | type (1 byte) | tag (4 byte) | target (4 byte)
      * </pre>
      *
-     * @param from start offset of the bytecode range caught by the exception handler (exclusive)
-     * @param to end offset of the bytecode range caught by the exception handler (inclusive)
+     * @param from start offset of the bytecode range caught by the exception handler (inclusive)
+     * @param to end offset of the bytecode range caught by the exception handler (exclusive)
      * @param type The opcode of the exception handler (see
      *            {@link org.graalvm.wasm.constants.ExceptionHandlerType}).
      * @param tag The tag of the exception handler.

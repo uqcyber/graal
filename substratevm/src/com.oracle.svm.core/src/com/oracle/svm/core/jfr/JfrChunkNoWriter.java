@@ -81,7 +81,7 @@ public final class JfrChunkNoWriter implements JfrChunkWriter {
     }
 
     @Override
-    public void setFilename(String filename) {
+    public void setFileToOpen(String filename) {
         /* Nothing to do. */
     }
 

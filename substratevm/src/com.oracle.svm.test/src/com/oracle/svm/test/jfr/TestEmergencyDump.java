@@ -78,7 +78,7 @@ public class TestEmergencyDump extends JfrRecordingTest {
             recording.dump(createTempJfrFile());
 
             emitStringEvent("third \uD83D\uDE80");
-            SubstrateJVM.get().vmOutOfMemoryErrorRotation();
+            SubstrateJVM.get().dumpOnOutOfMemoryError();
         } finally {
             recording.stop();
             recording.close();

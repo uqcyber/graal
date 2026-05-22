@@ -27,6 +27,9 @@ package com.oracle.svm.interpreter.metadata;
 import static com.oracle.svm.core.BuildPhaseProvider.AfterAnalysis;
 import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -40,18 +43,25 @@ import com.oracle.svm.core.graal.meta.KnownOffsets;
 import com.oracle.svm.core.graal.snippets.OpenTypeWorldDispatchTableSnippets;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
+import com.oracle.svm.espresso.classfile.ClassfileParser;
+import com.oracle.svm.espresso.classfile.ClassfileStream;
+import com.oracle.svm.espresso.classfile.ParserException;
 import com.oracle.svm.espresso.classfile.ParserKlass;
+import com.oracle.svm.espresso.classfile.attributes.PermittedSubclassesAttribute;
 import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
 import com.oracle.svm.espresso.classfile.descriptors.Name;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
+import com.oracle.svm.espresso.classfile.descriptors.ValidationException;
 import com.oracle.svm.espresso.shared.meta.TypeAccess;
 import com.oracle.svm.interpreter.metadata.serialization.VisibleForSerialization;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
@@ -69,6 +79,8 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
     private final InterpreterResolvedJavaType componentType;
     private final InterpreterResolvedObjectType superclass;
     private final InterpreterResolvedObjectType[] interfaces;
+    // Internal class names from the PermittedSubclasses attribute, or null for non-sealed types.
+    private final Symbol<Name>[] permittedSubclassNames;
     private InterpreterResolvedJavaMethod[] declaredMethods;
     protected InterpreterResolvedJavaField[] declaredFields;
     private int afterFieldsOffset;
@@ -102,13 +114,14 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
                     InterpreterResolvedObjectType[] interfaces,
                     InterpreterConstantPool constantPool,
                     JavaConstant clazzConstant,
-                    boolean isWordType, String sourceFileName) {
+                    boolean isWordType, String sourceFileName, Symbol<Name>[] permittedSubclassNames) {
         super(type, clazzConstant, isWordType);
         assert (char) modifiers == modifiers;
         this.modifiers = (char) modifiers;
         this.componentType = componentType;
         this.superclass = superclass;
         this.interfaces = interfaces;
+        this.permittedSubclassNames = permittedSubclassNames;
         this.constantPool = constantPool;
         this.sourceFileName = sourceFileName;
     }
@@ -118,13 +131,14 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
                     InterpreterResolvedObjectType[] interfaces,
                     InterpreterConstantPool constantPool,
                     Class<?> javaClass,
-                    boolean isWordType) {
+                    boolean isWordType, Symbol<Name>[] permittedSubclassNames) {
         super(type, javaClass, isWordType);
         assert isWordType == WordBase.class.isAssignableFrom(javaClass);
         assert (char) modifiers == modifiers;
         this.modifiers = (char) modifiers;
         this.superclass = superclass;
         this.interfaces = interfaces;
+        this.permittedSubclassNames = permittedSubclassNames;
         this.componentType = componentType;
         this.constantPool = constantPool;
         this.sourceFileName = DynamicHub.fromClass(javaClass).getSourceFileName();
@@ -135,7 +149,7 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
                     InterpreterResolvedObjectType superclass,
                     InterpreterResolvedObjectType[] interfaces, InterpreterConstantPool constantPool,
                     Class<?> javaClass,
-                    String sourceFileName) {
+                    String sourceFileName, Symbol<Name>[] permittedSubclassNames) {
         super(type, javaClass);
         assert (char) modifiers == modifiers;
         this.originalType = originalType;
@@ -143,6 +157,7 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
         this.componentType = componentType;
         this.superclass = superclass;
         this.interfaces = interfaces;
+        this.permittedSubclassNames = permittedSubclassNames;
         this.constantPool = constantPool;
         this.sourceFileName = sourceFileName;
     }
@@ -159,15 +174,23 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
                     Class<?> javaClass,
                     String sourceFileName) {
         Symbol<Type> type = CremaTypeAccess.jvmciNameToType(name);
-        return new InterpreterResolvedObjectType(originalType, type, modifiers, componentType, superclass, interfaces, constantPool, javaClass, sourceFileName);
+        return new InterpreterResolvedObjectType(originalType, type, modifiers, componentType, superclass, interfaces, constantPool, javaClass, sourceFileName,
+                        permittedSubclassNames(originalType, javaClass));
     }
 
     @VisibleForSerialization
     public static InterpreterResolvedObjectType createForInterpreter(String name, int modifiers, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
                     InterpreterResolvedObjectType[] interfaces, InterpreterConstantPool constantPool,
                     Class<?> javaClass, boolean isWordType) {
+        return createForInterpreter(name, modifiers, componentType, superclass, interfaces, constantPool, javaClass, isWordType, null);
+    }
+
+    @VisibleForSerialization
+    public static InterpreterResolvedObjectType createForInterpreter(String name, int modifiers, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
+                    InterpreterResolvedObjectType[] interfaces, InterpreterConstantPool constantPool,
+                    Class<?> javaClass, boolean isWordType, Symbol<Name>[] permittedSubclassNames) {
         Symbol<Type> type = CremaTypeAccess.jvmciNameToType(name);
-        return new InterpreterResolvedObjectType(type, modifiers, componentType, superclass, interfaces, constantPool, javaClass, isWordType);
+        return new InterpreterResolvedObjectType(type, modifiers, componentType, superclass, interfaces, constantPool, javaClass, isWordType, permittedSubclassNames);
     }
 
     public static CremaResolvedObjectType createForCrema(ParserKlass parserKlass, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
@@ -182,9 +205,18 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
                     JavaConstant clazzConstant,
                     boolean isWordType,
                     String sourceFileName) {
+        return createWithOpaqueClass(name, modifiers, componentType, superclass, interfaces, constantPool, clazzConstant, isWordType, sourceFileName, null);
+    }
+
+    @VisibleForSerialization
+    public static InterpreterResolvedObjectType createWithOpaqueClass(String name, int modifiers, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
+                    InterpreterResolvedObjectType[] interfaces, InterpreterConstantPool constantPool,
+                    JavaConstant clazzConstant,
+                    boolean isWordType,
+                    String sourceFileName, Symbol<Name>[] permittedSubclassNames) {
         Symbol<Type> type = CremaTypeAccess.jvmciNameToType(name);
         return new InterpreterResolvedObjectType(type, modifiers, componentType, superclass, interfaces, constantPool, clazzConstant, isWordType,
-                        sourceFileName);
+                        sourceFileName, permittedSubclassNames);
     }
 
     public final void setConstantPool(InterpreterConstantPool constantPool) {
@@ -237,7 +269,93 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
 
     @Override
     public List<JavaType> getPermittedSubclasses() {
-        throw VMError.unimplemented("getPermittedSubclasses");
+        if (isArray()) {
+            return null;
+        }
+        if (permittedSubclassNames == null) {
+            return null;
+        }
+        if (permittedSubclassNames.length == 0) {
+            return List.of();
+        }
+        ArrayList<JavaType> list = new ArrayList<>(permittedSubclassNames.length);
+        for (Symbol<Name> permittedSubclassName : permittedSubclassNames) {
+            Symbol<Type> permittedSubclassType = SymbolsSupport.getTypes().getOrCreateValidType(TypeSymbols.nameToType(permittedSubclassName));
+            list.add(CremaMethodAccess.toJavaType(permittedSubclassType));
+        }
+        return list;
+    }
+
+    public final boolean hasPermittedSubclasses() {
+        return permittedSubclassNames != null;
+    }
+
+    public final boolean declaresPermittedSubclass(Symbol<Name> internalName) {
+        if (permittedSubclassNames == null) {
+            return false;
+        }
+        for (Symbol<Name> permittedSubclassName : permittedSubclassNames) {
+            if (permittedSubclassName == internalName) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public final Symbol<Name>[] getPermittedSubclassNames() {
+        return permittedSubclassNames;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private static Symbol<Name>[] permittedSubclassNames(ResolvedJavaType originalType, Class<?> javaClass) {
+        Symbol<Name>[] parsedNames = permittedSubclassNames(javaClass);
+        if (parsedNames != null) {
+            return parsedNames;
+        }
+
+        ResolvedJavaType sourceType = OriginalClassProvider.getOriginalType(originalType);
+        List<? extends JavaType> permittedSubclasses = sourceType.getPermittedSubclasses();
+        if (permittedSubclasses == null) {
+            return null;
+        }
+        @SuppressWarnings("unchecked")
+        Symbol<Name>[] result = (Symbol<Name>[]) new Symbol<?>[permittedSubclasses.size()];
+        for (int i = 0; i < result.length; i++) {
+            // Store the class-file name so build-time and Crema-loaded sealed classes use the same symbolic representation.
+            String classFileName = permittedSubclasses.get(i).toClassName().replace('.', '/');
+            result[i] = SymbolsSupport.getNames().getOrCreate(ByteSequence.create(classFileName));
+        }
+        return result;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private static Symbol<Name>[] permittedSubclassNames(Class<?> javaClass) {
+        String classFileName = javaClass.getName().replace('.', '/') + ".class";
+        try (InputStream stream = javaClass.getClassLoader() == null ? ClassLoader.getSystemResourceAsStream(classFileName) : javaClass.getClassLoader().getResourceAsStream(classFileName)) {
+            if (stream == null) {
+                return null;
+            }
+            // Read the class-file attribute directly so permitted subclasses stay symbolic.
+            ParserKlass parsed = ClassfileParser.parse(ClassRegistries.currentLayer(), new ClassfileStream(stream.readAllBytes(), null), false, javaClass.getClassLoader() == null, null,
+                            javaClass.isHidden(), true, false);
+            return permittedSubclassNames(parsed);
+        } catch (IOException | ValidationException | ParserException e) {
+            throw VMError.shouldNotReachHere("Cannot parse class file for " + javaClass.getName(), e);
+        }
+    }
+
+    private static Symbol<Name>[] permittedSubclassNames(ParserKlass parserKlass) {
+        PermittedSubclassesAttribute permittedSubclasses = parserKlass.getAttribute(PermittedSubclassesAttribute.NAME, PermittedSubclassesAttribute.class);
+        if (permittedSubclasses == null) {
+            return null;
+        }
+        char[] classes = permittedSubclasses.getClasses();
+        @SuppressWarnings("unchecked")
+        Symbol<Name>[] result = (Symbol<Name>[]) new Symbol<?>[classes.length];
+        for (int i = 0; i < classes.length; i++) {
+            result[i] = parserKlass.getConstantPool().className(classes[i]);
+        }
+        return result;
     }
 
     @Override

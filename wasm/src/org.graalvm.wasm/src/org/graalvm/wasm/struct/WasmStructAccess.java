@@ -41,9 +41,37 @@
 package org.graalvm.wasm.struct;
 
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.staticobject.DefaultStaticProperty;
 import com.oracle.truffle.api.staticobject.StaticProperty;
 import com.oracle.truffle.api.staticobject.StaticShape;
 
+import org.graalvm.wasm.WasmLanguage;
+import org.graalvm.wasm.constants.Mutability;
+import org.graalvm.wasm.types.FieldType;
+import org.graalvm.wasm.types.StructType;
+
 public record WasmStructAccess(StaticShape<WasmStructFactory> shape,
                 @CompilerDirectives.CompilationFinal(dimensions = 1) StaticProperty[] properties) {
+
+    public static WasmStructAccess create(StructType structType, WasmStructAccess superTypeAccess, WasmLanguage language) {
+        StaticShape.Builder shapeBuilder = StaticShape.newBuilder(language);
+        FieldType[] fieldTypes = structType.fieldTypes();
+        StaticProperty[] properties = new StaticProperty[fieldTypes.length];
+        int superFieldCount = superTypeAccess != null ? superTypeAccess.properties().length : 0;
+        for (int i = 0; i < fieldTypes.length; i++) {
+            if (i < superFieldCount) {
+                properties[i] = superTypeAccess.properties()[i];
+            } else {
+                properties[i] = new DefaultStaticProperty(Integer.toString(i));
+                shapeBuilder.property(properties[i], fieldTypes[i].javaClass(), fieldTypes[i].mutability() == Mutability.CONSTANT);
+            }
+        }
+        StaticShape<WasmStructFactory> shape;
+        if (superTypeAccess != null) {
+            shape = shapeBuilder.build(superTypeAccess.shape());
+        } else {
+            shape = shapeBuilder.build(WasmStruct.class, WasmStructFactory.class);
+        }
+        return new WasmStructAccess(shape, properties);
+    }
 }

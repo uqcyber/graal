@@ -37,7 +37,6 @@ import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.properties.RuntimeSystemPropertyParser;
 import com.oracle.svm.core.util.ImageHeapMap;
 import com.oracle.svm.shared.option.CommonOptionParser.BooleanOptionFormat;
 import com.oracle.svm.shared.option.CommonOptionParser.OptionParseResult;
@@ -70,31 +69,33 @@ public final class RuntimeOptionParser {
     /**
      * The prefix for Graal style options available in an application based on Substrate VM.
      */
-    private static final String GRAAL_OPTION_PREFIX = "-Djdk.graal.";
+    static final String GRAAL_OPTION_PREFIX = "-Djdk.graal.";
 
     /**
      * The legacy prefix for Graal style options available in an application based on Substrate VM.
      */
-    private static final String LEGACY_GRAAL_OPTION_PREFIX = "-Dgraal.";
+    static final String LEGACY_GRAAL_OPTION_PREFIX = "-Dgraal.";
 
     /**
      * The prefix for XOptions available in an application based on Substrate VM.
      */
     static final String X_OPTION_PREFIX = "-X";
 
-    /**
-     * Parse and consume all standard options and system properties supported by Substrate VM. The
-     * returned array contains all arguments that were not consumed, i.e., were not recognized as
-     * options.
-     *
-     * Note that this logic must be in sync with {@link IsolateArgumentParser#shouldParseArguments}.
-     */
+    /// Parse and consume all standard options and system properties supported by Substrate VM. The
+    /// returned array contains all arguments that were not consumed, i.e., were not recognized as
+    /// options.
+    ///
+    /// Note that the logic of whether to parse options must be in sync with
+    /// [IsolateArgumentParser#shouldParseArguments].
     public static String[] parseAndConsumeAllOptions(String[] initialArgs, boolean ignoreUnrecognized) {
         String[] args = initialArgs;
         if (SubstrateOptions.ParseRuntimeOptions.getValue()) {
-            /* JDK code may access and cache system properties, so parse them early. */
-            args = RuntimeSystemPropertyParser.parse(args, GRAAL_OPTION_PREFIX, LEGACY_GRAAL_OPTION_PREFIX);
+            JavaVMOptionsParser javaVMOptionsParser = new JavaVMOptionsParser();
+            args = javaVMOptionsParser.parse(args);
             args = RuntimeOptionParser.singleton().parse(args, NORMAL_OPTION_PREFIX, GRAAL_OPTION_PREFIX, LEGACY_GRAAL_OPTION_PREFIX, X_OPTION_PREFIX, ignoreUnrecognized);
+            if (!SubstrateOptions.LegacyJavaOptionMode.getValue()) {
+                JavaVMOptionsParser.rejectRecognizedUnimplementedOptions(args);
+            }
         } else if (RuntimeCompilation.isEnabled() && SubstrateOptions.supportCompileInIsolates() && IsolateArgumentParser.isCompilationIsolate()) {
             /*
              * Compilation isolates always need to parse the Native Image options that the main

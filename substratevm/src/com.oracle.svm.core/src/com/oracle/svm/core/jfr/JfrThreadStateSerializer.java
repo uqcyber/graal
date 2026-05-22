@@ -27,6 +27,8 @@ package com.oracle.svm.core.jfr;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.heap.RestrictHeapAccess;
+
 /**
  * Used to serialize all possible thread states into the chunk.
  */
@@ -39,6 +41,7 @@ public class JfrThreadStateSerializer implements JfrSerializer {
     }
 
     @Override
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Used on OOME for emergency dumps")
     public void write(JfrChunkWriter writer) {
         writer.writeCompressedLong(JfrType.ThreadState.getId());
 

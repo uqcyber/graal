@@ -34,6 +34,8 @@ import static jdk.vm.ci.aarch64.AArch64.SIMD;
 import static jdk.vm.ci.aarch64.AArch64.sp;
 import static jdk.vm.ci.aarch64.AArch64.zr;
 
+import java.util.Objects;
+
 import jdk.graal.compiler.asm.BranchTargetOutOfBoundsException;
 import jdk.graal.compiler.asm.Label;
 import jdk.graal.compiler.asm.aarch64.AArch64ASIMDAssembler.ASIMDSize;
@@ -45,6 +47,7 @@ import jdk.graal.compiler.debug.GraalError;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.TargetDescription;
+import jdk.vm.ci.code.site.Reference;
 
 public abstract class AArch64MacroAssembler extends AArch64Assembler {
 
@@ -476,6 +479,25 @@ public abstract class AArch64MacroAssembler extends AArch64Assembler {
             movz(32, dst, low16, 0);
             movk(32, dst, high16, 16);
         }
+    }
+
+    /**
+     * Generates a patchable 32-bit immediate move sequence with an associated reference. This
+     * always emits a fixed two-instruction {@code movz}/{@code movk} sequence for reference-aware
+     * patch consumers.
+     */
+    public void movWithReferenceAnnotation(Register dst, int imm, Reference reference) {
+        Objects.requireNonNull(reference, "MOV sequence reference must not be null");
+        int pos = position();
+
+        // Split 32-bit imm into low16 and high16 parts.
+        int low16 = imm & 0xFFFF;
+        int high16 = (imm >>> 16) & 0xFFFF;
+
+        movz(32, dst, low16, 0);
+        movk(32, dst, high16, 16);
+        MovAction[] includeSet = {MovAction.USED, MovAction.USED};
+        annotateImmediateMovSequence(pos, includeSet, reference);
     }
 
     /**
@@ -2265,6 +2287,12 @@ public abstract class AArch64MacroAssembler extends AArch64Assembler {
         }
     }
 
+    private void annotateImmediateMovSequence(int pos, MovSequenceAnnotation.MovAction[] includeSet, Reference reference) {
+        if (codePatchingAnnotationConsumer != null) {
+            codePatchingAnnotationConsumer.accept(new MovSequenceReferenceAnnotation(pos, includeSet, reference));
+        }
+    }
+
     public static class MovSequenceAnnotation extends AArch64Assembler.PatchableCodeAnnotation {
 
         /**
@@ -2278,7 +2306,9 @@ public abstract class AArch64MacroAssembler extends AArch64Assembler {
         }
 
         /**
-         * The size of the operand, in bytes.
+         * Action for each 16-bit chunk in the MOV sequence, ordered from least significant to
+         * most significant chunk. Each entry determines whether the chunk is patched in an
+         * emitted MOV instruction, skipped, or encoded through a negated MOVN instruction.
          */
         public final MovAction[] includeSet;
 
@@ -2327,6 +2357,35 @@ public abstract class AArch64MacroAssembler extends AArch64Assembler {
                 PatcherUtil.writeInstruction(code, instOffset, newInst);
                 siteOffset += 4;
             }
+        }
+    }
+
+    public static final class MovSequenceReferenceAnnotation extends CodeAnnotation {
+        private final int instructionPosition;
+        private final MovAction[] includeSet;
+        private final Reference reference;
+
+        MovSequenceReferenceAnnotation(int instructionPosition, MovAction[] includeSet, Reference reference) {
+            this.instructionPosition = instructionPosition;
+            this.includeSet = includeSet;
+            this.reference = Objects.requireNonNull(reference, "MOV sequence reference must not be null");
+        }
+
+        public int getInstructionPosition() {
+            return instructionPosition;
+        }
+
+        public MovAction[] getIncludeSet() {
+            return includeSet;
+        }
+
+        public Reference getReference() {
+            return reference;
+        }
+
+        @Override
+        public String toString() {
+            return "MOV_SEQ_REF";
         }
     }
 

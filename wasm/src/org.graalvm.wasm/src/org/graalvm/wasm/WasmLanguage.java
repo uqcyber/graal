@@ -54,8 +54,10 @@ import org.graalvm.wasm.api.WebAssembly;
 import org.graalvm.wasm.debugging.representation.DebugPrimitiveValue;
 import org.graalvm.wasm.exception.WasmJsApiException;
 import org.graalvm.wasm.predefined.BuiltinModule;
+import org.graalvm.wasm.struct.WasmStructAccess;
 import org.graalvm.wasm.types.DefinedType;
 import org.graalvm.wasm.types.FunctionType;
+import org.graalvm.wasm.types.StructType;
 
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerAsserts;
@@ -99,6 +101,7 @@ public final class WasmLanguage extends TruffleLanguage<WasmContext> {
     private final Map<BuiltinModule, WasmModule> builtinModules = new ConcurrentHashMap<>();
 
     private final Map<DefinedType, Integer> equivalenceClasses = new ConcurrentHashMap<>();
+    private final Map<Integer, WasmStructAccess> structAccessesByEquivalenceClass = new ConcurrentHashMap<>();
     private int nextEquivalenceClass = SymbolTable.FIRST_EQUIVALENCE_CLASS;
     private final Map<FunctionType, CallTarget> interopCallAdapters = new ConcurrentHashMap<>();
 
@@ -123,6 +126,22 @@ public final class WasmLanguage extends TruffleLanguage<WasmContext> {
             }
         }
         return equivalenceClass;
+    }
+
+    /**
+     * Gets or registers a canonical struct access object for a type equivalence class.
+     *
+     * Struct accesses are shared across modules to ensure type-equivalent structs use the same
+     * static shape and field properties.
+     */
+    public WasmStructAccess canonicalStructAccessFor(int equivalenceClass, StructType structType, WasmStructAccess superTypeAccess) {
+        CompilerAsserts.neverPartOfCompilation();
+        WasmStructAccess structAccess = structAccessesByEquivalenceClass.get(equivalenceClass);
+        if (structAccess == null) {
+            structAccess = structAccessesByEquivalenceClass.computeIfAbsent(equivalenceClass,
+                            k -> WasmStructAccess.create(structType, superTypeAccess, this));
+        }
+        return structAccess;
     }
 
     /**

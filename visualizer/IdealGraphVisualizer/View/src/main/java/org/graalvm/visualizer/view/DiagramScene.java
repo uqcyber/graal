@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@ import static jdk.graal.compiler.graphio.parsing.model.KnownPropertyNames.PROPNA
 
 import java.awt.*;
 import java.awt.event.ActionEvent;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.beans.PropertyChangeEvent;
@@ -57,6 +58,11 @@ import org.graalvm.visualizer.settings.layout.LayoutSettings.LayoutSettingBean;
 import org.graalvm.visualizer.util.ColorIcon;
 import org.graalvm.visualizer.util.DoubleClickAction;
 import org.graalvm.visualizer.util.PropertiesSheet;
+import org.graalvm.visualizer.view.actions.EdgeWalkPredecessorAction;
+import org.graalvm.visualizer.view.actions.EdgeWalkSuccessorAction;
+import org.graalvm.visualizer.view.actions.ZoomInAction;
+import org.graalvm.visualizer.view.actions.ZoomOutAction;
+import org.graalvm.visualizer.view.actions.ZoomResetAction;
 import org.graalvm.visualizer.view.api.DiagramViewer;
 import org.graalvm.visualizer.view.api.DiagramViewerEvent;
 import org.graalvm.visualizer.view.api.DiagramViewerListener;
@@ -97,6 +103,8 @@ import jdk.graal.compiler.graphio.parsing.model.Properties;
  */
 public class DiagramScene extends ObjectScene implements DiagramViewer {
     private static final Logger LOG = Logger.getLogger(DiagramScene.class.getName());
+    private static final int MULTI_SELECTION_MASK = getMultiSelectionMask();
+    private static final boolean KEEP_BLOCKED_CONTROL_FLOW_BARRIERS_VISIBLE = true;
 
     private final TopComponent topComponent;
     private final CustomizablePanAction panAction;
@@ -105,6 +113,7 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
     private final Lookup lookup;
     private final InstanceContent content;
     private final JScrollPane scrollPane;
+    private InteractionMode interactionMode = InteractionMode.PANNING;
     private UndoRedo.Manager undoRedoManager;
 
     /**
@@ -424,7 +433,7 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
                 if (className instanceof String) {
                     fillToLookup.add(new ImplementationClass((String) className));
                 }
-                node.setDisplayName(provider.getProperties().getString(PROPNAME_NAME, Bundle.NAME_MissingName())); // NOI18N
+                node.setDisplayName(selectionDisplayName(o, provider));
                 nodeContent.add(o);
             }
 
@@ -442,6 +451,19 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
                 fillToLookup.add(node);
             }
         }
+    }
+
+    private static String selectionDisplayName(Object selectedObject, Properties.Provider provider) {
+        if (selectedObject instanceof Figure figure) {
+            String displayName = Arrays.stream(figure.getLines())
+                            .filter(line -> line != null && !line.isBlank())
+                            .map(String::trim)
+                            .collect(Collectors.joining(" ")); // NOI18N
+            if (!displayName.isEmpty()) {
+                return displayName;
+            }
+        }
+        return provider.getProperties().getString(PROPNAME_NAME, Bundle.NAME_MissingName());
     }
 
     @NbBundle.Messages({
@@ -561,7 +583,8 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
         // pressed without any modifier keys, otherwise it will not consume it
         // and the selection action (below) will handle the event
         panAction = new CustomizablePanAction(~0, MouseEvent.BUTTON1_DOWN_MASK);
-        selectAction = createSelectAction();
+        panAction.setEnabled(interactionMode == InteractionMode.PANNING);
+        selectAction = createPlatformSelectAction();
         zoomAction = ActionFactory.createMouseCenteredZoomAction(1.2);
 
         this.getActions().addAction(panAction);
@@ -571,6 +594,10 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
         this.getActions().addAction(ActionFactory.createWheelPanAction());
         this.getActions().addAction(ActionFactory.createRectangularSelectAction(rectangularSelectDecorator, selectLayer, rectangularSelectProvider));
 
+        initializeEdgeWalkActions();
+        installEdgeWalkKeyBindings();
+        initializeZoomActions();
+        installZoomKeyBindings();
 
         // For initial setup of the model we need to disable undo to prevent
         // unnecessary cloning.
@@ -668,6 +695,108 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
     @Override
     public Component getComponent() {
         return scrollPane;
+    }
+
+    private void initializeEdgeWalkActions() {
+        ActionMap actionMap = topComponent.getActionMap();
+        actionMap.put(EdgeWalkPredecessorAction.ID, new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                navigateControlFlow(false);
+            }
+        });
+        actionMap.put(EdgeWalkSuccessorAction.ID, new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                navigateControlFlow(true);
+            }
+        });
+    }
+
+    private void installEdgeWalkKeyBindings() {
+        InputMap inputMap = topComponent.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT);
+        inputMap.put(EdgeWalkPredecessorAction.KEY_STROKE, EdgeWalkPredecessorAction.ID);
+        inputMap.put(EdgeWalkSuccessorAction.KEY_STROKE, EdgeWalkSuccessorAction.ID);
+    }
+
+    private void initializeZoomActions() {
+        ActionMap actionMap = topComponent.getActionMap();
+        actionMap.put(ZoomInAction.ID, new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                zoomIn();
+            }
+        });
+        actionMap.put(ZoomOutAction.ID, new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                zoomOut();
+            }
+        });
+        actionMap.put(ZoomResetAction.ID, new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                zoomTo(1.0);
+            }
+        });
+    }
+
+    private void installZoomKeyBindings() {
+        InputMap inputMap = topComponent.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT);
+        inputMap.put(ZoomInAction.KEY_STROKE, ZoomInAction.ID);
+        inputMap.put(ZoomInAction.SECONDARY_KEY_STROKE, ZoomInAction.ID);
+        inputMap.put(ZoomOutAction.KEY_STROKE, ZoomOutAction.ID);
+        inputMap.put(ZoomResetAction.KEY_STROKE, ZoomResetAction.ID);
+    }
+
+    private WidgetAction createPlatformSelectAction() {
+        return new WidgetAction.Adapter() {
+            @Override
+            public WidgetAction.State mousePressed(Widget widget, WidgetAction.WidgetMouseEvent event) {
+                int button = event.getButton();
+                if (button != MouseEvent.BUTTON1 && button != MouseEvent.BUTTON2) {
+                    return WidgetAction.State.REJECTED;
+                }
+                return selectObject(widget, isMultiSelectionEvent(event)) ? WidgetAction.State.CHAIN_ONLY : WidgetAction.State.REJECTED;
+            }
+
+            @Override
+            public WidgetAction.State keyTyped(Widget widget, WidgetAction.WidgetKeyEvent event) {
+                if (event.getKeyChar() != ' ') {
+                    return WidgetAction.State.REJECTED;
+                }
+                return selectObject(widget, isMultiSelectionEvent(event)) ? WidgetAction.State.CONSUMED : WidgetAction.State.REJECTED;
+            }
+        };
+    }
+
+    private boolean selectObject(Widget widget, boolean invertSelection) {
+        Object object = findObject(widget);
+        if (object == null) {
+            return false;
+        }
+        setFocusedObject(object);
+        if (!invertSelection && getSelectedObjects().contains(object)) {
+            return true;
+        }
+        userSelectionSuggested(Collections.singleton(object), invertSelection);
+        return true;
+    }
+
+    private static boolean isMultiSelectionEvent(WidgetAction.WidgetMouseEvent event) {
+        return (event.getModifiersEx() & MULTI_SELECTION_MASK) != 0;
+    }
+
+    private static boolean isMultiSelectionEvent(WidgetAction.WidgetKeyEvent event) {
+        return (event.getModifiersEx() & MULTI_SELECTION_MASK) != 0;
+    }
+
+    private static int getMultiSelectionMask() {
+        try {
+            return Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        } catch (HeadlessException e) {
+            return InputEvent.CTRL_DOWN_MASK;
+        }
     }
 
     TopComponent getTopComponent() {
@@ -781,16 +910,20 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
 
     @Override
     public void setInteractionMode(InteractionMode mode) {
+        if (interactionMode == mode) {
+            return;
+        }
+        interactionMode = mode;
         panAction.setEnabled(mode == InteractionMode.PANNING);
         // When panAction is not enabled, it does not consume the event
-        // and the selection action handles it instead
+        // and the selection action handles it instead.
 
         fireViewerEvent(DiagramViewerListener::interactionChanged, new DiagramViewerEvent(this));
     }
 
     @Override
     public InteractionMode getInteractionMode() {
-        return panAction.isEnabled() ? InteractionMode.PANNING : InteractionMode.SELECTION;
+        return interactionMode;
     }
 
     @Override
@@ -856,7 +989,7 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
     }
 
     public void gotoNodes(Set<Object> ids, boolean select) {
-        Set<Integer> unhideIds = new HashSet<>();
+        Set<Integer> unhideIds = new LinkedHashSet<>();
         for (Object o : ids) {
             if (o instanceof InputNode) {
                 unhideIds.add(((InputNode) o).getId());
@@ -864,58 +997,102 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
                 unhideIds.add((Integer) o);
             }
         }
-        InputGraph g = model.getGraphToView();
-        Rectangle overall = null;
+        if (unhideIds.isEmpty()) {
+            return;
+        }
+
+        if (select) {
+            model.setSelectedNodes(resolveNodes(unhideIds));
+        }
+
         Set<Integer> hiddenNodes = new HashSet<>(model.getHiddenNodes());
         if (hiddenNodes.removeAll(unhideIds)) {
             model.showNot(hiddenNodes);
         }
 
-        Set<Source.Provider> objects = idSetToObjectSet((Set) unhideIds);
-        for (Source.Provider o : objects) {
+        executeWithDiagramShown(() -> {
+            Rectangle overall = null;
+            Set<Source.Provider> objects = idSetToObjectSet((Set) new HashSet<>(unhideIds));
+            for (Source.Provider o : objects) {
+                Widget w = getWidget(o);
+                Rectangle r;
+                Point p;
 
-            Widget w = getWidget(o);
-            Rectangle r;
-            Point p;
-
-            if (w != null) {
-                r = w.getBounds();
-                p = w.convertLocalToScene(new Point(0, 0));
-            } else {
-                Figure f;
-                if (o instanceof Figure) {
-                    f = ((Figure) o);
-                } else if (o instanceof Slot) {
-                    f = ((Slot) o).getFigure();
+                if (w != null) {
+                    r = w.getBounds();
+                    p = w.convertLocalToScene(new Point(0, 0));
                 } else {
+                    Figure f;
+                    if (o instanceof Figure) {
+                        f = (Figure) o;
+                    } else if (o instanceof Slot) {
+                        f = ((Slot) o).getFigure();
+                    } else {
+                        continue;
+                    }
+                    r = f.getBounds();
+                    p = r.getLocation();
+                }
+
+                if (r == null) {
                     continue;
                 }
-                r = f.getBounds();
-                p = r.getLocation();
+                overall = union(overall, new Rectangle(p.x, p.y, r.width, r.height));
             }
+            if (overall != null) {
+                centerRectangle(overall, false);
+            }
+            if (select) {
+                Collection<Figure> targetFigures = figuresForNodes(resolveNodes(unhideIds));
+                if (!targetFigures.isEmpty()) {
+                    setSelected(targetFigures);
+                }
+            }
+        });
+    }
 
-            if (r == null) {
-                continue;
-            }
-            Rectangle r2 = new Rectangle(p.x, p.y, r.width, r.height);
+    boolean navigateControlFlow(boolean downward) {
+        if (isRebuilding()) {
+            return false;
+        }
+        Collection<Figure> selectedFigures = model.getSelectedFigures();
+        if (selectedFigures.isEmpty()) {
+            return false;
+        }
 
-            if (overall == null) {
-                overall = r2;
-            } else {
-                overall = overall.union(r2);
-            }
+        boolean hasControlFlowConnections = GraalCFGSupport.hasAnyControlFlowConnections(selectedFigures);
+        Set<Figure> targetFigures = downward
+                        ? GraalCFGSupport.findControlFlowSuccessors(selectedFigures)
+                        : GraalCFGSupport.findControlFlowPredecessors(selectedFigures);
+        if (targetFigures.isEmpty() && !hasControlFlowConnections) {
+            targetFigures = downward
+                            ? GraalCFGSupport.findNonControlFlowSuccessors(selectedFigures)
+                            : GraalCFGSupport.findNonControlFlowPredecessors(selectedFigures);
+        } else {
+            targetFigures = GraalCFGSupport.normalizeControlFlowTargets(
+                            selectedFigures,
+                            targetFigures,
+                            downward,
+                            KEEP_BLOCKED_CONTROL_FLOW_BARRIERS_VISIBLE);
         }
-        Collection c = getSelectedObjects();
-        if (overall != null) {
-            centerRectangle(overall, false);
+        if (targetFigures.isEmpty()) {
+            return false;
         }
-        if (c.equals(objects)) {
-            return;
+
+        Set<Object> targetNodeIds = new LinkedHashSet<>();
+        for (Figure figure : targetFigures) {
+            targetNodeIds.addAll(figure.getSource().getSourceNodeIds());
         }
-        if (select) {
-            List<InputNode> toSelect = unhideIds.stream().map(i -> g.getNode(i)).filter(Objects::nonNull).collect(Collectors.toList());
-            model.setSelectedNodes(toSelect);
+        if (targetNodeIds.isEmpty()) {
+            return false;
         }
+        gotoNodes(targetNodeIds, true);
+        return true;
+    }
+
+    private List<InputNode> resolveNodes(Collection<Integer> nodeIds) {
+        InputGraph graph = model.getGraphToView();
+        return nodeIds.stream().map(graph::getNode).filter(Objects::nonNull).collect(Collectors.toList());
     }
 
     public void selectNodes(Set<InputNode> nodes) {
@@ -1204,11 +1381,19 @@ public class DiagramScene extends ObjectScene implements DiagramViewer {
         @Override
         public void propertyChange(PropertyChangeEvent evt) {
             LOG.log(Level.FINE, "Diagram selected figures changed.");
+            Set<InputNode> newSelection = (Set<InputNode>) evt.getNewValue();
+            boolean enabled = selectedCoordinatorListener.isEnabled();
+            selectedCoordinatorListener.setEnabled(false);
+            try {
+                selectionCoordinator.setSelectedObjects(newSelection.stream().map(InputNode::getId).collect(Collectors.toSet()));
+            } finally {
+                selectedCoordinatorListener.setEnabled(enabled);
+            }
             setSelected(model.getSelectedFigures());
 
             Set<InputNode> olds = (Set<InputNode>) evt.getOldValue();
             if (olds != null) {
-                Set<InputNode> news = new HashSet<>((Set<InputNode>) evt.getNewValue());
+                Set<InputNode> news = new HashSet<>(newSelection);
                 news.removeAll(olds);
                 if (!news.isEmpty()) {
                     Figure f = getDiagram().getFigureById(news.iterator().next().getId());

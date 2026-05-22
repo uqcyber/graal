@@ -146,7 +146,7 @@ public class FrameInfoEncoder {
             int sourceMethodModifiers = method.getModifiers();
             String methodSignature = method.getSignature().toMethodDescriptor();
             String sourceMethodName = stringTable.deduplicate(encoder.encodeMethod(source.getMethodName(), sourceClass), true);
-            String sourceMethodSignature = CodeInfoEncoder.shouldEncodeAllMethodMetadata() ? stringTable.deduplicate(methodSignature, true) : methodSignature;
+            String sourceMethodSignature = CodeInfoEncoder.shouldEncodeMethodSignatureAndModifiers() ? stringTable.deduplicate(methodSignature, true) : methodSignature;
             resultFrameInfo.setSourceFields(sourceClass, sourceMethodName, sourceMethodSignature, sourceMethodModifiers);
         }
 

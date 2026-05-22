@@ -720,7 +720,8 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
             try {
                 ResolvedJavaField field = JVMCIReflectionUtil.getUniqueDeclaredField(true, GuestAccess.get().lookupType(declaringClass), fieldName);
                 if (field != null) {
-                    registerField(cnd, QUERIED, preserved, field);
+                    ConfigurationMemberAccessibility accessibility = throwMissingRegistrationErrors() ? QUERIED : ACCESSED;
+                    registerField(cnd, accessibility, preserved, field);
                 }
             } catch (LinkageError ignored) {
                 // Field lookup errors will be handled by the declaring class registration

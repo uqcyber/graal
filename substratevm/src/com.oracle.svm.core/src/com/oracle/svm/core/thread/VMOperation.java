@@ -58,27 +58,27 @@ public abstract class VMOperation {
         this.info = info;
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public final int getId() {
         return info.getId();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public final String getName() {
         return info.getName();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public boolean isGC() {
         return false;
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public final boolean getCausesSafepoint() {
         return info.getCausesSafepoint();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public final boolean isBlocking() {
         return info.isBlocking();
     }
@@ -122,7 +122,7 @@ public abstract class VMOperation {
      * Returns true if the current thread is in the middle of executing a VM operation. Note that
      * this includes VM operations that do not need a safepoint.
      */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static boolean isInProgress() {
         OpInProgress inProgress = VMOperationControl.get().getInProgress();
         return isInProgress(inProgress);
@@ -132,7 +132,7 @@ public abstract class VMOperation {
      * Returns true if the current thread is in the middle of executing a VM operation that needs a
      * safepoint.
      */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static boolean isInProgressAtSafepoint() {
         OpInProgress inProgress = VMOperationControl.get().getInProgress();
         return isInProgress(inProgress) && inProgress.operation.getCausesSafepoint();
@@ -142,13 +142,13 @@ public abstract class VMOperation {
      * Returns true if the current thread is in the middle of executing a VM operation. Note that
      * this includes VM operations that do not need a safepoint.
      */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     static boolean isInProgress(OpInProgress inProgress) {
         return inProgress.getExecutingThread() == CurrentIsolate.getCurrentThread();
     }
 
     /** Returns true if the current thread is in the middle of performing a garbage collection. */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static boolean isGCInProgress() {
         VMOperation op = VMOperationControl.get().getInProgress().getOperation();
         return op != null && op.isGC();
@@ -168,7 +168,7 @@ public abstract class VMOperation {
      * Verifies that the current thread is in the middle of executing a VM operation that needs a
      * safepoint.
      */
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static void guaranteeInProgressAtSafepoint(String message) {
         if (!isInProgressAtSafepoint()) {
             throw VMError.shouldNotReachHere(message);
@@ -192,7 +192,7 @@ public abstract class VMOperation {
         return true;
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     protected abstract void markAsQueued(NativeVMOperationData data);
 
     protected abstract void markAsFinished(NativeVMOperationData data);
@@ -210,7 +210,7 @@ public abstract class VMOperation {
         NONE,
         SAFEPOINT;
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public static boolean getCausesSafepoint(SystemEffect value) {
             return value == SAFEPOINT;
         }

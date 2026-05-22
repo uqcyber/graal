@@ -28,7 +28,7 @@ import static jdk.graal.compiler.nodeinfo.InputType.Memory;
 
 import org.graalvm.word.LocationIdentity;
 
-import com.oracle.svm.core.FrameAccess;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.UninterruptibleAnnotationUtils;
 import com.oracle.svm.core.graal.stackvalue.StackValueNode.StackSlotIdentity;
 
@@ -52,7 +52,7 @@ public abstract class AbstractStackValueNode extends AbstractStateSplit implemen
     protected final boolean checkVirtualThread;
 
     protected AbstractStackValueNode(NodeClass<? extends AbstractStackValueNode> type, int alignmentInBytes, StackSlotIdentity slotIdentity, boolean checkVirtualThread) {
-        super(type, FrameAccess.getWordStamp());
+        super(type, SubstrateTarget.getWordStamp());
         this.alignmentInBytes = alignmentInBytes;
         this.slotIdentity = slotIdentity;
         this.checkVirtualThread = checkVirtualThread;

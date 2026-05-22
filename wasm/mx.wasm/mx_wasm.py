@@ -136,9 +136,6 @@ def wabt_test_args():
 
 
 def graal_wasm_gate_runner(args, tasks):
-    unittest_args = []
-    if mx.suite('compiler', fatalIfMissing=False) is not None:
-        unittest_args = ["--use-graalvm"]
 
     with Task("BuildAll", tasks, tags=[GraalWasmDefaultTags.buildall]) as t:
         if t:
@@ -146,18 +143,18 @@ def graal_wasm_gate_runner(args, tasks):
 
     with Task("UnitTests", tasks, tags=[GraalWasmDefaultTags.wasmtest], report=True) as t:
         if t:
-            unittest(unittest_args + [*wabt_test_args(), "WasmTestSuite"], test_report_tags={'task': t.title})
-            unittest(unittest_args + [*wabt_test_args(), "-Dwasmtest.sharedEngine=true", "WasmTestSuite"], test_report_tags={'task': t.title})
+            unittest([*wabt_test_args(), "WasmTestSuite"], test_report_tags={'task': t.title})
+            unittest([*wabt_test_args(), "-Dwasmtest.sharedEngine=true", "WasmTestSuite"], test_report_tags={'task': t.title})
 
     with Task("ExtraUnitTests", tasks, tags=[GraalWasmDefaultTags.wasmextratest], report=True) as t:
         if t:
-            unittest(unittest_args + ["--suite", "wasm", "CSuite", "WatSuite"], test_report_tags={'task': t.title})
+            unittest(["--suite", "wasm", "CSuite", "WatSuite"], test_report_tags={'task': t.title})
 
     with Task("CoverageTests", tasks, tags=[GraalWasmDefaultTags.coverage], report=True) as t:
         if t:
-            unittest(unittest_args + [*wabt_test_args(), "-Dwasmtest.coverageMode=true", "WasmTestSuite"], test_report_tags={'task': t.title})
-            unittest(unittest_args + [*wabt_test_args(), "-Dwasmtest.coverageMode=true", "-Dwasmtest.sharedEngine=true", "WasmTestSuite"], test_report_tags={'task': t.title})
-            unittest(unittest_args + ["-Dwasmtest.coverageMode=true", "--suite", "wasm", "CSuite", "WatSuite"], test_report_tags={'task': t.title})
+            unittest([*wabt_test_args(), "-Dwasmtest.coverageMode=true", "WasmTestSuite"], test_report_tags={'task': t.title})
+            unittest([*wabt_test_args(), "-Dwasmtest.coverageMode=true", "-Dwasmtest.sharedEngine=true", "WasmTestSuite"], test_report_tags={'task': t.title})
+            unittest(["-Dwasmtest.coverageMode=true", "--suite", "wasm", "CSuite", "WatSuite"], test_report_tags={'task': t.title})
 
     # This is a gate used to test that all the benchmarks return the correct results. It does not upload anything,
     # and does not run on a dedicated machine.
@@ -204,7 +201,7 @@ class WasmUnittestConfig(mx_unittest.MxUnittestConfig):
 
     def processDeps(self, deps):
         super().processDeps(deps)
-        truffle_runtime_dist_names = mx_truffle.resolve_truffle_dist_names(use_optimized_runtime=True, use_enterprise=True)
+        truffle_runtime_dist_names = mx_truffle.resolve_truffle_dist_names(use_optimized_runtime=True)
         mx.logv(f"Adding Truffle runtime distributions {', '.join(truffle_runtime_dist_names)} to unittest dependencies.")
         deps.update(mx.distribution(d) for d in truffle_runtime_dist_names)
 
@@ -733,7 +730,7 @@ def wasm(args, **kwargs):
     mx_truffle.enable_sun_misc_unsafe(vmArgs)
 
     path_args = mx.get_runtime_jvm_args([
-        *mx_truffle.resolve_truffle_dist_names(use_optimized_runtime=True, use_enterprise=True),
+        *mx_truffle.resolve_truffle_dist_names(use_optimized_runtime=True),
         "WASM",
         "WASM_LAUNCHER",
     ] + (['tools:CHROMEINSPECTOR', 'tools:TRUFFLE_PROFILER', 'tools:INSIGHT'] if mx.suite('tools', fatalIfMissing=False) is not None else []))

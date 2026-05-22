@@ -40,6 +40,7 @@ import com.oracle.svm.core.jvmstat.PerfLongCounter;
 import com.oracle.svm.core.jvmstat.PerfLongVariable;
 import com.oracle.svm.core.jvmstat.PerfManager;
 import com.oracle.svm.core.jvmstat.PerfStringConstant;
+import com.oracle.svm.core.jvmstat.PerfStringVariable;
 import com.oracle.svm.core.jvmstat.PerfUnit;
 
 /**
@@ -98,6 +99,8 @@ public class SerialGCPerfData implements PerfDataHolder {
         CollectionPolicy policy = GCImpl.getPolicy();
         policy.ensureSizeParametersInitialized();
 
+        gcPolicy.name.setValue(policy.getName());
+
         long maxNewSize = policy.getMaximumYoungGenerationSize().rawValue();
         youngCollector.invocations.setValue(accounting.getIncrementalCollectionCount());
         youngCollector.time.setValue(accounting.getIncrementalCollectionTotalNanos());
@@ -123,14 +126,14 @@ public class SerialGCPerfData implements PerfDataHolder {
     private static class PerfDataGCPolicy {
         private final PerfLongConstant collectors;
         private final PerfLongConstant generations;
-        private final PerfStringConstant name;
+        private final PerfStringVariable name;
 
         @Platforms(Platform.HOSTED_ONLY.class)
         PerfDataGCPolicy() {
             PerfManager manager = ImageSingletons.lookup(PerfManager.class);
             collectors = manager.createLongConstant("sun.gc.policy.collectors", PerfUnit.NONE);
             generations = manager.createLongConstant("sun.gc.policy.generations", PerfUnit.NONE);
-            name = manager.createStringConstant("sun.gc.policy.name");
+            name = manager.createStringVariable("sun.gc.policy.name", 30);
         }
 
         public void allocate() {

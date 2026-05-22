@@ -797,6 +797,7 @@ public class AMD64VectorLoweringPhase extends BasePhase<LowTierContext> {
         AVX512MaskedOpNode newNode = switch (op) {
             case SimdPermuteWithVectorIndicesNode permute -> AVX512MaskedOpNode.createPermute(permute, other, selector, permute.getX(), permute.getY());
             case UnaryArithmeticNode<?> u -> AVX512MaskedOpNode.createUnaryArithmetic(u, other, selector, u.getValue());
+            case ReinterpretNode r -> AVX512MaskedOpNode.createReinterpret(r, other, selector);
             case BinaryArithmeticNode<?> b -> AVX512MaskedOpNode.createBinaryArithmetic(b, other, selector, b.getX(), b.getY());
             default -> throw GraalError.shouldNotReachHereUnexpectedValue(op);
         };

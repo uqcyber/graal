@@ -865,6 +865,7 @@ class NativeImageVM(StageAwareGraalVm):
         # When this is set, run the instrumentation-image and instrumentation-run stages.
         # Does not necessarily do instrumentation.
         self.pgo_instrumentation = False
+        self.pgo_layouting = False
         self.pgo_exclude_conditional = False
         self.pgo_sampler_only = False
         self.pgo_use_perf = False
@@ -873,7 +874,6 @@ class NativeImageVM(StageAwareGraalVm):
         self.is_quickbuild = False
         self.graalos = False
         self.graalhost_graalos = False
-        self.pie = False
         self.layered = False
         self.use_string_inlining = False
         self.static = False
@@ -943,8 +943,6 @@ class NativeImageVM(StageAwareGraalVm):
             config += ["graalos"]
         if self.graalhost_graalos is True:
             config += ["graalhost-graalos"]
-        if self.pie is True:
-            config += ["pie"]
         if self.layered is True:
             config += ["layered"]
         if self.future_defaults_all is True:
@@ -964,7 +962,9 @@ class NativeImageVM(StageAwareGraalVm):
             config += ["pgo-sampler"]
             is_pgo_set = True
         # pylint: disable=too-many-boolean-expressions
-        if not is_pgo_set and self.pgo_instrumentation is True \
+        if self.pgo_layouting is True:
+            config += ["pgo-layouting"]
+        elif not is_pgo_set and self.pgo_instrumentation is True \
                 and self.jdk_profiles_collect is False \
                 and self.adopted_jdk_pgo is False \
                 and self.safepoint_sampler is False \
@@ -1028,9 +1028,9 @@ class NativeImageVM(StageAwareGraalVm):
         # This defines the allowed config names for NativeImageVM. The ones registered will be available via --jvm-config
         # Note: the order of entries here must match the order of statements in NativeImageVM.config_name()
         rule = r'^(?P<native_architecture>native-architecture-)?(?P<string_inlining>string-inlining-)?(?P<static>mostly-static-|static-)?(?P<otw>otw-)?(?P<copyingoldgen_oldpolicy>copyingoldgen-oldpolicy-)?(?P<crema>crema-)?' \
-               r'(?P<preserve_all>preserve-all-)?(?P<preserve_classpath>preserve-classpath-)?(?P<graalos>graalos-)?(?P<graalhost_graalos>graalhost-graalos-)?(?P<pie>pie-)?(?P<layered>layered-)?' \
+               r'(?P<preserve_all>preserve-all-)?(?P<preserve_classpath>preserve-classpath-)?(?P<graalos>graalos-)?(?P<graalhost_graalos>graalhost-graalos-)?(?P<layered>layered-)?' \
                r'(?P<future_defaults_all>future-defaults-all-)?(?P<gate>gate-)?(?P<upx>upx-)?(?P<quickbuild>quickbuild-)?(?P<gc>g1gc-)?' \
-               r'(?P<llvm>llvm-)?(?P<pgo>pgo-|pgo-sampler-|pgo-perf-sampler-invoke-multiple-|pgo-perf-sampler-invoke-|pgo-perf-sampler-)?(?P<inliner>inline-)?' \
+               r'(?P<llvm>llvm-)?(?P<pgo>pgo-|pgo-layouting-|pgo-sampler-|pgo-perf-sampler-invoke-multiple-|pgo-perf-sampler-invoke-|pgo-perf-sampler-)?(?P<inliner>inline-)?' \
                r'(?P<analysis_context_sensitivity>insens-|allocsens-|1obj-|2obj1h-|3obj2h-|4obj3h-)?(?P<jdk_profiles>jdk-profiles-collect-|adopted-jdk-pgo-)?' \
                r'(?P<profile_inference>profile-inference-feature-extraction-|profile-inference-call-count-|profile-inference-call-count-conservative-|profile-inference-call-count-aggressive-|profile-inference-pgo-|profile-inference-debug-)?' \
                r'(?P<sampler>safepoint-sampler-|async-sampler-)?(?P<optimization_level>O0-|O1-|O2-|O3-|Os-)?(default-)?(?P<edition>ce-|ee-)?$'
@@ -1064,10 +1064,6 @@ class NativeImageVM(StageAwareGraalVm):
         if matching.group("graalhost_graalos") is not None:
             mx.logv(f"'graalhost-graalos' is enabled for {config_name}")
             self.graalhost_graalos = True
-
-        if matching.group("pie") is not None:
-            mx.logv(f"'pie' is enabled for {config_name}")
-            self.pie = True
 
         if matching.group("layered") is not None:
             mx.logv(f"'layered' is enabled for {config_name}")
@@ -1129,6 +1125,9 @@ class NativeImageVM(StageAwareGraalVm):
             if pgo_mode == "pgo":
                 mx.logv(f"'pgo' is enabled for {config_name}")
                 self.pgo_instrumentation = True
+            elif pgo_mode == "pgo-layouting":
+                self.pgo_instrumentation = True
+                self.pgo_layouting = True
             elif pgo_mode == "pgo-sampler":
                 self.pgo_instrumentation = True
                 self.pgo_sampler_only = True
@@ -1696,6 +1695,8 @@ class NativeImageVM(StageAwareGraalVm):
             instrument_args += svm_experimental_options([f'-H:PGOPerfSourceMappings={self.config.source_mappings_path}'])
         else:
             instrument_args += ['--pgo-sampling' if self.pgo_sampler_only else '--pgo-instrument', f"-R:ProfilesDumpFile={self.config.profile_path}"]
+            if self.pgo_layouting:
+                instrument_args += svm_experimental_options(['-H:+ProfileMethodTimestamps', '-H:-IncludeCallingContextInMethodTimestampProfiles', '-H:+ProfileObjectAccesses', '-H:+PrintAccessedCAHPsStats'])
 
         if self.jdk_profiles_collect:
             instrument_args += svm_experimental_options(['-H:+AOTPriorityInline', '-H:-SamplingCollect',
@@ -1804,10 +1805,6 @@ class NativeImageVM(StageAwareGraalVm):
         current_stage = self.stages_info.current_stage
         layer_aware_build_args = []
 
-        if self.pie and (not self.layered or not current_stage.layer_info.is_shared_library):
-            # This option should not be applied to base layers
-            layer_aware_build_args += ["-H:NativeLinkerOption=-pie"]
-
         if self.layered and not current_stage.layer_info.is_shared_library:
             # Set LinkerRPath to point to the directories containing the shared objects of underlying layers
             shared_library_stages = [stage for stage in self.stages_info.complete_stage_list
@@ -1864,6 +1861,8 @@ class NativeImageVM(StageAwareGraalVm):
             jdk_profiles_args = []
         if self.pgo_exclude_conditional:
             pgo_args += svm_experimental_options(['-H:PGOExcludeProfiles=CONDITIONAL'])
+        if self.pgo_layouting:
+            pgo_args += svm_experimental_options(['-H:CodeSectionLayoutOptimization=OrderByFirstCall', '-H:ImageHeapObjectSortStrategy=ClusterAccessed', '-H:+PGOIgnoreVersionCheck', '-H:+PrintImageHeapSortDiagnostics'])
 
         if self.profile_inference_feature_extraction:
             ml_args = svm_experimental_options(['-H:+MLGraphFeaturesExtraction', '-H:+ProfileInferenceDumpFeatures'])

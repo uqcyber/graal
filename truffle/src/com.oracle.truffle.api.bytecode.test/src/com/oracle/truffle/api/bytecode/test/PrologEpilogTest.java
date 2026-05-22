@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -257,6 +257,40 @@ public class PrologEpilogTest extends AbstractInstructionTest {
         assertEquals(-1, root.getCallTarget().call(false));
         assertEquals(false, root.argument);
         assertEquals(-1, root.returnValue);
+        assertNull(root.thrownValue);
+    }
+
+    @Test
+    public void testTryFinallyReturnAtEnd() {
+        // @formatter:off
+        // try {
+        //    return 42
+        // } finally {
+        //    if (arg0) throw "oops"
+        // }
+        // @formatter:on
+        PrologEpilogBytecodeNode root = parseNode(b -> {
+            // @formatter:off
+            b.beginRoot();
+            b.beginTryFinally(() -> {
+                b.beginIfThen();
+                    b.emitLoadArgument(0);
+                    b.beginThrowException();
+                        b.emitLoadConstant("oops");
+                    b.endThrowException();
+                b.endIfThen();
+            });
+                b.beginReturn();
+                    b.emitLoadConstant(42);
+                b.endReturn();
+            b.endTryFinally();
+            b.endRoot();
+            // @formatter:on
+        });
+
+        assertEquals(42, root.getCallTarget().call(false));
+        assertEquals(false, root.argument);
+        assertEquals(42, root.returnValue);
         assertNull(root.thrownValue);
     }
 

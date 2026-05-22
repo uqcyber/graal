@@ -80,7 +80,7 @@ final class ChunkedImageHeapPartition implements ImageHeapPartition {
             return;
         }
 
-        objectSorter.sort(objects);
+        objectSorter.sort(this, objects);
         if (unalignedChunks) {
             layoutInUnalignedChunks(allocator, control);
         } else {

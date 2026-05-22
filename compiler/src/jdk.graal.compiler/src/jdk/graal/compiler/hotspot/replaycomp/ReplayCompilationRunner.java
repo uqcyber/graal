@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -50,7 +50,6 @@ import org.graalvm.collections.EconomicMap;
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.core.GraalCompilerOptions;
 import jdk.graal.compiler.debug.GlobalMetrics;
-import jdk.graal.compiler.debug.PathUtilities;
 import jdk.graal.compiler.hotspot.CompilerConfigurationFactory;
 import jdk.graal.compiler.hotspot.HotSpotGraalCompiler;
 import jdk.graal.compiler.hotspot.HotSpotGraalCompilerFactory;
@@ -61,6 +60,7 @@ import jdk.graal.compiler.hotspot.HotSpotReplacementsImpl;
 import jdk.graal.compiler.hotspot.Platform;
 import jdk.graal.compiler.options.LibGraalSupport;
 import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.util.EconomicHashMap;
 import jdk.graal.compiler.util.args.BooleanValue;
 import jdk.graal.compiler.util.args.Command;
 import jdk.graal.compiler.util.args.CommandGroup;
@@ -275,8 +275,8 @@ public class ReplayCompilationRunner {
         private BenchmarkCommand() {
             super("--benchmark", "Replay compilations as a benchmark.");
             iterationsArg = addNamed("--iterations", new IntegerValue("N", 10, "The number of benchmark iterations."));
-            resultsFileArg = addNamed("--results-file", new StringValue("RESULTS_FILE", null, "Write benchmark metrics to the file in CSV format."));
-            eventNamesArg = addNamed("--event-names", new StringValue("EVENT_NAMES", null, "Comma-separated list of PAPI events to count for each iteration."));
+            resultsFileArg = addNamed("--results-file", new StringValue("RESULTS_FILE", null, "Write benchmark metrics to the file in JSON format."));
+            eventNamesArg = addNamed("--event-names", new StringValue("EVENT_NAMES", null, "Comma-separated list of PAPI events to count for each replayed compilation."));
         }
 
         @SuppressWarnings("try")
@@ -317,23 +317,27 @@ public class ReplayCompilationRunner {
                 out.println("There are no compilations to replay");
                 return ExitStatus.Failure;
             }
-            try (PrintStream outStat = (resultsFileArg.isSet()) ? new PrintStream(PathUtilities.openOutputStream(resultsFileArg.getValue())) : null) {
+            try (ReplayBenchmarkResultsWriter resultsWriter = (resultsFileArg.isSet()) ? new ReplayBenchmarkResultsWriter(Path.of(resultsFileArg.getValue()), eventNames) : null) {
                 for (int i = 0; i < iterationsArg.getValue(); i++) {
                     performCollection(out);
                     try (BenchmarkIterationMetrics metrics = new BenchmarkIterationMetrics(i, eventNames, bridge)) {
-                        metrics.beginIteration(out, outStat);
+                        metrics.beginIteration(out);
                         for (Reproducer reproducer : reproducers) {
+                            metrics.beginCompilation();
                             try (AutoCloseable ignored = libgraal != null ? libgraal.openCompilationRequestScope() : null) {
                                 ReplayResult replayResult = reproducer.compile();
                                 replayResult.compareCompilationProducts(compareGraphs);
-                                metrics.addVerifiedResult(replayResult);
+                                metrics.addVerifiedResult(reproducer.request, replayResult, resultsWriter);
+                            } catch (IOException e) {
+                                out.println("Failed to write benchmark statistics to " + resultsFileArg.getValue());
+                                return ExitStatus.Failure;
                             } catch (Exception e) {
                                 out.println("Replay failed: " + e);
                                 e.printStackTrace(out);
                                 return ExitStatus.Failure;
                             }
                         }
-                        metrics.endIteration(out, outStat);
+                        metrics.endIteration(out, resultsWriter);
                     }
                 }
             } catch (IOException e) {
@@ -663,16 +667,22 @@ public class ReplayCompilationRunner {
     }
 
     /**
-     * Collects and prints compilation metrics for one iteration of a replay benchmark.
+     * Collects per-compilation replay benchmark metrics and aggregate iteration totals.
      */
     private static final class BenchmarkIterationMetrics implements AutoCloseable {
         private final int iteration;
 
-        private long beginWallTime;
+        private long compilationBeginWallTime;
 
-        private long beginThreadTime;
+        private long compilationBeginThreadTime;
 
-        private long beginMemory;
+        private long compilationBeginMemory;
+
+        private long wallTimeNanos;
+
+        private long threadTimeNanos;
+
+        private long allocatedMemory;
 
         private int compiledBytecodes;
 
@@ -684,6 +694,8 @@ public class ReplayCompilationRunner {
 
         private final HardwarePerformanceCounters performanceCounters;
 
+        private final long[] eventTotals;
+
         private BenchmarkIterationMetrics(int iteration, List<String> eventNames, HardwarePerformanceCounters.PAPIBridge bridge) {
             this.iteration = iteration;
             this.eventNames = eventNames;
@@ -692,35 +704,23 @@ public class ReplayCompilationRunner {
             } else {
                 this.performanceCounters = null;
             }
+            this.eventTotals = new long[eventNames.size()];
         }
 
-        public void beginIteration(PrintStream out, PrintStream outStat) {
-            if (iteration == 0 && outStat != null) {
-                outStat.print("iteration,wall_time_ns,thread_time_ns,allocated_memory,compiled_bytecodes,target_code_size,target_code_hash");
-                for (String eventName : eventNames) {
-                    outStat.print(",");
-                    outStat.print(eventName);
-                }
-                outStat.println();
-            }
+        public void beginIteration(PrintStream out) {
             out.printf("====== replaycomp iteration %d started ======%n", iteration);
+        }
+
+        public void beginCompilation() {
             if (performanceCounters != null) {
                 performanceCounters.start();
             }
-            beginMemory = getCurrentThreadAllocatedBytes();
-            beginWallTime = System.nanoTime();
-            beginThreadTime = getCurrentThreadCpuTime();
+            compilationBeginMemory = getCurrentThreadAllocatedBytes();
+            compilationBeginWallTime = System.nanoTime();
+            compilationBeginThreadTime = getCurrentThreadCpuTime();
         }
 
-        public void addVerifiedResult(ReplayResult replayResult) {
-            CompilationTaskProduct.CompilationTaskArtifacts artifacts = (CompilationTaskProduct.CompilationTaskArtifacts) replayResult.replayedProduct();
-            CompilationResult result = artifacts.result();
-            compiledBytecodes += result.getBytecodeSize();
-            targetCodeSize += result.getTargetCodeSize();
-            targetCodeHash = targetCodeHash * 31 + artifacts.targetCodeHash();
-        }
-
-        public void endIteration(PrintStream out, PrintStream outStat) {
+        public void addVerifiedResult(HotSpotCompilationRequest request, ReplayResult replayResult, ReplayBenchmarkResultsWriter resultsWriter) throws IOException {
             long endThreadTime = getCurrentThreadCpuTime();
             long endWallTime = System.nanoTime();
             long endMemory = getCurrentThreadAllocatedBytes();
@@ -728,26 +728,51 @@ public class ReplayCompilationRunner {
             if (performanceCounters != null) {
                 counterValues = performanceCounters.stop();
             }
-            long wallTimeNanos = endWallTime - beginWallTime;
-            long threadTimeNanos = endThreadTime - beginThreadTime;
-            long allocatedMemory = endMemory - beginMemory;
-            if (outStat != null) {
-                outStat.printf("%d,%d,%d,%d,%d,%d,%08x", iteration, wallTimeNanos, threadTimeNanos, allocatedMemory, compiledBytecodes, targetCodeSize, targetCodeHash);
-                for (String eventName : eventNames) {
-                    outStat.print(",");
-                    outStat.print(counterValues.get(eventName));
-                }
-                outStat.println();
+            long compilationWallTimeNanos = endWallTime - compilationBeginWallTime;
+            long compilationThreadTimeNanos = endThreadTime - compilationBeginThreadTime;
+            long compilationAllocatedMemory = endMemory - compilationBeginMemory;
+            CompilationTaskProduct.CompilationTaskArtifacts artifacts = (CompilationTaskProduct.CompilationTaskArtifacts) replayResult.replayedProduct();
+            CompilationResult result = artifacts.result();
+            int bytecodeSize = result.getBytecodeSize();
+            int compilationTargetCodeSize = result.getTargetCodeSize();
+            int compilationTargetCodeHash = artifacts.targetCodeHash();
+            wallTimeNanos += compilationWallTimeNanos;
+            threadTimeNanos += compilationThreadTimeNanos;
+            allocatedMemory += compilationAllocatedMemory;
+            compiledBytecodes += bytecodeSize;
+            targetCodeSize += compilationTargetCodeSize;
+            targetCodeHash = targetCodeHash * 31 + compilationTargetCodeHash;
+            for (int i = 0; i < eventNames.size(); i++) {
+                eventTotals[i] += counterValues.get(eventNames.get(i));
+            }
+            if (resultsWriter != null) {
+                resultsWriter.writeCompilation(new ReplayBenchmarkResultsWriter.CompilationRecord(iteration, request.getId(), request.getMethod().format("%H.%n(%p)"), request.getEntryBCI(),
+                                compilationWallTimeNanos, compilationThreadTimeNanos, compilationAllocatedMemory, bytecodeSize, compilationTargetCodeSize, compilationTargetCodeHash, counterValues));
+            }
+        }
+
+        public void endIteration(PrintStream out, ReplayBenchmarkResultsWriter resultsWriter) throws IOException {
+            if (resultsWriter != null) {
+                resultsWriter.writeIterationTotal(new ReplayBenchmarkResultsWriter.IterationTotalRecord(iteration, wallTimeNanos, threadTimeNanos, allocatedMemory, compiledBytecodes,
+                                targetCodeSize, targetCodeHash, eventTotals()));
             }
             out.printf("         Thread time: %12.3f ms%n", threadTimeNanos / ONE_MILLION);
             out.printf("    Allocated memory: %12.3f MB%n", allocatedMemory / ONE_MILLION);
             out.printf("  Compiled bytecodes: %12d B%n", compiledBytecodes);
             out.printf("    Target code size: %12d B%n", targetCodeSize);
             out.printf("    Target code hash:     %08x%n", targetCodeHash);
-            for (String eventName : eventNames) {
-                out.printf("%20s: %12d%n", eventName, counterValues.get(eventName));
+            for (int i = 0; i < eventNames.size(); i++) {
+                out.printf("%20s: %12d%n", eventNames.get(i), eventTotals[i]);
             }
             out.printf("====== replaycomp iteration %d completed (%.3f ms) ======%n", iteration, wallTimeNanos / ONE_MILLION);
+        }
+
+        private Map<String, Long> eventTotals() {
+            Map<String, Long> totals = new EconomicHashMap<>(eventNames.size());
+            for (int i = 0; i < eventNames.size(); i++) {
+                totals.put(eventNames.get(i), eventTotals[i]);
+            }
+            return totals;
         }
 
         @Override

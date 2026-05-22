@@ -31,9 +31,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Objects;
 
 import org.graalvm.nativeimage.ImageInfo;
 
+import com.oracle.svm.core.jdk.resources.ResourceStorageEntryBase;
 import com.oracle.svm.shared.util.VMError;
 
 public class ResourcesHelper {
@@ -60,6 +62,12 @@ public class ResourcesHelper {
             resourceURLs.add(urls.nextElement());
         }
         return resourceURLs;
+    }
+
+    static boolean findEmbeddedResourceEntry(String resourceName) {
+        Objects.requireNonNull(resourceName);
+        ResourceStorageEntryBase entry = Resources.getAtRuntime(null, resourceName, true);
+        return entry != null && entry != Resources.NEGATIVE_QUERY_MARKER && entry != Resources.MISSING_METADATA_MARKER;
     }
 
     public static Enumeration<URL> nameToResourceEnumerationURLs(String resourcesName) {

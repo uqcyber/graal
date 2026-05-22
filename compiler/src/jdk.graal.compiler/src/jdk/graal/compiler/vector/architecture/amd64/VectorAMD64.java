@@ -929,7 +929,7 @@ public final class VectorAMD64 extends VectorArchitecture {
                                             op(BYTE_BITS, null),
                                             op(WORD_BITS, VectorFeatureAssertion.AVX1_AVX2_AVX512BW_VL),
                                             op(DWORD_BITS, VectorFeatureAssertion.AVX1_AVX2_AVX512F_VL),
-                                            op(QWORD_BITS, VectorFeatureAssertion.AVX512DQ_VL)),
+                                            op(QWORD_BITS, VectorFeatureAssertion.AVX1_AVX2_AVX512DQ_VL)),
 
                             entry(IntegerStamp.OPS.getMulHigh(),
                                             op(BYTE_BITS, null),

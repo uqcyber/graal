@@ -563,7 +563,7 @@ public final class AMD64ArrayCopyWithConversionsOp extends AMD64ComplexVectorOp 
             masm.movdqu(YMM, vec, new AMD64Address(src, tmp, strideSrc, -32));
             emitReverseBytesIfEnabled(masm, YMM, strideDst, vec, vecReverseBytesMask);
             masm.movdqu(YMM, new AMD64Address(dst, tmp, strideDst, -32), vec);
-            masm.jmpb(labelDone);
+            masm.jmp(labelDone);
 
             // half vector size
             masm.bind(labelTailXMM);

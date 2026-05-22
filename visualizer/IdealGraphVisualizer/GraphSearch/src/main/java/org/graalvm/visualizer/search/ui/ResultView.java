@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -357,7 +357,10 @@ public final class ResultView extends TopComponent {
         @Override
         public void propertyChange(java.beans.PropertyChangeEvent evt) {
             if (TabbedPaneFactory.PROP_CLOSE.equals(evt.getPropertyName())) {
-                removePanel((JPanel) evt.getNewValue());
+                JPanel panel = (JPanel) evt.getNewValue();
+                if (panel != null) {
+                    SwingUtilities.invokeLater(() -> removePanel(panel));
+                }
             }
         }
     }
@@ -365,7 +368,11 @@ public final class ResultView extends TopComponent {
     private class PopupListener extends MouseUtils.PopupMouseAdapter {
         @Override
         protected void showPopup(MouseEvent e) {
-            pop.show(ResultView.this, e.getX(), e.getY());
+            int tabIndex = tabs.indexAtLocation(e.getX(), e.getY());
+            if (tabIndex >= 0) {
+                tabs.setSelectedIndex(tabIndex);
+            }
+            pop.show(e.getComponent(), e.getX(), e.getY());
         }
     }
 
@@ -381,7 +388,10 @@ public final class ResultView extends TopComponent {
 
         @Override
         public void actionPerformed(ActionEvent e) {
-            removePanel(null);
+            JPanel panel = getCurrentResultViewPanel();
+            if (panel != null) {
+                removePanel(panel);
+            }
         }
     }
 

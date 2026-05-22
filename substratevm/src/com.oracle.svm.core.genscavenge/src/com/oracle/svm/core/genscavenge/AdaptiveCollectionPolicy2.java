@@ -184,7 +184,7 @@ class AdaptiveCollectionPolicy2 extends AdaptiveCollectionPolicy2Base {
     public boolean shouldCollectCompletely(boolean followingIncrementalCollection, boolean forcedCompleteCollection) { // ParallelScavengeHeap::should_attempt_young_gc
         guaranteeSizeParametersInitialized();
 
-        boolean collectYoungSeparately = CollectionPolicy.shouldCollectYoungGenSeparately(!SerialGCOptions.useCompactingOldGen());
+        boolean collectYoungSeparately = shouldCollectYoungGenSeparately(!SerialGCOptions.useCompactingOldGen());
         if (forcedCompleteCollection && !collectYoungSeparately) {
             return true;
         }

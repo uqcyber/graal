@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -187,7 +187,8 @@ public enum Failure {
     NON_REPRESENTABLE_EXTRA_DATA_VALUE(Type.MALFORMED, "value cannot be represented in extra data"),
 
     INVALID_LANE_INDEX(Type.INVALID, "invalid lane index"),
-    INVALID_CATCH_CLAUSE_LABEL(Type.INVALID, "invalid catch clause label");
+    INVALID_CATCH_CLAUSE_LABEL(Type.INVALID, "invalid catch clause label"),
+    INVALID_RETHROW_LABEL(Type.INVALID, "invalid rethrow label");
 
     public enum Type {
         TRAP("trap"),

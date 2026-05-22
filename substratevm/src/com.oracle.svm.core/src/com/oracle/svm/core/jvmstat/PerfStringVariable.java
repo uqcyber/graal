@@ -46,8 +46,12 @@ public class PerfStringVariable extends PerfString implements MutablePerfDataEnt
 
     public void allocate(String initialValue) {
         allocate();
-        // As on HotSpot, we reduce the length by 1 so that the null terminator fits as well.
-        byte[] stringBytes = AbstractPerfDataEntry.getBytes(initialValue, nullTerminatedValue.length - 1);
+        setValue(initialValue);
+    }
+
+    public void setValue(String value) {
+        // Reduce the length by 1 so that the null terminator fits as well.
+        byte[] stringBytes = AbstractPerfDataEntry.getBytes(value, nullTerminatedValue.length - 1);
         System.arraycopy(stringBytes, 0, nullTerminatedValue, 0, stringBytes.length);
         nullTerminatedValue[stringBytes.length] = 0;
         writeBytes(valuePtr, nullTerminatedValue);

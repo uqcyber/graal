@@ -130,6 +130,10 @@ public class WasmInstrumentableFunctionNode extends Node implements Instrumentab
         return codeEntry.localCount();
     }
 
+    int stackBase() {
+        return codeEntry.stackBase();
+    }
+
     void execute(VirtualFrame frame, WasmInstance instance) {
         functionNode.execute(frame, instance);
     }
@@ -256,51 +260,51 @@ public class WasmInstrumentableFunctionNode extends Node implements Instrumentab
 
     @Override
     public boolean isValidStackIndex(MaterializedFrame frame, int index) {
-        return index >= 0 && localCount() + index < frame.getFrameDescriptor().getNumberOfSlots();
+        return index >= 0 && stackBase() + index < frame.getFrameDescriptor().getNumberOfSlots();
     }
 
     @Override
     @TruffleBoundary
     public int loadI32FromStack(MaterializedFrame frame, int index) {
-        return frame.getIntStatic(localCount() + index);
+        return frame.getIntStatic(stackBase() + index);
     }
 
     @Override
     public void storeI32IntoStack(MaterializedFrame frame, int index, int value) {
-        frame.setIntStatic(localCount() + index, value);
+        frame.setIntStatic(stackBase() + index, value);
     }
 
     @Override
     @TruffleBoundary
     public long loadI64FromStack(MaterializedFrame frame, int index) {
-        return frame.getLongStatic(localCount() + index);
+        return frame.getLongStatic(stackBase() + index);
     }
 
     @Override
     public void storeI64IntoStack(MaterializedFrame frame, int index, long value) {
-        frame.setLongStatic(localCount() + index, value);
+        frame.setLongStatic(stackBase() + index, value);
     }
 
     @Override
     @TruffleBoundary
     public float loadF32FromStack(MaterializedFrame frame, int index) {
-        return frame.getFloatStatic(localCount() + index);
+        return frame.getFloatStatic(stackBase() + index);
     }
 
     @Override
     public void storeF32IntoStack(MaterializedFrame frame, int index, float value) {
-        frame.setFloatStatic(localCount() + index, value);
+        frame.setFloatStatic(stackBase() + index, value);
     }
 
     @Override
     @TruffleBoundary
     public double loadF64FromStack(MaterializedFrame frame, int index) {
-        return frame.getDoubleStatic(localCount() + index);
+        return frame.getDoubleStatic(stackBase() + index);
     }
 
     @Override
     public void storeF64IntoStack(MaterializedFrame frame, int index, double value) {
-        frame.setDoubleStatic(localCount() + index, value);
+        frame.setDoubleStatic(stackBase() + index, value);
     }
 
     @Override

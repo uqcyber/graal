@@ -43,7 +43,6 @@ import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.CalleeSavedRegisters;
 import com.oracle.svm.core.ReservedRegisters;
-import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
@@ -53,8 +52,6 @@ import com.oracle.svm.core.code.FrameInfoQueryResult.ValueType;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.deopt.DeoptEntryInfopoint;
 import com.oracle.svm.core.deopt.DeoptimizationSupport;
-import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
-import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.heap.CodeReferenceMapDecoder;
 import com.oracle.svm.core.heap.CodeReferenceMapEncoder;
 import com.oracle.svm.core.heap.ObjectReferenceVisitor;
@@ -69,10 +66,11 @@ import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.core.nmt.NmtCategory;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.util.ByteArrayReader;
 import com.oracle.svm.core.util.Counter;
 import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.ImageSingletonLoader;
 import com.oracle.svm.shared.singletons.ImageSingletonWriter;
 import com.oracle.svm.shared.singletons.LayeredPersistFlags;
@@ -83,6 +81,7 @@ import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -191,7 +190,7 @@ public class CodeInfoEncoder {
                 this.methods.addObject(null);
                 this.classes.addObject(INVALID_CLASS);
                 this.memberNames.addObject(INVALID_METHOD_NAME);
-                if (forceEncodeAllMethodMetadata || shouldEncodeAllMethodMetadata()) {
+                if (forceEncodeAllMethodMetadata || shouldEncodeMethodSignatureAndModifiers()) {
                     this.otherStrings.addObject(INVALID_METHOD_SIGNATURE);
                 }
             }
@@ -204,7 +203,7 @@ public class CodeInfoEncoder {
             if (methods.addObject(member)) {
                 classes.addObject(clazz);
                 memberNames.addObject(name);
-                if (shouldEncodeAllMethodMetadata()) {
+                if (shouldEncodeMethodSignatureAndModifiers()) {
                     otherStrings.addObject(signature);
                 }
             }
@@ -298,7 +297,7 @@ public class CodeInfoEncoder {
             } else {
                 writer.putU4(memberNamesIndex);
             }
-            if (shouldEncodeAllMethodMetadata()) {
+            if (shouldEncodeMethodSignatureAndModifiers()) {
                 int signatureNamesIndex = otherStrings.getIndex(signature);
                 if (shortSignatureIndexes) {
                     writer.putU2(signatureNamesIndex);
@@ -329,6 +328,7 @@ public class CodeInfoEncoder {
         protected ReferenceMapEncoder.Input referenceMap;
         protected long referenceMapIndex;
         protected FrameInfoEncoder.FrameData frameData;
+        protected FrameInfoEncoder.FrameData defaultFrameData;
         protected IPData next;
         protected boolean deoptReturnValueIsObject;
     }
@@ -339,7 +339,10 @@ public class CodeInfoEncoder {
 
     private NonmovableArray<Byte> codeInfoIndex;
     private NonmovableArray<Byte> codeInfoEncodings;
+    private NonmovableArray<Byte> codeInfoDefaultFrameInfoIndexes;
     private NonmovableArray<Byte> referenceMapEncoding;
+    private int codeInfoIndexEntriesPerBlock = 1;
+    private final boolean useFinalImageCodeInfoEncoding;
 
     public CodeInfoEncoder(FrameInfoEncoder.Customization frameInfoCustomization, Encoders encoders) {
         this(frameInfoCustomization, encoders, FrameInfoDecoder.SubstrateConstantAccess);
@@ -349,6 +352,7 @@ public class CodeInfoEncoder {
         this.entries = new TreeMap<>();
         this.encoders = encoders;
         this.frameInfoEncoder = new FrameInfoEncoder(frameInfoCustomization, encoders, constantAccess);
+        this.useFinalImageCodeInfoEncoding = useFinalImageCodeInfoEncoding();
     }
 
     public FrameInfoEncoder getFrameInfoEncoder() {
@@ -360,13 +364,12 @@ public class CodeInfoEncoder {
     }
 
     @Fold
-    public static boolean shouldEncodeAllMethodMetadata() {
+    public static boolean shouldEncodeMethodSignatureAndModifiers() {
         /*
-         * We don't support JFR stack traces if JIT compilation is enabled, so there's no need to
-         * include extra method metadata. Additionally, including extra metadata would increase the
-         * binary size.
+         * JFR stack traces need the method signature and modifiers. By default, we don't include
+         * this extra metadata as it increases the binary size.
          */
-        return HasJfrSupport.get() && !RuntimeCompilation.isEnabled();
+        return HasJfrSupport.get();
     }
 
     public static int getEntryOffset(Infopoint infopoint) {
@@ -389,6 +392,7 @@ public class CodeInfoEncoder {
         /* Mark the method start and register the frame size. */
         IPData startEntry = makeEntry(compilationOffset);
         FrameInfoEncoder.FrameData defaultFrameData = frameInfoEncoder.addDefaultDebugInfo(method, totalFrameSize);
+        startEntry.defaultFrameData = defaultFrameData;
         startEntry.frameData = defaultFrameData;
         startEntry.frameSizeEncoding = encodeFrameSize(totalFrameSize, true, isEntryPoint, hasCalleeSavedRegisters);
 
@@ -396,6 +400,7 @@ public class CodeInfoEncoder {
         long entryIP = CodeInfoDecoder.lookupEntryIP(CodeInfoDecoder.indexGranularity() + compilationOffset);
         while (entryIP <= CodeInfoDecoder.lookupEntryIP(compilationSize + compilationOffset - 1)) {
             IPData entry = makeEntry(entryIP);
+            entry.defaultFrameData = defaultFrameData;
             entry.frameData = defaultFrameData;
             entry.frameSizeEncoding = encodeFrameSize(totalFrameSize, false, isEntryPoint, hasCalleeSavedRegisters);
             entryIP += CodeInfoDecoder.indexGranularity();
@@ -466,7 +471,7 @@ public class CodeInfoEncoder {
     }
 
     private void install(CodeInfo target) {
-        CodeInfoAccess.setCodeInfo(target, codeInfoIndex, codeInfoEncodings, referenceMapEncoding);
+        CodeInfoAccess.setCodeInfo(target, codeInfoIndex, codeInfoEncodings, codeInfoIndexEntriesPerBlock, codeInfoDefaultFrameInfoIndexes, referenceMapEncoding);
     }
 
     private void encodeReferenceMaps() {
@@ -512,13 +517,27 @@ public class CodeInfoEncoder {
             prev = cur;
         }
 
+        VMError.guarantee(prev != null, "Code info encoding requires at least one IP entry");
+        int indexEntryCount = NumUtil.safeToInt(Long.divideUnsigned(prev.ip, CodeInfoDecoder.indexGranularity()) + 1);
+        long[] indexOffsets = new long[indexEntryCount];
+        int[] defaultFrameInfoIndexes = useFinalImageCodeInfoEncoding ? new int[indexEntryCount] : null;
+        int nextIndexEntry = 0;
         long nextIndexIP = 0;
-        UnsafeArrayTypeWriter indexBuffer = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
+        int currentDefaultFrameInfoIndex = -1;
+        int chunkDefaultFrameInfoIndex = -1;
         UnsafeArrayTypeWriter encodingBuffer = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
         for (IPData data = first; data != null; data = data.next) {
             assert data.ip <= nextIndexIP : data;
+            if (useFinalImageCodeInfoEncoding && data.defaultFrameData != null) {
+                currentDefaultFrameInfoIndex = TypeConversion.asS4(data.defaultFrameData.encodedFrameInfoIndex);
+            }
             if (data.ip == nextIndexIP) {
-                indexBuffer.putU4(encodingBuffer.getBytesWritten());
+                indexOffsets[nextIndexEntry++] = encodingBuffer.getBytesWritten();
+                if (useFinalImageCodeInfoEncoding) {
+                    VMError.guarantee(currentDefaultFrameInfoIndex >= 0, "Image code index entry is missing default frame info");
+                    defaultFrameInfoIndexes[nextIndexEntry - 1] = currentDefaultFrameInfoIndex;
+                    chunkDefaultFrameInfoIndex = currentDefaultFrameInfoIndex;
+                }
                 nextIndexIP += CodeInfoDecoder.indexGranularity();
             }
 
@@ -527,14 +546,20 @@ public class CodeInfoEncoder {
             entryFlags = entryFlags | flagsForExceptionOffset(data) << CodeInfoDecoder.EX_SHIFT;
             entryFlags = entryFlags | flagsForReferenceMapIndex(data) << CodeInfoDecoder.RM_SHIFT;
             entryFlags = entryFlags | flagsForDeoptFrameInfo(data) << CodeInfoDecoder.FI_SHIFT;
+            if (useFinalImageCodeInfoEncoding) {
+                entryFlags = encodeExtendedImageEntryFlags(data, entryFlags, currentDefaultFrameInfoIndex, chunkDefaultFrameInfoIndex);
+            }
 
-            encodingBuffer.putU1(entryFlags);
+            encodingBuffer.putU1(encodeBasicEntryFlags(entryFlags));
             encodingBuffer.putU1(data.next == null ? CodeInfoDecoder.DELTA_END_OF_TABLE : (data.next.ip - data.ip));
+            if (CodeInfoDecoder.isExtendedEntry(entryFlags)) {
+                writeExtendedEntryFlags(encodingBuffer, entryFlags);
+            }
 
             writeSizeEncoding(encodingBuffer, data, entryFlags);
             writeExceptionOffset(encodingBuffer, data, entryFlags);
             writeReferenceMapIndex(encodingBuffer, data, entryFlags);
-            writeEncodedFrameInfo(encodingBuffer, data, entryFlags);
+            writeEncodedFrameInfo(encodingBuffer, data, entryFlags, chunkDefaultFrameInfoIndex);
 
             if (DeoptimizationSupport.enabled() && LazyDeoptimization.getValue() && data.frameData != null && data.frameData.frame.isDeoptEntry) {
                 /*
@@ -545,10 +570,91 @@ public class CodeInfoEncoder {
             }
         }
 
-        codeInfoIndex = NonmovableArrays.createByteArray(TypeConversion.asU4(indexBuffer.getBytesWritten()), NmtCategory.Code);
-        indexBuffer.toByteBuffer(NonmovableArrays.asByteBuffer(codeInfoIndex));
+        VMError.guarantee(nextIndexEntry == indexOffsets.length, "Mismatched code info index entry count");
+        codeInfoIndexEntriesPerBlock = selectCodeInfoIndexEntriesPerBlock(indexOffsets, useFinalImageCodeInfoEncoding);
+        byte[] encodedIndex = encodeCodeInfoIndex(indexOffsets, codeInfoIndexEntriesPerBlock);
+        codeInfoIndex = NonmovableArrays.createByteArray(encodedIndex.length, NmtCategory.Code);
+        NonmovableArrays.asByteBuffer(codeInfoIndex).put(encodedIndex);
+        if (useFinalImageCodeInfoEncoding) {
+            byte[] encodedDefaultFrameInfoIndexes = encodeImageCodeInfoDefaultFrameInfoIndexes(defaultFrameInfoIndexes);
+            codeInfoDefaultFrameInfoIndexes = NonmovableArrays.createByteArray(encodedDefaultFrameInfoIndexes.length, NmtCategory.Code);
+            NonmovableArrays.asByteBuffer(codeInfoDefaultFrameInfoIndexes).put(encodedDefaultFrameInfoIndexes);
+        } else {
+            codeInfoDefaultFrameInfoIndexes = NonmovableArrays.nullArray();
+        }
         codeInfoEncodings = NonmovableArrays.createByteArray(TypeConversion.asU4(encodingBuffer.getBytesWritten()), NmtCategory.Code);
         encodingBuffer.toByteBuffer(NonmovableArrays.asByteBuffer(codeInfoEncodings));
+    }
+
+    private static boolean useFinalImageCodeInfoEncoding() {
+        /*
+         * The side table is part of the final runtime ImageCodeInfo layout. Non-final layered
+         * builds persist metadata for later image generation, so keep their intermediate encoding
+         * in the legacy self-contained format.
+         */
+        return SubstrateUtil.HOSTED && ImageLayerBuildingSupport.lastImageBuild();
+    }
+
+    private static int selectCodeInfoIndexEntriesPerBlock(long[] indexOffsets, boolean useFinalImageCodeInfoEncoding) {
+        if (useFinalImageCodeInfoEncoding && codeInfoIndexFits(indexOffsets, CodeInfoDecoder.CODE_INFO_INDEX_COMPRESSED_ENTRIES_PER_BLOCK)) {
+            return CodeInfoDecoder.CODE_INFO_INDEX_COMPRESSED_ENTRIES_PER_BLOCK;
+        }
+        return 1;
+    }
+
+    private static byte[] encodeCodeInfoIndex(long[] offsets, int entriesPerBlock) {
+        UnsafeArrayTypeWriter buffer = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
+        if (entriesPerBlock == 1) {
+            for (long offset : offsets) {
+                buffer.putU4(offset);
+            }
+        } else {
+            VMError.guarantee(entriesPerBlock == CodeInfoDecoder.CODE_INFO_INDEX_COMPRESSED_ENTRIES_PER_BLOCK, "Unexpected code info index block size");
+            for (int blockStart = 0; blockStart < offsets.length; blockStart += entriesPerBlock) {
+                long base = offsets[blockStart];
+                buffer.putU4(base);
+                int blockEnd = Math.min(blockStart + entriesPerBlock, offsets.length);
+                for (int i = blockStart + 1; i < blockEnd; i++) {
+                    buffer.putU2(offsets[i] - base);
+                }
+            }
+        }
+        return buffer.toArray();
+    }
+
+    private static boolean codeInfoIndexFits(long[] offsets, int entriesPerBlock) {
+        if (entriesPerBlock == 1) {
+            for (long offset : offsets) {
+                if (!TypeConversion.isU4(offset)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        VMError.guarantee(entriesPerBlock == CodeInfoDecoder.CODE_INFO_INDEX_COMPRESSED_ENTRIES_PER_BLOCK, "Unexpected code info index block size");
+        for (int blockStart = 0; blockStart < offsets.length; blockStart += entriesPerBlock) {
+            long base = offsets[blockStart];
+            if (!TypeConversion.isU4(base)) {
+                return false;
+            }
+            int blockEnd = Math.min(blockStart + entriesPerBlock, offsets.length);
+            for (int i = blockStart + 1; i < blockEnd; i++) {
+                long residual = offsets[i] - base;
+                if (!TypeConversion.isU2(residual)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private static byte[] encodeImageCodeInfoDefaultFrameInfoIndexes(int[] values) {
+        UnsafeArrayTypeWriter buffer = UnsafeArrayTypeWriter.create(ByteArrayReader.supportsUnalignedMemoryAccess());
+        for (int value : values) {
+            buffer.putS4(value);
+        }
+        return buffer.toArray();
     }
 
     /**
@@ -662,12 +768,86 @@ public class CodeInfoEncoder {
         }
     }
 
-    private static void writeEncodedFrameInfo(UnsafeArrayTypeWriter writeBuffer, IPData data, int entryFlags) {
+    private static int encodeBasicEntryFlags(int entryFlags) {
+        if (!CodeInfoDecoder.isExtendedEntry(entryFlags)) {
+            return CodeInfoDecoder.basicEntryFlags(entryFlags);
+        }
+        return switch (CodeInfoDecoder.extendedEntryMode(entryFlags)) {
+            case CodeInfoDecoder.EXTENDED_ENTRY_LEGACY -> CodeInfoDecoder.BASIC_FLAGS_MARKER_FOR_EXTENDED_ENTRY_LEGACY;
+            case CodeInfoDecoder.EXTENDED_ENTRY_FI_INFO_ONLY_S1 -> CodeInfoDecoder.BASIC_FLAGS_MARKER_FOR_EXTENDED_ENTRY_FI_INFO_ONLY_S1;
+            case CodeInfoDecoder.EXTENDED_ENTRY_FI_INFO_ONLY_S2 -> CodeInfoDecoder.BASIC_FLAGS_MARKER_FOR_EXTENDED_ENTRY_FI_INFO_ONLY_S2;
+            case CodeInfoDecoder.EXTENDED_ENTRY_FI_DEFAULT -> CodeInfoDecoder.BASIC_FLAGS_MARKER_FOR_EXTENDED_ENTRY_LEGACY;
+            default -> throw shouldNotReachHereUnexpectedInput(entryFlags);
+        };
+    }
+
+    private void writeExtendedEntryFlags(UnsafeArrayTypeWriter writeBuffer, int entryFlags) {
+        assert useFinalImageCodeInfoEncoding;
+        assert CodeInfoDecoder.isExtendedEntry(entryFlags);
+        int basicFlags = CodeInfoDecoder.basicEntryFlags(entryFlags);
+        switch (CodeInfoDecoder.extendedEntryMode(entryFlags)) {
+            case CodeInfoDecoder.EXTENDED_ENTRY_LEGACY:
+                writeBuffer.putU1(basicFlags);
+                break;
+            case CodeInfoDecoder.EXTENDED_ENTRY_FI_INFO_ONLY_S1:
+            case CodeInfoDecoder.EXTENDED_ENTRY_FI_INFO_ONLY_S2:
+            case CodeInfoDecoder.EXTENDED_ENTRY_FI_DEFAULT:
+                writeBuffer.putU1(basicFlags & ~CodeInfoDecoder.FI_MASK_IN_PLACE);
+                break;
+            default:
+                throw shouldNotReachHereUnexpectedInput(entryFlags);
+        }
+    }
+
+    private int encodeExtendedImageEntryFlags(IPData data, int entryFlags, int currentDefaultFrameInfoIndex, int chunkDefaultFrameInfoIndex) {
+        assert useFinalImageCodeInfoEncoding;
+        boolean useChunkDefaultFrameInfo = currentDefaultFrameInfoIndex >= 0 && currentDefaultFrameInfoIndex == chunkDefaultFrameInfoIndex;
+        /*
+         * For image code, FI_DEFAULT can reuse the chunk side table entry and FI_INFO_ONLY can be
+         * encoded as a small delta to that same default when the frame infos stay close.
+         */
+        if (CodeInfoDecoder.extractFI(entryFlags) == CodeInfoDecoder.FI_DEFAULT_INFO_INDEX_S4 && useChunkDefaultFrameInfo) {
+            return entryFlags | CodeInfoDecoder.EXTENDED_ENTRY_MASK | CodeInfoDecoder.EXTENDED_ENTRY_FI_DEFAULT;
+        }
+        if (CodeInfoDecoder.extractFI(entryFlags) == CodeInfoDecoder.FI_INFO_ONLY_INDEX_S4 && useChunkDefaultFrameInfo) {
+            long delta = data.frameData.encodedFrameInfoIndex - chunkDefaultFrameInfoIndex;
+            if (TypeConversion.isS1(delta)) {
+                return entryFlags | CodeInfoDecoder.EXTENDED_ENTRY_MASK | CodeInfoDecoder.EXTENDED_ENTRY_FI_INFO_ONLY_S1;
+            } else if (TypeConversion.isS2(delta)) {
+                return entryFlags | CodeInfoDecoder.EXTENDED_ENTRY_MASK | CodeInfoDecoder.EXTENDED_ENTRY_FI_INFO_ONLY_S2;
+            }
+        }
+        if (CodeInfoDecoder.isExtendedEntryMarker(CodeInfoDecoder.basicEntryFlags(entryFlags))) {
+            return entryFlags | CodeInfoDecoder.EXTENDED_ENTRY_MASK | CodeInfoDecoder.EXTENDED_ENTRY_LEGACY;
+        }
+        return entryFlags;
+    }
+
+    private static int frameInfoDelta(IPData data, int chunkDefaultFrameInfoIndex) {
+        VMError.guarantee(chunkDefaultFrameInfoIndex >= 0, "Image code entry is missing chunk default frame info");
+        return NumUtil.safeToInt(data.frameData.encodedFrameInfoIndex - chunkDefaultFrameInfoIndex);
+    }
+
+    private void writeEncodedFrameInfo(UnsafeArrayTypeWriter writeBuffer, IPData data, int entryFlags, int chunkDefaultFrameInfoIndex) {
         switch (CodeInfoDecoder.extractFI(entryFlags)) {
             case CodeInfoDecoder.FI_DEFAULT_INFO_INDEX_S4:
-            case CodeInfoDecoder.FI_DEOPT_ENTRY_INDEX_S4:
-            case CodeInfoDecoder.FI_INFO_ONLY_INDEX_S4:
+                if (CodeInfoDecoder.isExtendedFIDefault(entryFlags)) {
+                    assert useFinalImageCodeInfoEncoding;
+                    break;
+                }
                 writeBuffer.putS4(data.frameData.encodedFrameInfoIndex);
+                break;
+            case CodeInfoDecoder.FI_DEOPT_ENTRY_INDEX_S4:
+                writeBuffer.putS4(data.frameData.encodedFrameInfoIndex);
+                break;
+            case CodeInfoDecoder.FI_INFO_ONLY_INDEX_S4:
+                if (CodeInfoDecoder.isExtendedFIInfoOnlyS1(entryFlags)) {
+                    writeBuffer.putS1(frameInfoDelta(data, chunkDefaultFrameInfoIndex));
+                } else if (CodeInfoDecoder.isExtendedFIInfoOnlyS2(entryFlags)) {
+                    writeBuffer.putS2(frameInfoDelta(data, chunkDefaultFrameInfoIndex));
+                } else {
+                    writeBuffer.putS4(data.frameData.encodedFrameInfoIndex);
+                }
                 break;
         }
     }
@@ -693,6 +873,14 @@ class CodeInfoVerifier {
 
     void verifyMethod(SharedMethod method, CompilationResult compilation, int compilationOffset, int compilationSize, CodeInfo info) {
         CodeInfoQueryResult queryResult = new CodeInfoQueryResult();
+        boolean verifyFrameInfoCursor = CodeInfoAccess.usesFinalImageCodeInfoEncoding(info);
+        int expectedRootMethodId = 0;
+        CodeInfoDecoder.FrameInfoCursor frameInfoCursor = null;
+        if (verifyFrameInfoCursor) {
+            CodeInfoAccess.lookupCodeInfo(info, compilationOffset, queryResult, constantAccess);
+            expectedRootMethodId = queryResult.getFrameInfo().getSourceMethodId();
+            frameInfoCursor = new CodeInfoDecoder.FrameInfoCursor();
+        }
         for (int relativeIP = 0; relativeIP < compilationSize; relativeIP++) {
             int totalIP = relativeIP + compilationOffset;
             CodeInfoAccess.lookupCodeInfo(info, totalIP, queryResult, constantAccess);
@@ -701,6 +889,9 @@ class CodeInfoVerifier {
             assert queryResult.getTotalFrameSize() == compilation.getTotalFrameSize() : queryResult;
 
             assert CodeInfoAccess.lookupStackReferenceMapIndex(info, totalIP) == queryResult.getReferenceMapIndex() : queryResult;
+            if (verifyFrameInfoCursor && expectedRootMethodId != 0) {
+                verifyFrameInfoCursorRootMethod(info, totalIP, expectedRootMethodId, frameInfoCursor);
+            }
         }
 
         for (Infopoint infopoint : compilation.getInfopoints()) {
@@ -735,6 +926,16 @@ class CodeInfoVerifier {
             assert expected != 0 : handler;
             assert expected == actual : handler;
         }
+    }
+
+    private static void verifyFrameInfoCursorRootMethod(CodeInfo info, int totalIP, int expectedRootMethodId, CodeInfoDecoder.FrameInfoCursor frameInfoCursor) {
+        frameInfoCursor.initialize(info, totalIP, false);
+        FrameInfoQueryResult rootFrame = null;
+        while (frameInfoCursor.advance()) {
+            rootFrame = frameInfoCursor.get();
+        }
+        assert rootFrame != null : "Missing frame info for IP " + totalIP;
+        assert rootFrame.getSourceMethodId() == expectedRootMethodId : rootFrame;
     }
 
     private void verifyFrame(CompilationResult compilation, BytecodeFrame expectedFrame, FrameInfoQueryResult actualFrame, BitSet visitedVirtualObjects) {

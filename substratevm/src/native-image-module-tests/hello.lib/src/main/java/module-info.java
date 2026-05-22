@@ -24,5 +24,6 @@
  */
 module moduletests.hello.lib {
     exports hello.lib;
+    exports hello.lib.unused;
+    requires java.xml;
 }
-

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package org.graalvm.wasm.test;
 
+import org.graalvm.wasm.test.gc.GCSuite;
 import org.graalvm.wasm.test.suites.WasmImplementationLimitationsSuite;
 import org.graalvm.wasm.test.suites.arithmetic.Float32Suite;
 import org.graalvm.wasm.test.suites.arithmetic.Float64Suite;
@@ -48,6 +49,8 @@ import org.graalvm.wasm.test.suites.arithmetic.Integer64Suite;
 import org.graalvm.wasm.test.suites.arithmetic.ReferenceTypeSuite;
 import org.graalvm.wasm.test.suites.bytecode.BytecodeSuite;
 import org.graalvm.wasm.test.suites.bytecode.MultiInstantiationSuite;
+import org.graalvm.wasm.test.suites.bytecode.WasmLegacyCatchOSRSuite;
+import org.graalvm.wasm.test.suites.bytecode.WasmOSRSuite;
 import org.graalvm.wasm.test.suites.control.BlockWithLocalsSuite;
 import org.graalvm.wasm.test.suites.control.BranchBlockSuite;
 import org.graalvm.wasm.test.suites.control.ExceptionSuite;
@@ -57,6 +60,7 @@ import org.graalvm.wasm.test.suites.control.MultiValueSuite;
 import org.graalvm.wasm.test.suites.control.MultipleFunctionsSuite;
 import org.graalvm.wasm.test.suites.control.SimpleBlockSuite;
 import org.graalvm.wasm.test.suites.debugging.DebugObjectFactorySuite;
+import org.graalvm.wasm.test.suites.debugging.DebugSourceLoadSuite;
 import org.graalvm.wasm.test.suites.debugging.DebugValidationSuite;
 import org.graalvm.wasm.test.suites.linker.LinkerSuite;
 import org.graalvm.wasm.test.suites.memory.Memory64Suite;
@@ -97,6 +101,7 @@ import org.junit.runners.Suite;
                 LinkerSuite.class,
                 WasmPolyglotTestSuite.class,
                 WasmJsApiSuite.class,
+                GCSuite.class,
                 ValidationSuite.class,
                 MultiValueValidationSuite.class,
                 ReferenceTypesValidationSuite.class,
@@ -104,10 +109,13 @@ import org.junit.runners.Suite;
                 WasmImplementationLimitationsSuite.class,
                 BytecodeSuite.class,
                 MultiInstantiationSuite.class,
+                WasmLegacyCatchOSRSuite.class,
+                WasmOSRSuite.class,
                 MultiMemorySuite.class,
                 ThreadsSuite.class,
                 ExceptionSuite.class,
                 DebugValidationSuite.class,
+                DebugSourceLoadSuite.class,
                 DebugObjectFactorySuite.class
 })
 

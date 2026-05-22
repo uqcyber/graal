@@ -27,8 +27,8 @@ package com.oracle.svm.core.graal.nodes;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.word.LocationIdentity;
 
-import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.ReservedRegisters;
+import com.oracle.svm.core.SubstrateTarget;
 
 import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.graph.NodeClass;
@@ -57,7 +57,7 @@ public class WriteCurrentVMThreadNode extends FixedWithNextNode implements LIRLo
     @Override
     public void generate(NodeLIRBuilderTool gen) {
         LIRGeneratorTool tool = gen.getLIRGeneratorTool();
-        gen.getLIRGeneratorTool().emitWriteRegister(ReservedRegisters.singleton().getThreadRegister(), gen.operand(value), tool.getLIRKind(FrameAccess.getWordStamp()));
+        gen.getLIRGeneratorTool().emitWriteRegister(ReservedRegisters.singleton().getThreadRegister(), gen.operand(value), tool.getLIRKind(SubstrateTarget.getWordStamp()));
     }
 
     @NodeIntrinsic

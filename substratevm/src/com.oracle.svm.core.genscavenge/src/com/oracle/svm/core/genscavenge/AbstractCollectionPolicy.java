@@ -26,14 +26,12 @@ package com.oracle.svm.core.genscavenge;
 
 import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.SubstrateGCOptions;
-import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.heap.PhysicalMemory;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.locks.VMMutex;
@@ -41,12 +39,12 @@ import com.oracle.svm.core.os.CommittedMemoryProvider;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.RecurringCallbackSupport;
 import com.oracle.svm.core.thread.VMOperation;
-import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
-import org.graalvm.word.impl.Word;
 
 /**
  * Note that a lot of methods in this class are final. Subclasses may only override certain methods
@@ -58,12 +56,11 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
     protected static final int MIN_SPACE_SIZE_AS_NUMBER_OF_ALIGNED_CHUNKS = 8;
 
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+20/src/hotspot/share/gc/shared/gc_globals.hpp#L572-L575") //
-    private static final int MAX_TENURING_THRESHOLD = 15;
+    static final int MAX_TENURING_THRESHOLD = 15;
 
-    @Platforms(Platform.HOSTED_ONLY.class)
-    static int getMaxSurvivorSpaces(Integer userValue) {
-        assert userValue == null || userValue >= 0 : userValue;
-        return (userValue != null) ? userValue : AbstractCollectionPolicy.MAX_TENURING_THRESHOLD;
+    static boolean shouldCollectYoungGenSeparately(boolean defaultValue) {
+        Boolean optionValue = SerialGCOptions.CollectYoungGenerationSeparately.getValue();
+        return (optionValue != null) ? optionValue : defaultValue;
     }
 
     /*
@@ -292,7 +289,7 @@ abstract class AbstractCollectionPolicy implements CollectionPolicy {
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+21/src/hotspot/share/gc/shared/genArguments.cpp#L195-L310")
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+21/src/hotspot/share/gc/parallel/psYoungGen.cpp#L104-L116")
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+21/src/hotspot/share/gc/parallel/psYoungGen.cpp#L146-L168")
-    private void computeSizeParameters(RawSizeParameters newParamsOnStack) {
+    protected void computeSizeParameters(RawSizeParameters newParamsOnStack) {
         UnsignedWord minYoungSpaces = getMinYoungSpacesSize();
         UnsignedWord minAllSpaces = minYoungSpaces.add(minSpaceSize()); // old
         UnsignedWord heapSizeLimit = UnsignedUtils.max(alignDown(getHeapSizeLimit()), minAllSpaces);

@@ -26,9 +26,11 @@
 
 package com.oracle.svm.shared.option;
 
+import jdk.graal.compiler.options.OptionKey;
+
 /**
- * Collection of common option names handled in the driver. The actual {@link HostedOptionKey}
- * instances are defined in {@code com.oracle.svm.core.option.CommonOptions}.
+ * Collection of common option names handled in the driver. The actual {@link OptionKey} instances
+ * are defined in {@code com.oracle.svm.core.option.CommonOptions}.
  */
 public class CommonOptionNames {
     public static final String PrintFlags = "PrintFlags";

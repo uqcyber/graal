@@ -35,7 +35,7 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 public class DefaultImageHeapObjectSorter extends ImageHeapObjectSorter implements Comparator<ImageHeapObject> {
 
     @Override
-    protected void doSort(List<ImageHeapObject> objects, Comparator<ImageHeapObject> primaryComparator) {
+    protected void doSort(ImageHeapPartition partition, List<ImageHeapObject> objects, Comparator<ImageHeapObject> primaryComparator) {
         objects.sort(primaryComparator.thenComparing(this));
     }
 

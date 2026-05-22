@@ -49,6 +49,7 @@ import java.util.List;
 public final class CodeEntry {
     private final int functionIndex;
     private final int maxStackSize;
+    private final int maxLegacyCatchDepth;
     private final int[] localTypes;
     private final int[] resultTypes;
     private final List<CallNode> callNodes;
@@ -57,10 +58,11 @@ public final class CodeEntry {
     private final boolean usesMemoryZero;
     private final int exceptionTableOffset;
 
-    public CodeEntry(int functionIndex, int maxStackSize, int[] localTypes, int[] resultTypes, List<CallNode> callNodes, int startOffset, int endOffset, boolean usesMemoryZero,
-                    int exceptionTableOffset) {
+    public CodeEntry(int functionIndex, int maxStackSize, int maxLegacyCatchDepth, int[] localTypes, int[] resultTypes, List<CallNode> callNodes, int startOffset, int endOffset,
+                    boolean usesMemoryZero, int exceptionTableOffset) {
         this.functionIndex = functionIndex;
         this.maxStackSize = maxStackSize;
+        this.maxLegacyCatchDepth = maxLegacyCatchDepth;
         this.localTypes = localTypes;
         this.resultTypes = resultTypes;
         this.callNodes = callNodes;
@@ -72,6 +74,10 @@ public final class CodeEntry {
 
     public int maxStackSize() {
         return maxStackSize;
+    }
+
+    public int maxLegacyCatchDepth() {
+        return maxLegacyCatchDepth;
     }
 
     public int functionIndex() {

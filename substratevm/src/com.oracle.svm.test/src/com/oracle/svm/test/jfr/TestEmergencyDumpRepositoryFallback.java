@@ -73,11 +73,11 @@ public class TestEmergencyDumpRepositoryFallback extends AbstractJfrTest {
             Recording recording = createInMemoryRecording(events);
             /*
              * JFR may already have an active repository chunk open for the recording. Close it so
-             * vmOutOfMemoryErrorRotation() has to create the emergency repository chunk itself.
+             * dumpOnOutOfMemoryError() has to create the emergency repository chunk itself.
              */
             SubstrateJVM.get().setOutput(null);
             emitStringEvent("repository-fallback");
-            SubstrateJVM.get().vmOutOfMemoryErrorRotation();
+            SubstrateJVM.get().dumpOnOutOfMemoryError();
             recording.stop();
             recording.close();
 

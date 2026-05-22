@@ -39,10 +39,10 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion": "7.68.2",
+  "mxversion": "7.82.0",
   "name" : "sdk",
   "version" : "25.1.0",
-  "release" : False,
+  "release_from" : "tag:vm",
   "sourceinprojectwhitelist" : [],
   "url" : "https://github.com/oracle/graal",
   "groupId" : "org.graalvm.sdk",
@@ -1374,6 +1374,7 @@ suite = {
       "distDependencies" : ["JNIUTILS"],
       "description" : "API and utility classes for nativebridge.",
       "allowsJavadocWarnings": True,
+      "useModulePath": True,
       "maven": {
           "tag": ["default", "public"],
       },

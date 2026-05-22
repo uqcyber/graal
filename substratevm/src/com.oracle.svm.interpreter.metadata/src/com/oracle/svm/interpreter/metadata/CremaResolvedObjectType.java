@@ -76,7 +76,8 @@ public final class CremaResolvedObjectType extends InterpreterResolvedObjectType
                     InterpreterResolvedObjectType[] interfaces,
                     InterpreterConstantPool constantPool, Class<?> javaClass, boolean isWordType,
                     int staticReferenceFields, int staticPrimitiveFieldsSize) {
-        super(parserKlass.getType(), parserKlass.getFlags() & Constants.JVM_RECOGNIZED_CLASS_MODIFIERS, componentType, superclass, interfaces, constantPool, javaClass, isWordType);
+        super(parserKlass.getType(), parserKlass.getFlags() & Constants.JVM_RECOGNIZED_CLASS_MODIFIERS, componentType, superclass, interfaces, constantPool, javaClass, isWordType,
+                        permittedSubclassNames(parserKlass));
         this.primitiveStatics = new byte[staticPrimitiveFieldsSize];
         this.referenceStatics = new Object[staticReferenceFields];
         this.attributes = parserKlass.getAttributes();
@@ -218,31 +219,18 @@ public final class CremaResolvedObjectType extends InterpreterResolvedObjectType
         return innerKlasses.toArray(new JavaType[0]);
     }
 
-    @Override
-    public JavaType[] getPermittedSubClasses() {
-        PermittedSubclassesAttribute permittedSubclasses = getAttribute(PermittedSubclassesAttribute.NAME, PermittedSubclassesAttribute.class);
-        if (permittedSubclasses == null || permittedSubclasses.getClasses().length == 0) {
-            return EMPTY_ARRAY;
+    private static Symbol<Name>[] permittedSubclassNames(ParserKlass parserKlass) {
+        PermittedSubclassesAttribute permittedSubclasses = parserKlass.getAttribute(PermittedSubclassesAttribute.NAME, PermittedSubclassesAttribute.class);
+        if (permittedSubclasses == null) {
+            return null;
         }
-
-        InterpreterConstantPool pool = getConstantPool();
-        ArrayList<JavaType> result = new ArrayList<>(permittedSubclasses.getClasses().length);
-        for (int classIndex : permittedSubclasses.getClasses()) {
-            try {
-                JavaType permittedSubclass = pool.resolvedTypeAt(this, classIndex);
-                if (permittedSubclass != null && !permittedSubclass.isArray()) {
-                    result.add(permittedSubclass);
-                }
-            } catch (VirtualMachineError e) {
-                // Propagate this error like HotSpot does
-                throw e;
-            } catch (Throwable t) {
-                // Javadoc for Class.getPermittedSubclasses:
-                // If a Class object cannot be obtained, it is silently ignored, and not included in
-                // the result array.
-            }
+        char[] classes = permittedSubclasses.getClasses();
+        @SuppressWarnings("unchecked")
+        Symbol<Name>[] result = (Symbol<Name>[]) new Symbol<?>[classes.length];
+        for (int i = 0; i < classes.length; i++) {
+            result[i] = parserKlass.getConstantPool().className(classes[i]);
         }
-        return result.isEmpty() ? EMPTY_ARRAY : result.toArray(EMPTY_ARRAY);
+        return result;
     }
 
     @Override

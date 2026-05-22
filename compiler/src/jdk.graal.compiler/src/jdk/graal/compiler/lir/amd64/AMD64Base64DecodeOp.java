@@ -68,6 +68,8 @@ import static jdk.vm.ci.amd64.AMD64.xmm10;
 import static jdk.vm.ci.amd64.AMD64.xmm11;
 import static jdk.vm.ci.amd64.AMD64.xmm12;
 import static jdk.vm.ci.amd64.AMD64.xmm13;
+import static jdk.vm.ci.amd64.AMD64.xmm14;
+import static jdk.vm.ci.amd64.AMD64.xmm15;
 import static jdk.vm.ci.amd64.AMD64.xmm19;
 import static jdk.vm.ci.amd64.AMD64.xmm2;
 import static jdk.vm.ci.amd64.AMD64.xmm20;
@@ -345,6 +347,7 @@ public final class AMD64Base64DecodeOp extends AMD64LIRInstruction {
                             r9,
                             r10,
                             r11,
+                            // vzeroupper clears upper bits of xmm0-xmm15.
                             xmm0,
                             xmm1,
                             xmm2,
@@ -359,6 +362,8 @@ public final class AMD64Base64DecodeOp extends AMD64LIRInstruction {
                             xmm11,
                             xmm12,
                             xmm13,
+                            xmm14,
+                            xmm15,
                             xmm19,
                             xmm20,
                             xmm21,
@@ -377,6 +382,7 @@ public final class AMD64Base64DecodeOp extends AMD64LIRInstruction {
                             r9,
                             r10,
                             r11,
+                            // vzeroupper clears upper bits of xmm0-xmm15.
                             xmm0,
                             xmm1,
                             xmm2,
@@ -391,6 +397,8 @@ public final class AMD64Base64DecodeOp extends AMD64LIRInstruction {
                             xmm11,
                             xmm12,
                             xmm13,
+                            xmm14,
+                            xmm15,
             });
         } else {
             this.temps = AMD64LIRHelper.registersToValues(new Register[]{

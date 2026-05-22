@@ -1862,6 +1862,9 @@ final class BytecodeInstructionHandler extends CodeExecutableElement implements 
                 b.startStatement();
                 emitCallSlowPath(b, name -> name, null);
                 b.end(); // statement
+                if (handlerLayout.isTailCall()) {
+                    parent.emitStackEffect(b, instruction.getStackEffect());
+                }
                 b.statement("return bci + ", String.valueOf(instruction.getInstructionLength()));
 
                 b.end(); // catch

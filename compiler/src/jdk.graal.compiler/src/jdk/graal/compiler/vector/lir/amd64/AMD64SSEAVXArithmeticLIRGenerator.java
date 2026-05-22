@@ -124,6 +124,7 @@ import static jdk.graal.compiler.asm.amd64.AMD64Assembler.VexRVMOp.VPMULHUW;
 import static jdk.graal.compiler.asm.amd64.AMD64Assembler.VexRVMOp.VPMULHW;
 import static jdk.graal.compiler.asm.amd64.AMD64Assembler.VexRVMOp.VPMULLD;
 import static jdk.graal.compiler.asm.amd64.AMD64Assembler.VexRVMOp.VPMULLW;
+import static jdk.graal.compiler.asm.amd64.AMD64Assembler.VexRVMOp.VPMULUDQ;
 import static jdk.graal.compiler.asm.amd64.AMD64Assembler.VexRVMOp.VPOR;
 import static jdk.graal.compiler.asm.amd64.AMD64Assembler.VexRVMOp.VPSUBB;
 import static jdk.graal.compiler.asm.amd64.AMD64Assembler.VexRVMOp.VPSUBD;
@@ -259,7 +260,7 @@ public class AMD64SSEAVXArithmeticLIRGenerator extends AMD64VectorArithmeticLIRG
                 case BYTE -> throw GraalError.shouldNotReachHere("AVX/AVX2 does not support VPMULLB"); // ExcludeFromJacocoGeneratedReport
                 case WORD -> emitVectorBinary(VPMULLW, a, b);
                 case DWORD -> emitVectorBinary(VPMULLD, a, b);
-                case QWORD -> throw GraalError.shouldNotReachHere("AVX/AVX2 does not support VPMULLQ"); // ExcludeFromJacocoGeneratedReport
+                case QWORD -> emitQwordMulViaDwordOps(a, b);
                 case SINGLE -> emitVectorBinary(VMULPS, a, b);
                 case DOUBLE -> emitVectorBinary(VMULPD, a, b);
                 default -> throw GraalError.shouldNotReachHereUnexpectedValue(kind.getScalar()); // ExcludeFromJacocoGeneratedReport
@@ -267,6 +268,33 @@ public class AMD64SSEAVXArithmeticLIRGenerator extends AMD64VectorArithmeticLIRG
         } else {
             return super.emitMul(a, b, setFlags);
         }
+    }
+
+    /**
+     * AVX/AVX2 has no packed 64-bit integer multiply. This reconstructs low 64-bit lane products
+     * from 32-bit pieces:
+     *
+     * <pre>
+     * (x_lo U* y_lo) + ((x_hi * y_lo + x_lo * y_hi) << 32)
+     * </pre>
+     *
+     * The low-low product is an unsigned limb multiplication: its high 32 bits contribute to the
+     * final 64-bit result. The cross-products only contribute their low 32 bits, where signed and
+     * unsigned multiplication are equivalent.
+     */
+    private Variable emitQwordMulViaDwordOps(Value a, Value b) {
+        LIRKind kind = LIRKind.combine(a, b);
+        Variable swappedA = getLIRGen().newVariable(kind);
+        getLIRGen().append(new AMD64VectorShuffle.ShuffleWordOp(VPSHUFD, swappedA, asAllocatable(a), 0xB1));
+
+        Variable crossProducts = emitVectorBinary(kind, VPMULLD, swappedA, b);
+        Variable swappedCrossProducts = getLIRGen().newVariable(kind);
+        getLIRGen().append(new AMD64VectorShuffle.ShuffleWordOp(VPSHUFD, swappedCrossProducts, crossProducts, 0xB1));
+        Variable crossSums = emitVectorBinary(kind, VPADDD, crossProducts, swappedCrossProducts);
+        Value shiftAmount = new ConstantValue(LIRKind.value(AMD64Kind.DWORD), JavaConstant.forInt(Integer.SIZE));
+        Variable shiftedCrossSums = emitShift(VPSLLQ, crossSums, shiftAmount);
+        Variable lowProducts = emitVectorBinary(kind, VPMULUDQ, a, b);
+        return emitVectorBinary(kind, VPADDQ, lowProducts, shiftedCrossSums);
     }
 
     @Override

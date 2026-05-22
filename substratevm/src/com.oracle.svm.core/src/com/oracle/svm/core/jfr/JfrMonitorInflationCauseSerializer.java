@@ -29,6 +29,7 @@ package com.oracle.svm.core.jfr;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.monitor.MonitorInflationCause;
 
 public class JfrMonitorInflationCauseSerializer implements JfrSerializer {
@@ -40,6 +41,7 @@ public class JfrMonitorInflationCauseSerializer implements JfrSerializer {
     }
 
     @Override
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Used on OOME for emergency dumps")
     public void write(JfrChunkWriter writer) {
         writer.writeCompressedLong(JfrType.MonitorInflationCause.getId());
 

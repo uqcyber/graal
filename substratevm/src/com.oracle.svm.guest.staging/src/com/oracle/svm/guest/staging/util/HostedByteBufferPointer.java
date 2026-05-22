@@ -28,9 +28,11 @@ import java.nio.ByteBuffer;
 
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.ComparableWord;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
+import org.graalvm.word.SignedWord;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordBase;
 
@@ -38,8 +40,11 @@ import com.oracle.svm.guest.staging.config.SubstrateGuestTarget;
 import com.oracle.svm.shared.util.NumUtil;
 import com.oracle.svm.shared.util.VMError;
 
+/**
+ * Build-time {@link Pointer}/{@link CCharPointer} implementation backed by a {@link ByteBuffer}.
+ */
 @Platforms(Platform.HOSTED_ONLY.class)
-public final class HostedByteBufferPointer implements Pointer {
+public final class HostedByteBufferPointer implements Pointer, CCharPointer {
     private final ByteBuffer buffer;
     private final int baseOffset;
 
@@ -47,6 +52,10 @@ public final class HostedByteBufferPointer implements Pointer {
         assert buffer != null;
         this.buffer = buffer;
         this.baseOffset = baseOffset;
+    }
+
+    public HostedByteBufferPointer(byte[] array) {
+        this(ByteBuffer.wrap(array), 0);
     }
 
     @Override
@@ -726,6 +735,46 @@ public final class HostedByteBufferPointer implements Pointer {
 
     @Override
     public boolean aboveOrEqual(int val) {
+        throw unsupported();
+    }
+
+    @Override
+    public byte read() {
+        return readByte(0);
+    }
+
+    @Override
+    public byte read(int index) {
+        return readByte(index);
+    }
+
+    @Override
+    public byte read(SignedWord index) {
+        return readByte(index);
+    }
+
+    @Override
+    public void write(byte value) {
+        writeByte(0, value);
+    }
+
+    @Override
+    public void write(int index, byte value) {
+        writeByte(index, value);
+    }
+
+    @Override
+    public void write(SignedWord index, byte value) {
+        writeByte(index, value);
+    }
+
+    @Override
+    public CCharPointer addressOf(int index) {
+        throw unsupported();
+    }
+
+    @Override
+    public CCharPointer addressOf(SignedWord index) {
         throw unsupported();
     }
 }

@@ -27,7 +27,6 @@ package com.oracle.svm.hosted.imagelayer;
 import static com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.APP_LAYER_ONLY_TRAIT;
 
 import java.io.IOException;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -61,13 +60,11 @@ import com.oracle.svm.hosted.NativeImageClassLoaderSupport;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.driver.IncludeOptionsSupport;
 import com.oracle.svm.hosted.driver.LayerOptionsSupport.LayerOption;
-import com.oracle.svm.hosted.imagelayer.SharedLayerSnapshotCapnProtoSchemaHolder.SharedLayerSnapshot;
-import com.oracle.svm.hosted.imagelayer.SharedLayerSnapshotCapnProtoSchemaHolder.SharedLayerSnapshot.Reader;
 import com.oracle.svm.hosted.option.HostedOptionParser;
-import com.oracle.svm.shaded.org.capnproto.ReaderOptions;
-import com.oracle.svm.shaded.org.capnproto.Serialize;
+import com.oracle.svm.hosted.snapshot.capnproto.CapnProtoSharedLayerSnapshotFormat;
+import com.oracle.svm.hosted.snapshot.layer.SharedLayerSnapshotData;
+import com.oracle.svm.hosted.snapshot.layer.SharedLayerSnapshotFormat;
 import com.oracle.svm.shared.collections.ConcurrentIdentityHashMap;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.option.LayerVerifiedOption;
 import com.oracle.svm.shared.option.LocatableMultiOptionValue.ValueWithOrigin;
@@ -111,7 +108,7 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
     private SVMImageLayerSingletonLoader singletonLoader;
     private final EnumSet<SingletonLayeredInstallationKind> forbiddenInstallationKinds;
     private final ImageClassLoader imageClassLoader;
-    private final SharedLayerSnapshot.Reader snapshot;
+    private final SharedLayerSnapshotData.Loader snapshot;
     private final List<FileChannel> graphsChannels;
     private final WriteLayerArchiveSupport writeLayerArchiveSupport;
     private final LoadLayerArchiveSupport loadLayerArchiveSupport;
@@ -132,7 +129,7 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
     private static final String DIGEST_IGNORE = "digest-ignore";
 
     private HostedImageLayerBuildingSupport(ImageClassLoader imageClassLoader,
-                    Reader snapshot, List<FileChannel> graphsChannels,
+                    SharedLayerSnapshotData.Loader snapshot, List<FileChannel> graphsChannels,
                     boolean buildingImageLayer, boolean buildingInitialLayer, boolean buildingApplicationLayer,
                     WriteLayerArchiveSupport writeLayerArchiveSupport, LoadLayerArchiveSupport loadLayerArchiveSupport, Function<Class<?>, SingletonTrait<?>[]> singletonTraitInjector) {
         super(buildingImageLayer, buildingInitialLayer, buildingApplicationLayer);
@@ -198,7 +195,7 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
         writeLayerArchiveSupport.write(imageClassLoader.platform);
     }
 
-    public SharedLayerSnapshot.Reader getSnapshot() {
+    public SharedLayerSnapshotData.Loader getSnapshot() {
         return snapshot;
     }
 
@@ -360,15 +357,7 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
              */
             LayeredImageOptions.ApplicationLayerInitializedClasses.update(values, Module.class.getName());
 
-            setOptionIfHasNotBeenSet(values, SubstrateOptions.ConcealedOptions.RelativeCodePointers, true);
-
             classLoaderSupport.initializePathDigests(digestIgnorePath);
-        }
-    }
-
-    private static void setOptionIfHasNotBeenSet(EconomicMap<OptionKey<?>, Object> values, HostedOptionKey<Boolean> option, boolean boxedValue) {
-        if (!values.containsKey(option)) {
-            option.update(values, boxedValue);
         }
     }
 
@@ -458,7 +447,7 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
             writeLayerArchiveSupport = new WriteLayerArchiveSupport(layerName, imageClassLoader.classLoaderSupport, builderTempDir, archiveSupport, enableLogging);
         }
         LoadLayerArchiveSupport loadLayerArchiveSupport = null;
-        SharedLayerSnapshot.Reader snapshot = null;
+        SharedLayerSnapshotData.Loader snapshot = null;
         List<FileChannel> graphs = List.of();
         if (buildingExtensionLayer) {
             Path layerFileName = getLayerUseValue(values.get());
@@ -473,11 +462,9 @@ public final class HostedImageLayerBuildingSupport extends ImageLayerBuildingSup
                 throw AnalysisError.shouldNotReachHere("Error during image layer snapshot graphs loading " + loadLayerArchiveSupport.getSnapshotGraphsPath(), e);
             }
 
-            try (FileChannel ch = FileChannel.open(loadLayerArchiveSupport.getSnapshotPath())) {
-                MappedByteBuffer bb = ch.map(FileChannel.MapMode.READ_ONLY, ch.position(), ch.size());
-                ReaderOptions opt = new ReaderOptions(Long.MAX_VALUE, ReaderOptions.DEFAULT_READER_OPTIONS.nestingLimit);
-                snapshot = Serialize.read(bb, opt).getRoot(SharedLayerSnapshot.factory);
-                // NOTE: buffer is never unmapped, but is read-only and pages can be evicted
+            SharedLayerSnapshotFormat sharedLayerSnapshotFormat = new CapnProtoSharedLayerSnapshotFormat();
+            try {
+                snapshot = sharedLayerSnapshotFormat.load(loadLayerArchiveSupport.getSnapshotPath());
             } catch (IOException e) {
                 throw AnalysisError.shouldNotReachHere("Error during image layer snapshot loading " + loadLayerArchiveSupport.getSnapshotPath(), e);
             }

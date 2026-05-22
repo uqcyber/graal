@@ -397,7 +397,6 @@ public class CheckGraalInvariants extends GraalCompilerTest {
         verifiers.add(new VerifyLoopInfo());
         verifiers.add(new VerifyGuardsStageUsages());
         verifiers.add(new VerifyAArch64RegisterUsages());
-        verifiers.add(new VerifyAnnotatedElementUsage());
         VerifyAssertionUsage assertionUsages = null;
         boolean checkAssertions = tool.checkAssertions();
 

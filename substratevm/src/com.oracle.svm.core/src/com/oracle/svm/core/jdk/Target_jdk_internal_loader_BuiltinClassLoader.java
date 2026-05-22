@@ -47,6 +47,7 @@ import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.shared.util.SubstrateUtil;
 
 @TargetClass(value = jdk.internal.loader.BuiltinClassLoader.class)
@@ -62,7 +63,13 @@ final class Target_jdk_internal_loader_BuiltinClassLoader {
     private volatile SoftReference<Map<String, List<URL>>> resourceCache;
 
     @Alias
+    public native ModuleReference findModule(String name);
+
+    @Alias
     public native void loadModule(ModuleReference mref);
+
+    @Alias
+    native boolean hasClassPath();
 
     @Substitute
     @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
@@ -82,7 +89,14 @@ final class Target_jdk_internal_loader_BuiltinClassLoader {
     }
 
     @Substitute
-    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
+    @TargetElement(onlyWith = RuntimeClassLoading.NoRuntimeClassLoading.class)
+    private Class<?> findClassInModuleOrNull(@SuppressWarnings("unused") Target_jdk_internal_loader_BuiltinClassLoader_LoadedModule loadedModule,
+                    @SuppressWarnings("unused") String cn) {
+        return null;
+    }
+
+    @Substitute
+    @TargetElement(onlyWith = RuntimeClassLoading.NoRuntimeClassLoading.class)
     protected Class<?> defineClass(String cn, Target_jdk_internal_loader_BuiltinClassLoader_LoadedModule loadedModule) {
         /*
          * Avoid dragging in logging & formatting code through
@@ -92,74 +106,65 @@ final class Target_jdk_internal_loader_BuiltinClassLoader {
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     public URL findResource(String mn, String name) {
         Module module = ModuleLayer.boot().findModule(mn).orElse(null);
         return ResourcesHelper.nameToResourceURL(module, name);
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     public InputStream findResourceAsStream(String mn, String name) throws IOException {
         return ResourcesHelper.nameToResourceInputStream(mn, name);
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     public URL findResource(String name) {
-        if (!ClassRegistries.respectClassLoader()) {
-            // Return only image resources
-            return ResourcesHelper.nameToResourceURL(name);
-        }
-
-        if (this == Target_jdk_internal_loader_ClassLoaders.bootLoader()) {
-            // Workaround for GR-73221: Only retrieve image resources for boot loader
-            URL url = ResourcesHelper.nameToResourceURL(name);
-            if (url != null) {
-                return url;
-            }
-        }
-
-        // TODO GR-73221: Also look into the modules defined to this loader
-
-        return ucp == null ? null : ucp.findResource(name);
+        return ResourcesHelper.nameToResourceURL(name);
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     public Enumeration<URL> findResources(String name) throws IOException {
-        if (!ClassRegistries.respectClassLoader()) {
-            // Return only image resources
-            return ResourcesHelper.nameToResourceEnumerationURLs(name);
-        }
-
-        List<URL> resources = new ArrayList<>();
-
-        if (this == Target_jdk_internal_loader_ClassLoaders.bootLoader()) {
-            // Workaround for GR-73221: Only retrieve image resources for boot loader
-            resources.addAll(ResourcesHelper.nameToResourceListURLs(name));
-        }
-
-        // TODO GR-73221: Also look into the modules defined to this loader
-
-        if (ucp != null) {
-            Enumeration<URL> e = ucp.findResources(name);
-            if (resources.isEmpty()) {
-                return e;
-            }
-            while (e.hasMoreElements()) {
-                URL url = e.nextElement();
-                resources.add(url);
-            }
-        }
-        return resources.isEmpty() ? Collections.emptyEnumeration() : Collections.enumeration(resources);
+        return ResourcesHelper.nameToResourceEnumerationURLs(name);
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     private List<URL> findMiscResource(String name) {
         return ResourcesHelper.nameToResourceListURLs(name);
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     private URL findResource(ModuleReference mref, String name) {
         Module module = ModuleLayer.boot().findModule(mref.descriptor().name()).orElse(null);
         return ResourcesHelper.nameToResourceURL(module, name);
+    }
+
+    @Substitute
+    @TargetElement(onlyWith = ClassRegistries.RespectsClassLoader.class)
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+20/src/java.base/share/classes/jdk/internal/loader/BuiltinClassLoader.java#L483-L492")
+    private URL findResourceOnClassPath(String name) {
+        URL url = ResourcesHelper.findEmbeddedResourceEntry(name) ? ResourcesHelper.nameToResourceURL(name) : null;
+        return url != null ? url : hasClassPath() ? ucp.findResource(name) : null;
+    }
+
+    @Substitute
+    @TargetElement(onlyWith = ClassRegistries.RespectsClassLoader.class)
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+20/src/java.base/share/classes/jdk/internal/loader/BuiltinClassLoader.java#L497-L504")
+    private Enumeration<URL> findResourcesOnClassPath(String name) throws IOException {
+        List<URL> embeddedResources = ResourcesHelper.findEmbeddedResourceEntry(name) ? ResourcesHelper.nameToResourceListURLs(name) : List.of();
+        if (embeddedResources.isEmpty()) {
+            return hasClassPath() ? ucp.findResources(name) : Collections.emptyEnumeration();
+        }
+        List<URL> resources = new ArrayList<>(embeddedResources);
+        Enumeration<URL> classPathResources = hasClassPath() ? ucp.findResources(name) : Collections.emptyEnumeration();
+        while (classPathResources.hasMoreElements()) {
+            resources.add(classPathResources.nextElement());
+        }
+        return Collections.enumeration(resources);
     }
 
     static final class NewConcurrentHashMap implements FieldValueTransformer {

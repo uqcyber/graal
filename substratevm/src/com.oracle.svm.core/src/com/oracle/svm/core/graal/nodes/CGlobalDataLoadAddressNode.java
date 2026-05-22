@@ -27,7 +27,7 @@ package com.oracle.svm.core.graal.nodes;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.core.FrameAccess;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
 import com.oracle.svm.core.graal.code.SubstrateNodeLIRBuilder;
 
@@ -52,7 +52,7 @@ public final class CGlobalDataLoadAddressNode extends FloatingNode implements LI
     private final CGlobalDataInfo dataInfo;
 
     public CGlobalDataLoadAddressNode(CGlobalDataInfo dataInfo) {
-        super(TYPE, FrameAccess.getWordStamp());
+        super(TYPE, SubstrateTarget.getWordStamp());
         assert dataInfo != null;
         this.dataInfo = dataInfo;
     }

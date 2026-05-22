@@ -135,21 +135,13 @@ public final class JfrOldObjectRepository implements JfrRepository {
         int textLength = UninterruptibleUtils.String.utf8Length(text);
         int maxTextLength = OBJECT_DESCRIPTION_MAX_LENGTH - prefixLength;
         boolean tooLong = textLength > maxTextLength;
-        int maxEncodedTextLength = tooLong ? maxTextLength - ELLIPSIS_LENGTH : maxTextLength;
+        if (tooLong) {
+            maxTextLength -= ELLIPSIS_LENGTH;
+        }
 
         Pointer pos = UninterruptibleUtils.String.toUTF8(prefix, buffer, bufferEnd);
-        int encodedTextLength = 0;
-        for (int index = 0; index < text.length();) {
-            int codePoint = UninterruptibleUtils.String.codePointAt(text, index);
-            int byteLength = UninterruptibleUtils.String.utf8Length(codePoint);
-            int remaining = maxEncodedTextLength - encodedTextLength;
-            if (remaining < byteLength) {
-                break;
-            }
-            pos = UninterruptibleUtils.String.writeUTF8(pos, codePoint);
-            index += UninterruptibleUtils.String.charCount(codePoint);
-            encodedTextLength += byteLength;
-        }
+        int encodedTextLength = UninterruptibleUtils.String.toUTF8UntilLimit(text, pos, bufferEnd, maxTextLength);
+        pos = pos.add(encodedTextLength);
 
         if (tooLong) {
             pos = UninterruptibleUtils.String.toUTF8(ELLIPSIS, pos, bufferEnd);

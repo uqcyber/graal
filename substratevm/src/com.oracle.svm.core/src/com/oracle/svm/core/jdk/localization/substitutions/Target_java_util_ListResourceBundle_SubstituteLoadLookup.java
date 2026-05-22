@@ -25,8 +25,12 @@
 package com.oracle.svm.core.jdk.localization.substitutions;
 
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.KeepOriginal;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.jdk.localization.LocalizationSupport;
 import com.oracle.svm.core.jdk.localization.substitutions.modes.SubstituteLoadLookup;
 import org.graalvm.nativeimage.ImageSingletons;
@@ -39,9 +43,23 @@ final class Target_java_util_ListResourceBundle_SubstituteLoadLookup {
 
     @Alias private volatile Map<String, Object> lookup;
 
+    @Alias
+    @KeepOriginal
+    @TargetElement(name = "loadLookup")
+    private native void loadLookupOriginal();
+
     @Substitute
     private void loadLookup() {
         if (lookup != null) {
+            return;
+        }
+        if (RuntimeClassLoading.isSupported() && DynamicHub.fromClass(getClass()).isRuntimeLoaded()) {
+            /*
+             * Runtime-loaded bundle classes do not have build-time LocalizationSupport entries in
+             * the libjvm image. Let their original JDK implementation populate the lookup table
+             * from the runtime-loaded class contents instead.
+             */
+            loadLookupOriginal();
             return;
         }
         lookup = ImageSingletons.lookup(LocalizationSupport.class).getBundleContentOf(this);

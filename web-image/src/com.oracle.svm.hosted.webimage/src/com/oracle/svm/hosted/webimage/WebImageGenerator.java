@@ -240,7 +240,9 @@ public class WebImageGenerator extends NativeImageGenerator {
     @Override
     protected ImageHeapLayoutInfo layoutNativeImageHeap(NativeImageHeap heap) {
         ImageHeapObjectSorter objectSorter = ImageSingletons.lookup(ImageHeapObjectSorter.class);
-        return heap.getLayouter().layout(heap, WasmUtil.PAGE_SIZE, objectSorter, ImageHeapLayouter.ImageHeapLayouterCallback.NONE);
+        ImageHeapLayoutInfo heapLayout = heap.getLayouter().layout(heap, WasmUtil.PAGE_SIZE, objectSorter, ImageHeapLayouter.ImageHeapLayouterCallback.NONE);
+        objectSorter.afterHeapLayout();
+        return heapLayout;
     }
 
     @Override

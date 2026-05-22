@@ -59,12 +59,30 @@ public final class VTable {
      * returned table will never contain {@code null} elements.
      *
      * @param targetClass The type for which method tables should be created
+     *
+     * @param <C> The class providing access to the VM-side java {@link java.lang.Class}.
+     * @param <M> The class providing access to the VM-side java {@link java.lang.reflect.Method}.
+     * @param <F> The class providing access to the VM-side java {@link java.lang.reflect.Field}.
+     */
+    public static <C extends TypeAccess<C, M, F>, M extends MethodAccess<C, M, F>, F extends FieldAccess<C, M, F>> Tables<C, M, F> create(PartialType<C, M, F> targetClass)
+                    throws MethodTableException {
+        return create(targetClass, false, false, true, true);
+    }
+
+    /**
+     * Same as {@link #create(PartialType)}, but with additional flags.
+     *
+     * @param targetClass The type for which method tables should be created
      * @param verbose Whether all declared methods should be unconditionally added to the vtable.
      * @param allowInterfaceResolvingToPrivate Whether the runtime allows selection of interface
      *            invokes to select private methods. Requires implementing
-     *            {@link PartialType#lookupOverrideWithPrivate(Symbol, Symbol)}.
+     *            {@link PartialType#fallbackLookup(Symbol, Symbol, boolean)}.
      * @param addImplicitInterfaceMethods Whether the builder should add implicit interface methods
      *            to the VTable.
+     * @param finalMethodsInSuperTable Whether all final instance methods appear in the super's
+     *            tables. Requires implementing
+     *            {@link PartialType#fallbackLookup(Symbol, Symbol, boolean)} if set to
+     *            {@code false}.
      *
      * @param <C> The class providing access to the VM-side java {@link java.lang.Class}.
      * @param <M> The class providing access to the VM-side java {@link java.lang.reflect.Method}.
@@ -74,8 +92,9 @@ public final class VTable {
                     PartialType<C, M, F> targetClass,
                     boolean verbose,
                     boolean allowInterfaceResolvingToPrivate,
-                    boolean addImplicitInterfaceMethods) throws MethodTableException {
-        return new Builder<>(targetClass, verbose, allowInterfaceResolvingToPrivate, addImplicitInterfaceMethods).build();
+                    boolean addImplicitInterfaceMethods,
+                    boolean finalMethodsInSuperTable) throws MethodTableException {
+        return new Builder<>(targetClass, verbose, allowInterfaceResolvingToPrivate, addImplicitInterfaceMethods, finalMethodsInSuperTable).build();
     }
 
     /**
@@ -89,6 +108,7 @@ public final class VTable {
         private final boolean verbose;
         private final boolean allowInterfaceResolvingToPrivate;
         private final boolean addMirandas;
+        private final boolean finalMethodsInSuperTable;
 
         private final PartialType<C, M, F> targetClass;
         private final EconomicMap<MethodKey, Locations<C, M, F>> locations = EconomicMap.create();
@@ -97,11 +117,12 @@ public final class VTable {
         private final EconomicMap<C, List<PartialMethod<C, M, F>>> itables = EconomicMap.create(Equivalence.IDENTITY);
         private final List<PartialMethod<C, M, F>> mirandas = new ArrayList<>();
 
-        Builder(PartialType<C, M, F> targetClass, boolean verbose, boolean allowInterfaceResolvingToPrivate, boolean addMirandas) {
+        Builder(PartialType<C, M, F> targetClass, boolean verbose, boolean allowInterfaceResolvingToPrivate, boolean addMirandas, boolean finalMethodsInSuperTable) {
             this.targetClass = targetClass;
             this.verbose = verbose;
             this.allowInterfaceResolvingToPrivate = allowInterfaceResolvingToPrivate;
             this.addMirandas = addMirandas;
+            this.finalMethodsInSuperTable = finalMethodsInSuperTable;
         }
 
         Tables<C, M, F> build() throws MethodTableException {
@@ -122,6 +143,10 @@ public final class VTable {
             }
 
             return new Tables<>(vtable, itables, mirandas);
+        }
+
+        private boolean needsFallback(boolean inVTable) {
+            return !inVTable && (allowInterfaceResolvingToPrivate || !finalMethodsInSuperTable);
         }
 
         private void buildLocations() {
@@ -328,8 +353,7 @@ public final class VTable {
             // Whether the declaration should be added to the vtable.
             boolean shouldPopulate = true;
             // Cached result of itable resolution.
-            boolean resolved = false;
-            private PartialMethod<C, M, F> resolvedInterfaceMethod;
+            private PartialMethod<C, M, F> resolved;
 
             void register(LocationKind kind, M method, int index) {
                 switch (kind) {
@@ -356,12 +380,14 @@ public final class VTable {
             }
 
             PartialMethod<C, M, F> resolve(MethodKey k, Builder<C, M, F> b, boolean inVTable) {
-                if (resolved) {
-                    return resolvedInterfaceMethod;
+                if (resolved != null && !b.needsFallback(inVTable)) {
+                    return resolved;
                 }
-                resolvedInterfaceMethod = resolveImpl(k, b, inVTable);
-                resolved = true;
-                return resolvedInterfaceMethod;
+                PartialMethod<C, M, F> resolution = resolveImpl(k, b, inVTable);
+                if (!b.needsFallback(inVTable)) {
+                    resolved = resolution;
+                }
+                return resolution;
             }
 
             PartialMethod<C, M, F> markEquivalentEntry(PartialMethod<C, M, F> declaredMethod, int idx) {
@@ -387,13 +413,24 @@ public final class VTable {
                 if (!inVTable && b.allowInterfaceResolvingToPrivate) {
                     // Unfortunately, our representation does not take into account private methods.
                     // Ask the runtime for help.
-                    result = b.targetClass.lookupOverrideWithPrivate(k.name(), k.signature());
+                    result = b.targetClass.fallbackLookup(k.name(), k.signature(), true);
                 } else {
                     // Find the most specific virtual entry.
                     result = resolveConcrete();
                 }
                 if (result != null) {
                     return result;
+                }
+                if (!inVTable && !b.finalMethodsInSuperTable) {
+                    /*
+                     * We may have missed a final method from the super hierarchy. This is done
+                     * after resolveConcrete to not have to do a full lokup if it is in the tables
+                     * already.
+                     */
+                    result = b.targetClass.fallbackLookup(k.name(), k.signature(), false);
+                    if (result != null) {
+                        return result;
+                    }
                 }
                 /*
                  * No method in classes. Lookup in interfaces. This will be a miranda method. This

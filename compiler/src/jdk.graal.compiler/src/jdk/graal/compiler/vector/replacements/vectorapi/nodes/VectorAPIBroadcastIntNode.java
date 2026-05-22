@@ -54,6 +54,7 @@ import jdk.graal.compiler.nodes.spi.Canonicalizable;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.vector.architecture.VectorArchitecture;
+import jdk.graal.compiler.vector.nodes.simd.SimdBroadcastNode;
 import jdk.graal.compiler.vector.nodes.simd.SimdConcatNode;
 import jdk.graal.compiler.vector.nodes.simd.SimdConstant;
 import jdk.graal.compiler.vector.nodes.simd.SimdCutNode;
@@ -204,6 +205,9 @@ public class VectorAPIBroadcastIntNode extends VectorAPIMacroNode implements Can
         if (supportedDirectly) {
             return true;
         }
+        if (canExpandLongArithmeticShiftWithScalarCount(vectorArch, elementStamp, vectorLength)) {
+            return true;
+        }
         /*
          * Special case for byte shifts on backends without direct full-width byte shift support:
          * first try widen->shift->narrow for the full vector, then fall back to doing the same
@@ -236,6 +240,8 @@ public class VectorAPIBroadcastIntNode extends VectorAPIMacroNode implements Can
         boolean supportedDirectly = vectorArch.getSupportedVectorShiftWithScalarCount(elementStamp, vectorLength, op) == vectorLength;
         if (supportedDirectly) {
             return ShiftNode.shiftOp(value, shiftAmount, NodeView.DEFAULT, op);
+        } else if (canExpandLongArithmeticShiftWithScalarCount(vectorArch, elementStamp, vectorLength)) {
+            return expandLongArithmeticShiftWithScalarCount(value, shiftAmount);
         }
         GraalError.guarantee(PrimitiveStamp.getBits(elementStamp) == Byte.SIZE, "unexpected stamp: %s", elementStamp);
         IntegerStamp byteStamp = (IntegerStamp) elementStamp;
@@ -284,6 +290,47 @@ public class VectorAPIBroadcastIntNode extends VectorAPIMacroNode implements Can
         ValueNode lowShifted = emitByteShiftViaWidening(lowBytes, shiftAmount, byteStamp);
         ValueNode highShifted = emitByteShiftViaWidening(highBytes, shiftAmount, byteStamp);
         return new SimdConcatNode(lowShifted, highShifted);
+    }
+
+    private boolean canExpandLongArithmeticShiftWithScalarCount(VectorArchitecture vectorArch, Stamp elementStamp, int vectorLength) {
+        if (!isLongArithmeticShiftOp(elementStamp)) {
+            return false;
+        }
+        return vectorArch.getSupportedVectorArithmeticLength(elementStamp, vectorLength, IntegerStamp.OPS.getAnd()) == vectorLength &&
+                        vectorArch.getSupportedVectorShiftWithScalarCount(elementStamp, vectorLength, IntegerStamp.OPS.getShl()) == vectorLength &&
+                        vectorArch.getSupportedVectorShiftWithScalarCount(elementStamp, vectorLength, IntegerStamp.OPS.getUShr()) == vectorLength &&
+                        vectorArch.getSupportedVectorArithmeticLength(elementStamp, vectorLength, IntegerStamp.OPS.getSub()) == vectorLength &&
+                        vectorArch.getSupportedVectorArithmeticLength(elementStamp, vectorLength, IntegerStamp.OPS.getOr()) == vectorLength;
+    }
+
+    private boolean isLongArithmeticShiftOp(Stamp elementStamp) {
+        return elementStamp instanceof IntegerStamp && PrimitiveStamp.getBits(elementStamp) == Long.SIZE && IntegerStamp.OPS.getShr().equals(op);
+    }
+
+    /**
+     * Expands long scalar-count arithmetic right shift via logical shift plus synthesized sign
+     * fill.
+     *
+     * The scalar count is masked to the lane width, then sign-fill is reconstructed and blended in
+     * with a non-zero-count mask so that effective count zero preserves the input.
+     */
+    private ValueNode expandLongArithmeticShiftWithScalarCount(ValueNode valueVector, ValueNode scalarCount) {
+        int vectorLength = vectorStamp.getVectorLength();
+        ValueNode maskedCount = BinaryArithmeticNode.and(scalarCount, ConstantNode.forInt(Long.SIZE - 1));
+        ValueNode signBitShift = ConstantNode.forInt(Long.SIZE - 1);
+        ValueNode logicalShift = ShiftNode.shiftOp(valueVector, maskedCount, NodeView.DEFAULT, IntegerStamp.OPS.getUShr());
+        ValueNode signBits = ShiftNode.shiftOp(valueVector, signBitShift, NodeView.DEFAULT, IntegerStamp.OPS.getUShr());
+        ValueNode signMask = BinaryArithmeticNode.sub(graph().addOrUniqueWithInputs(new SimdBroadcastNode(ConstantNode.forLong(0), vectorLength)), signBits, NodeView.DEFAULT);
+        ValueNode inverseCount = BinaryArithmeticNode.and(BinaryArithmeticNode.sub(ConstantNode.forInt(Long.SIZE), maskedCount, NodeView.DEFAULT), ConstantNode.forInt(Long.SIZE - 1));
+        ValueNode maskedCountAsLong = SignExtendNode.create(maskedCount, Integer.SIZE, Long.SIZE, NodeView.DEFAULT);
+        ValueNode nonZeroBits = ShiftNode.shiftOp(
+                        BinaryArithmeticNode.or(maskedCountAsLong, BinaryArithmeticNode.sub(ConstantNode.forLong(0), maskedCountAsLong, NodeView.DEFAULT)),
+                        signBitShift,
+                        NodeView.DEFAULT,
+                        IntegerStamp.OPS.getUShr());
+        ValueNode nonZeroMaskVector = graph().addOrUniqueWithInputs(new SimdBroadcastNode(BinaryArithmeticNode.sub(ConstantNode.forLong(0), nonZeroBits, NodeView.DEFAULT), vectorLength));
+        ValueNode highFill = BinaryArithmeticNode.and(ShiftNode.shiftOp(signMask, inverseCount, NodeView.DEFAULT, IntegerStamp.OPS.getShl()), nonZeroMaskVector);
+        return BinaryArithmeticNode.or(logicalShift, highFill);
     }
 
     private static boolean canExpandRotateWithScalarCount(VectorArchitecture vectorArch, Stamp elementStamp, int vectorLength) {

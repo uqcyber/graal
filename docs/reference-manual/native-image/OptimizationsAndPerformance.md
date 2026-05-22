@@ -66,6 +66,26 @@ This option instructs the compiler to use all instructions that it finds availab
 If the generated binary, on the other hand, is distributed to users with many different, and potentially very old machines, use `-march=compatibility`.
 This reduces the set of instructions used by the compiler to a minimum and thus improves the compatibility of the generated binary.
 
+### Position-Independent Code
+
+Native Image generally builds executables as position-independent executables (PIE).
+On most platforms, this is already the default for the system toolchain that Native Image uses.
+On Linux systems, Native Image also requests PIE explicitly.
+Shared library images (`-shared`) are always position-independent.
+The operating system can use address space layout randomization (ASLR) on position-independent code to make its location in memory less predictable, which improves security.
+
+Typically, position-independent code introduces many additional _relocations_ for pointers that must be adjusted at runtime based on where the code was loaded.
+The dynamic linker needs to process these relocations, which increases startup time, memory usage, and file size.
+
+Native Image substantially reduces this cost by using _relative code pointers_ by default.
+Instead of storing absolute code addresses that need adjustment, relative code pointers store offsets from the _code base_, the start of the code area.
+At runtime, Native Image keeps the code base address in a dedicated register and computes absolute code addresses by adding that base address to the stored offset.
+
+The overhead of relative code pointers is typically negligible.
+However, code with unusually many indirect calls or code that is especially sensitive to register pressure might see small slowdowns.
+To turn off relative code pointers, use `-H:-RelativeCodePointers`.
+To explicitly disable PIE on Linux systems (even if the system toolchain would otherwise produce PIE), use `-H:NativeLinkerOption=-no-pie`.
+
 ### Additional Features
 
 Native Image provides additional features to further optimize a generated binary:

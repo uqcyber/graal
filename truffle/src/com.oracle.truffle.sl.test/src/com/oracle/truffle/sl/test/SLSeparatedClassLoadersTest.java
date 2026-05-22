@@ -45,6 +45,9 @@ import static org.junit.Assert.assertNotNull;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.security.ProtectionDomain;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 import org.graalvm.polyglot.Engine;
@@ -82,8 +85,13 @@ public class SLSeparatedClassLoadersTest {
         URL nativeURL = Class.forName("org.graalvm.nativeimage.ImageInfo").getProtectionDomain().getCodeSource().getLocation();
         Assume.assumeNotNull(nativeURL);
 
-        URL nativeBridgeURL = Class.forName("org.graalvm.nativebridge.ForeignObject").getProtectionDomain().getCodeSource().getLocation();
-        Assume.assumeNotNull(nativeBridgeURL);
+        // Optional NativeBridge distribution
+        URL nativeBridgeURL;
+        try {
+            nativeBridgeURL = Class.forName("org.graalvm.nativebridge.ForeignObject").getProtectionDomain().getCodeSource().getLocation();
+        } catch (ClassNotFoundException e) {
+            nativeBridgeURL = null;
+        }
 
         URL truffleURL = Truffle.class.getProtectionDomain().getCodeSource().getLocation();
         Assume.assumeNotNull(truffleURL);
@@ -92,8 +100,12 @@ public class SLSeparatedClassLoadersTest {
         Assume.assumeNotNull(slURL);
 
         ClassLoader parent = Engine.class.getClassLoader().getParent();
-
-        URLClassLoader sdkLoader = new URLClassLoader(new URL[]{collectionsURL, wordURL, nativeURL, nativeBridgeURL, polyglotURL}, parent);
+        List<URL> classpath = new ArrayList<>();
+        Collections.addAll(classpath, collectionsURL, wordURL, nativeURL, polyglotURL);
+        if (nativeBridgeURL != null) {
+            classpath.add(nativeBridgeURL);
+        }
+        URLClassLoader sdkLoader = new URLClassLoader(classpath.toArray(new URL[0]), parent);
         boolean sdkLoaderLoadsTruffleLanguage;
         try {
             Class.forName("com.oracle.truffle.api.TruffleLanguage", false, sdkLoader);

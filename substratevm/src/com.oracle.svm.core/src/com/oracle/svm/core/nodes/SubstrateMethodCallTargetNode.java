@@ -24,14 +24,27 @@
  */
 package com.oracle.svm.core.nodes;
 
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+import org.graalvm.word.WordBase;
+
+import com.oracle.svm.core.SubstrateTarget;
+import com.oracle.svm.core.meta.SharedType;
+import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.OriginalClassProvider;
+
+import jdk.graal.compiler.core.common.NativeImageSupport;
 import jdk.graal.compiler.core.common.type.StampPair;
 import jdk.graal.compiler.graph.NodeClass;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.java.MethodCallTargetNode;
+import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaMethodProfile;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.JavaTypeProfile;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
  * Extension of {@link MethodCallTargetNode} that adds a {@link JavaMethodProfile} when available.
@@ -65,6 +78,26 @@ public final class SubstrateMethodCallTargetNode extends MethodCallTargetNode {
 
     public SubstrateMethodCallTargetNode(InvokeKind invokeKind, ResolvedJavaMethod targetMethod, ValueNode[] arguments, StampPair returnStamp, JavaTypeProfile typeProfile) {
         super(TYPE, invokeKind, targetMethod, arguments, returnStamp, typeProfile);
+    }
+
+    @Override
+    protected JavaKind expectedStackKind(JavaType expectedType) {
+        if (expectedType instanceof SharedType sharedType && sharedType.isWordType()) {
+            return sharedType.getStorageKind().getStackKind();
+        }
+        if (!NativeImageSupport.inRuntimeCode() && isHostedWordType(expectedType)) {
+            return SubstrateTarget.getWordKind().getStackKind();
+        }
+        return super.expectedStackKind(expectedType);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private static boolean isHostedWordType(JavaType expectedType) {
+        if (expectedType instanceof OriginalClassProvider) {
+            ResolvedJavaType wordBaseType = GuestAccess.get().lookupType(WordBase.class);
+            return wordBaseType.isAssignableFrom(OriginalClassProvider.getOriginalType(expectedType));
+        }
+        return false;
     }
 
     public void setProfiles(JavaTypeProfile dynamicTypeProfile, JavaTypeProfile staticTypeProfile, JavaMethodProfile dynamicMethodProfile, JavaMethodProfile staticMethodProfile) {

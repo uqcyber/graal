@@ -26,7 +26,7 @@ fi
 declare -A files_by_suite=()
 for file in "${existing_files[@]}"; do
     if suite="$(file_suite "$file")"; then
-        files_by_suite["$suite"]+="$(realpath "$file")"$'\n'
+        files_by_suite["$suite"]+="${file#"$suite"/}"$'\n'
     fi
 done
 

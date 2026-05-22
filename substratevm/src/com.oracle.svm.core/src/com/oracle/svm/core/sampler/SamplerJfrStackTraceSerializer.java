@@ -39,6 +39,7 @@ import com.oracle.svm.core.code.CodeInfoDecoder;
 import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.UntetheredCodeInfo;
+import com.oracle.svm.core.code.UntetheredCodeInfoAccess;
 import com.oracle.svm.core.jfr.JfrBuffer;
 import com.oracle.svm.core.jfr.JfrFrameType;
 import com.oracle.svm.core.jfr.JfrNativeEventWriter;
@@ -159,10 +160,8 @@ public final class SamplerJfrStackTraceSerializer implements SamplerStackTraceSe
     private static void visitFrame(JfrNativeEventWriterData data, long address) {
         CodePointer ip = Word.pointer(address);
         UntetheredCodeInfo untetheredInfo = CodeInfoTable.lookupCodeInfo(ip);
-        if (untetheredInfo.isNull()) {
-            /* Unknown frame. Must not happen for AOT-compiled code. */
-            VMError.shouldNotReachHere("Stack walk must walk only frames of known code.");
-        }
+        VMError.guarantee(untetheredInfo.isNonNull(), "Stack walk must walk only frames of known code.");
+        assert UntetheredCodeInfoAccess.isAOTImageCode(untetheredInfo) : "JFR sample stack traces must contain only AOT image code.";
 
         Object tether = CodeInfoAccess.acquireTether(untetheredInfo);
         try {

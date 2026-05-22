@@ -24,8 +24,8 @@
  */
 package com.oracle.svm.core.graal.nodes;
 
-import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.ReservedRegisters;
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.snippets.CEntryPointSnippets;
 
 import jdk.graal.compiler.core.common.LIRKind;
@@ -61,7 +61,7 @@ public final class ReadReservedRegisterFloatingNode extends FloatingNode impleme
     private final Register register;
 
     public ReadReservedRegisterFloatingNode(Register register) {
-        super(TYPE, FrameAccess.getWordStamp());
+        super(TYPE, SubstrateTarget.getWordStamp());
         this.register = register;
     }
 

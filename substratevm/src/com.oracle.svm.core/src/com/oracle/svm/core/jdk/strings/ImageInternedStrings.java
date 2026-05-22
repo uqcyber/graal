@@ -25,19 +25,21 @@
 package com.oracle.svm.core.jdk.strings;
 
 import com.oracle.svm.core.BuildPhaseProvider.AfterHeapLayout;
-import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
+import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.UnknownObjectField;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.MultiLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import java.util.Arrays;
 import java.util.function.Consumer;
 
-@AutomaticallyRegisteredImageSingleton
 @SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = MultiLayer.class)
 public class ImageInternedStrings {
 
@@ -84,5 +86,21 @@ public class ImageInternedStrings {
             return internedStringTable[imageIdx];
         }
         return null;
+    }
+}
+
+/**
+ * Lazily installs the default {@link ImageInternedStrings} singleton unless a replacement is
+ * already registered.
+ */
+@AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuiltinTraits.BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
+class ImageInternedStringsFeature implements InternalFeature {
+    @Override
+    public void duringSetup(DuringSetupAccess access) {
+        if (!ImageSingletons.contains(ImageInternedStrings.class)) {
+            ImageInternedStrings singleton = new ImageInternedStrings();
+            ImageSingletons.add(ImageInternedStrings.class, singleton);
+        }
     }
 }

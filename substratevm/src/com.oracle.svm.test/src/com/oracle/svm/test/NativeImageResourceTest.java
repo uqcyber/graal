@@ -44,6 +44,7 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -103,6 +104,19 @@ public class NativeImageResourceTest {
         String resourceNameWTrailingSlash = RESOURCE_FILE_1 + "/";
         URL url = resourceNameToURL(resourceNameWTrailingSlash, false);
         Assert.assertNull("Resource " + resourceNameWTrailingSlash + " is found!", url);
+    }
+
+    @Test
+    public void runtimeClassPathResource() throws IOException {
+        if (!Boolean.getBoolean("svm.test.expectRuntimeClassPathResource")) {
+            return;
+        }
+
+        String resourceName = "runtime-class-path-resource.txt";
+        try (InputStream in = ClassLoader.getSystemResourceAsStream(resourceName)) {
+            Assert.assertNotNull("Runtime class path resource " + resourceName + " is not found!", in);
+            Assert.assertEquals("runtime class path resource", new String(in.readAllBytes(), StandardCharsets.UTF_8).trim());
+        }
     }
 
     /**

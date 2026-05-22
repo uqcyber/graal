@@ -32,24 +32,57 @@ import com.oracle.svm.interpreter.InterpreterFrame;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.shared.Uninterruptible;
 
+import jdk.graal.compiler.nodes.FrameState.StackState;
+import jdk.vm.ci.meta.JavaKind;
+
+/**
+ * Interpreter-side view of one virtual frame reconstructed from a Ristretto deopt infopoint.
+ *
+ * <p>
+ * {@code currentBci} is the bytecode index reported by the compiled frame state, while
+ * {@code targetBci} is the actual resume point once compiled stack semantics have been translated
+ * back into interpreter semantics. {@code stackState} preserves the compiler frame-state flavor
+ * (`BeforePop`, `AfterPop`, or `Rethrow`) so replay can distinguish normal invoke resumption from
+ * exception propagation. {@code compiledReturnKind} is only meaningful for the physical top frame,
+ * where a completed invoke result may still be sitting in machine return registers when
+ * deoptimization begins.
+ */
 public final class RistrettoVirtualInterpreterFrame extends VirtualFrame {
+    /** Materialized interpreter frame that resumes execution for this virtual frame. */
     private final InterpreterFrame frame;
+    /** Interpreter method whose locals, stack, and bytecodes this frame represents. */
     private final InterpreterResolvedJavaMethod method;
+    /** BCI reported by the compiled frame state that triggered deoptimization. */
     private final int currentBci;
+    /**
+     * Resume BCI after translating compiler FrameState stack semantics back to interpreter form.
+     */
     private final int targetBci;
+    /** Compiler stack-state flavor that explains how to interpret {@link #currentBci}. */
+    private final StackState stackState;
+    /** Number of live operand-stack entries materialized into {@link #frame}. */
     private final int numStack;
+    /**
+     * Pending machine-level invoke result kind for the physical top frame, or
+     * {@link JavaKind#Illegal}.
+     */
+    private final JavaKind compiledReturnKind;
+    /** Next inner virtual frame, or {@code null} when this frame is the innermost callee. */
     private final RistrettoVirtualInterpreterFrame callee;
+    /** Next outer virtual frame, linked after reconstruction. */
     private RistrettoVirtualInterpreterFrame caller;
 
     RistrettoVirtualInterpreterFrame(FrameInfoQueryResult frameInfo, InterpreterFrame frame, InterpreterResolvedJavaMethod method,
-                    int currentBci, int targetBci, int numStack, RistrettoVirtualInterpreterFrame callee) {
+                    int currentBci, int targetBci, StackState stackState, int numStack, JavaKind compiledReturnKind, RistrettoVirtualInterpreterFrame callee) {
         super(frameInfo);
         this.frame = frame;
         this.method = method;
         this.currentBci = currentBci;
         this.targetBci = targetBci;
+        this.stackState = stackState;
         this.callee = callee;
         this.numStack = numStack;
+        this.compiledReturnKind = compiledReturnKind;
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
@@ -78,6 +111,18 @@ public final class RistrettoVirtualInterpreterFrame extends VirtualFrame {
         return targetBci;
     }
 
+    public StackState getStackState() {
+        return stackState;
+    }
+
+    public boolean isAfterPop() {
+        return stackState == StackState.AfterPop;
+    }
+
+    public boolean isRethrowException() {
+        return stackState == StackState.Rethrow;
+    }
+
     public void setCaller(RistrettoVirtualInterpreterFrame caller) {
         assert this.caller == null;
         this.caller = caller;
@@ -97,5 +142,19 @@ public final class RistrettoVirtualInterpreterFrame extends VirtualFrame {
 
     public int getNumStack() {
         return numStack;
+    }
+
+    /**
+     * Returns whether this frame still expects a top-level compiled call result to be injected into
+     * the reconstructed interpreter operand stack.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public boolean hasPendingCallResult() {
+        return compiledReturnKind != JavaKind.Illegal && compiledReturnKind != JavaKind.Void;
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public JavaKind getCompiledReturnKind() {
+        return compiledReturnKind;
     }
 }

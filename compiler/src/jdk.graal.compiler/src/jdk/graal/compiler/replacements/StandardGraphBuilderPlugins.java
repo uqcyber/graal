@@ -201,7 +201,9 @@ import jdk.graal.compiler.replacements.nodes.ArrayEqualsNode;
 import jdk.graal.compiler.replacements.nodes.Base64DecodeBlockNode;
 import jdk.graal.compiler.replacements.nodes.Base64EncodeBlockNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMulAddNode;
+import jdk.graal.compiler.replacements.nodes.BigIntegerLeftShiftWorkerNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMultiplyToLenNode;
+import jdk.graal.compiler.replacements.nodes.BigIntegerRightShiftWorkerNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerSquareToLenNode;
 import jdk.graal.compiler.replacements.nodes.BitCountNode;
 import jdk.graal.compiler.replacements.nodes.CipherBlockChainingAESNode;
@@ -2644,6 +2646,36 @@ public class StandardGraphBuilderPlugins {
                     b.setStateAfter(squareToLen);
                     return true;
                 }
+            }
+        });
+        r.register(new ConditionalInvocationPlugin("shiftLeftImplWorker", int[].class, int[].class, int.class, int.class, int.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver,
+                            ValueNode newArr, ValueNode oldArr, ValueNode newIdx, ValueNode shiftCount, ValueNode numIter) {
+                try (InvocationPluginHelper helper = new InvocationPluginHelper(b, targetMethod)) {
+                    b.add(new BigIntegerLeftShiftWorkerNode(helper.arrayStart(newArr, JavaKind.Int), helper.arrayStart(oldArr, JavaKind.Int), newIdx, shiftCount, numIter));
+                    return true;
+                }
+            }
+
+            @Override
+            public boolean isApplicable(Architecture arch) {
+                return BigIntegerLeftShiftWorkerNode.isSupported(arch);
+            }
+        });
+        r.register(new ConditionalInvocationPlugin("shiftRightImplWorker", int[].class, int[].class, int.class, int.class, int.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver,
+                            ValueNode newArr, ValueNode oldArr, ValueNode newIdx, ValueNode shiftCount, ValueNode numIter) {
+                try (InvocationPluginHelper helper = new InvocationPluginHelper(b, targetMethod)) {
+                    b.add(new BigIntegerRightShiftWorkerNode(helper.arrayStart(newArr, JavaKind.Int), helper.arrayStart(oldArr, JavaKind.Int), newIdx, shiftCount, numIter));
+                    return true;
+                }
+            }
+
+            @Override
+            public boolean isApplicable(Architecture arch) {
+                return BigIntegerRightShiftWorkerNode.isSupported(arch);
             }
         });
     }

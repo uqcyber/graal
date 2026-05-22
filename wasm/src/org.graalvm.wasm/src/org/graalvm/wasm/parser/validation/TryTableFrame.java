@@ -47,21 +47,19 @@ import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen;
  * Representation of a wasm try table during module validation.
  */
 public class TryTableFrame extends BlockFrame {
-    private final ExceptionTable table;
+
+    private final int startOffset;
+    private final ExceptionHandler[] handlers;
 
     TryTableFrame(int[] paramTypes, int[] resultTypes, int initialStackSize, ControlFrame parentFrame, int startOffset, ExceptionHandler[] handlers) {
         super(paramTypes, resultTypes, initialStackSize, parentFrame);
-        this.table = new ExceptionTable(startOffset, handlers);
-    }
-
-    ExceptionTable table() {
-        return table;
+        this.startOffset = startOffset;
+        this.handlers = handlers;
     }
 
     @Override
-    void exit(RuntimeBytecodeGen bytecode) {
-        super.exit(bytecode);
-
-        table.setTo(bytecode.location());
+    void exit(ParserState state, RuntimeBytecodeGen bytecode) {
+        super.exit(state, bytecode);
+        state.registerExceptionTable(new ExceptionTable(startOffset, bytecode.location(), handlers));
     }
 }

@@ -185,7 +185,7 @@ public class SimpleInterpreterTest extends GraalCompilerTest {
     }
 
     @SuppressWarnings("unused")
-    @BytecodeInterpreterHandler(DIV)
+    // GR-72604: HotSpot stubs currently do not allow deoptimization or traps.
     public long divHandler(long pc, State s, short[] bytecode, Frame f) {
         int b = getIntRawOffseted(f.stack, s.sp, -intArrayIndexScale);
         int a = getIntRawOffseted(f.stack, s.sp, -(2L * intArrayIndexScale));

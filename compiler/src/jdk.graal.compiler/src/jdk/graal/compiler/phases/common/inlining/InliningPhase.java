@@ -105,11 +105,31 @@ public class InliningPhase extends AbstractInliningPhase {
      */
     @Override
     protected void runInlining(final StructuredGraph graph, final HighTierContext context) {
-        final InliningData data = new InliningData(graph, context, maxMethodPerInlining, canonicalizer, inliningPolicy, rootInvokes);
+        boolean completed = runInliningToCompletion(graph, context, rootInvokes, Options.MethodInlineBailoutLimit.getValue(graph.getOptions()));
+        if (!completed) {
+            /* We still want to inline force-inlined invokes even if the limit was reached. */
+            LinkedList<Invoke> forceInlinedInvokes = collectForceInlinedInvokes(graph, context);
+            if (!forceInlinedInvokes.isEmpty()) {
+                runInliningToCompletion(graph, context, forceInlinedInvokes, 0);
+            }
+        }
+    }
+
+    /**
+     * Runs inlining until all candidate graphs are processed or until the exploration bailout limit
+     * is reached. A limit of 0 disables this bailout.
+     *
+     * @param invokes optional subset of root-graph invokes to process; {@code null} means all
+     *            invokes
+     * @param limit maximum number of inlining exploration steps before bailing out
+     * @return {@code true} if inlining completed normally, {@code false} if the bailout limit was
+     *         reached
+     */
+    private boolean runInliningToCompletion(final StructuredGraph graph, final HighTierContext context, LinkedList<Invoke> invokes, int limit) {
+        final InliningData data = new InliningData(graph, context, maxMethodPerInlining, canonicalizer, inliningPolicy, invokes);
 
         int count = 0;
         assert data.repOK();
-        int limit = Options.MethodInlineBailoutLimit.getValue(graph.getOptions());
         while (data.hasUnprocessedGraphs()) {
             boolean wasInlined = data.moveForward();
             assert data.repOK();
@@ -117,13 +137,24 @@ public class InliningPhase extends AbstractInliningPhase {
             if (!wasInlined) {
                 if (limit > 0 && count == limit) {
                     // Limit the amount of exploration which is done
-                    break;
+                    return false;
                 }
             }
         }
 
-        assert data.inliningDepth() == 0 || count == limit : data.inliningDepth() + " " + count + " " + limit;
-        assert data.graphCount() == 0 || count == limit : data.graphCount() + " " + count + " " + limit;
+        assert data.inliningDepth() == 0 : data.inliningDepth() + " " + count + " " + limit;
+        assert data.graphCount() == 0 : data.graphCount() + " " + count + " " + limit;
+        return true;
+    }
+
+    private LinkedList<Invoke> collectForceInlinedInvokes(StructuredGraph graph, HighTierContext context) {
+        LinkedList<Invoke> forceInlinedInvokes = new LinkedList<>();
+        for (Invoke invoke : graph.getInvokes()) {
+            if (mustBeInlined(invoke, context)) {
+                forceInlinedInvokes.add(invoke);
+            }
+        }
+        return forceInlinedInvokes;
     }
 
 }

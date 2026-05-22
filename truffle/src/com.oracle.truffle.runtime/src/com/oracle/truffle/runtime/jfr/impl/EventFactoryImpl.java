@@ -46,6 +46,9 @@ import java.util.Map;
 import java.util.Objects;
 
 import com.oracle.truffle.runtime.jfr.CompilationEvent;
+import com.oracle.truffle.runtime.jfr.CompilationDequeuedEvent;
+import com.oracle.truffle.runtime.jfr.CompilationQueuedEvent;
+import com.oracle.truffle.runtime.jfr.CompilationStartedEvent;
 import com.oracle.truffle.runtime.jfr.CompilationStatisticsEvent;
 import com.oracle.truffle.runtime.jfr.DeoptimizationEvent;
 import com.oracle.truffle.runtime.jfr.Event;
@@ -62,6 +65,9 @@ final class EventFactoryImpl implements EventFactory {
     private static final Map<Class<? extends Event>, Class<? extends jdk.jfr.Event>> spiToImpl = new HashMap<>();
     static {
         register(CompilationEventImpl.class);
+        register(CompilationQueuedEventImpl.class);
+        register(CompilationDequeuedEventImpl.class);
+        register(CompilationStartedEventImpl.class);
         register(DeoptimizationEventImpl.class);
         register(InvalidationEventImpl.class);
         register(CompilationStatisticsEventImpl.class);
@@ -94,6 +100,21 @@ final class EventFactoryImpl implements EventFactory {
     @Override
     public CompilationEvent createCompilationEvent() {
         return new CompilationEventImpl();
+    }
+
+    @Override
+    public CompilationQueuedEvent createCompilationQueuedEvent() {
+        return new CompilationQueuedEventImpl();
+    }
+
+    @Override
+    public CompilationDequeuedEvent createCompilationDequeuedEvent() {
+        return new CompilationDequeuedEventImpl();
+    }
+
+    @Override
+    public CompilationStartedEvent createCompilationStartedEvent() {
+        return new CompilationStartedEventImpl();
     }
 
     @Override

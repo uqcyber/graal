@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -170,6 +170,58 @@ public class TryFinallyTest extends AbstractBasicInterpreterTest {
         });
 
         testOrdering(false, root, 2L, 1L);
+    }
+
+    @Test
+    public void testTryFinallyReturnAtEnd() {
+        // try {
+        //   arg0.append(2);
+        //   return 0;
+        // } finally {
+        //   arg0.append(1);
+        // }
+
+        RootCallTarget root = parse("finallyTryReturnAtEnd", b -> {
+            b.beginRoot();
+            b.beginTryFinally(() -> emitAppend(b, 1));
+                b.beginBlock();
+                    emitAppend(b, 2);
+                    emitReturn(b, 0);
+                b.endBlock();
+            b.endTryFinally();
+            b.endRoot();
+        });
+
+        testOrdering(false, root, 2L, 1L);
+    }
+
+    @Test
+    public void testTryFinallyReturnAtEndWithConditionalFinally() {
+        // try {
+        //   arg0.append(1);
+        //   return 0;
+        // } finally {
+        //   if (arg1) arg0.append(2);
+        // }
+
+        RootCallTarget root = parse("finallyTryReturnAtEndWithConditionalFinally", b -> {
+            b.beginRoot();
+            b.beginTryFinally(() -> {
+                b.beginIfThen();
+                    b.emitLoadArgument(1);
+                    emitAppend(b, 2);
+                b.endIfThen();
+            });
+                b.beginBlock();
+                    emitAppend(b, 1);
+                    emitReturn(b, 0);
+                b.endBlock();
+            b.endTryFinally();
+
+            b.endRoot();
+        });
+
+        testOrderingWithArguments(false, root, new Object[]{false}, 1L);
     }
 
     @Test

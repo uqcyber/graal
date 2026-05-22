@@ -302,14 +302,12 @@ public class CremaSupportImpl implements CremaSupport {
          */
         boolean isInterface = Modifier.isInterface(modifiers);
         boolean isRecord = Modifier.isFinal(modifiers) && superClass == Record.class && parsed.getAttribute(RecordAttribute.NAME) != null;
-        // GR-62320 This should be set based on build-time and run-time arguments.
-        boolean assertionsEnabled = true;
         boolean isSealed = isSealed(parsed);
         boolean declaresDefaultMethods = isInterface && declaresDefaultMethods(parsed);
         boolean hasDefaultMethods = declaresDefaultMethods || hasInheritedDefaultMethods(superClass, superInterfaces);
         boolean isLambdaFormHidden = false;
         boolean isProxyClass = false;
-        short hubFlags = DynamicHub.makeFlags(false, isInterface, info.isHidden(), isRecord, assertionsEnabled, hasDefaultMethods, declaresDefaultMethods, isSealed, false, isLambdaFormHidden, false,
+        short hubFlags = DynamicHub.makeFlags(false, isInterface, info.isHidden(), isRecord, hasDefaultMethods, declaresDefaultMethods, isSealed, false, isLambdaFormHidden, false,
                         isProxyClass);
 
         Object interfacesEncoding = getInterfaceEncodings(superInterfaces);
@@ -591,7 +589,7 @@ public class CremaSupportImpl implements CremaSupport {
                  * mirandas.
                  */
                 boolean addMirandas = false;
-                var tables = VTable.create(partialType, false, false, addMirandas);
+                var tables = VTable.create(partialType, false, false, addMirandas, false);
                 return new CremaInstanceDispatchTable(tables, partialType);
             }
         } catch (MethodTableException e) {
@@ -623,7 +621,7 @@ public class CremaSupportImpl implements CremaSupport {
         DynamicHub superHub = DynamicHub.fromClass(Object.class);
         int javaModifiers = (componentHub.getModifiers() & (ACC_PUBLIC | ACC_PRIVATE | ACC_PROTECTED)) | ACC_FINAL | ACC_ABSTRACT;
         int jvmModifiers = (componentHub.getInterpreterType().getModifiers() & (ACC_PUBLIC | ACC_PRIVATE | ACC_PROTECTED)) | ACC_FINAL | ACC_ABSTRACT;
-        short flags = DynamicHub.makeFlags(false, false, false, false, false, false, false, false, false, false, true, false);
+        short flags = DynamicHub.makeFlags(false, false, false, false, false, false, false, false, false, true, false);
         ClassLoader loader = componentHub.getClassLoader();
         Module module = componentHub.getModule();
         int typeID = TypeIDs.singleton().nextTypeId();
@@ -911,8 +909,7 @@ public class CremaSupportImpl implements CremaSupport {
     }
 
     private static boolean isSealed(ParserKlass parsed) {
-        PermittedSubclassesAttribute permittedSubclasses = parsed.getAttribute(PermittedSubclassesAttribute.NAME, PermittedSubclassesAttribute.class);
-        return permittedSubclasses != null && permittedSubclasses.getClasses().length > 0;
+        return parsed.getAttribute(PermittedSubclassesAttribute.NAME, PermittedSubclassesAttribute.class) != null;
     }
 
     private static boolean hasInheritedDefaultMethods(Class<?> superClass, Class<?>[] superInterfaces) {
@@ -951,6 +948,7 @@ public class CremaSupportImpl implements CremaSupport {
         private final ClassLoader loader;
         private final Symbol<Name> symbolicRuntimePackage;
         private final List<CremaPartialMethod> declared;
+        private final InterpreterResolvedObjectType superType;
         private final List<InterpreterResolvedJavaMethod> parentTable;
         private final EconomicMap<InterpreterResolvedJavaType, List<InterpreterResolvedJavaMethod>> interfacesData = EconomicMap.create(Equivalence.IDENTITY);
         private InterpreterResolvedObjectType thisJavaType;
@@ -960,21 +958,21 @@ public class CremaSupportImpl implements CremaSupport {
             this.parserKlass = parsed;
             this.loader = loader;
             this.symbolicRuntimePackage = SymbolsSupport.getNames().getOrCreate(TypeSymbols.getRuntimePackage(parsed.getType()));
-            parentTable = computeParentTable(superClass);
+            this.superType = (InterpreterResolvedObjectType) DynamicHub.fromClass(superClass).getInterpreterType();
+            this.parentTable = computeParentTable(superType);
             for (Class<?> intf : superInterfaces) {
                 DynamicHub intfHub = DynamicHub.fromClass(intf);
                 InterpreterResolvedObjectType interpreterType = (InterpreterResolvedObjectType) intfHub.getInterpreterType();
                 // "vtable" contains the interface table prototype for interfaces
                 interfacesData.put(interpreterType, Arrays.asList(interpreterType.getVtable()));
             }
-            declared = new ArrayList<>();
+            this.declared = new ArrayList<>();
             for (ParserMethod m : parsed.getMethods()) {
                 declared.add(new CremaPartialMethod(this, m));
             }
         }
 
-        private static List<InterpreterResolvedJavaMethod> computeParentTable(Class<?> superClass) {
-            InterpreterResolvedObjectType superType = (InterpreterResolvedObjectType) DynamicHub.fromClass(superClass).getInterpreterType();
+        private static List<InterpreterResolvedJavaMethod> computeParentTable(InterpreterResolvedObjectType superType) {
             InterpreterResolvedJavaMethod[] superVTableMirror = superType.getVtable();
             int superTableLen = superType.getClassVtableLength();
             VMError.guarantee(superTableLen >= 0 && superTableLen <= superVTableMirror.length, "Invalid parent table length");
@@ -1015,6 +1013,25 @@ public class CremaSupportImpl implements CremaSupport {
         @Override
         public String toString() {
             return "CremaPartialType<" + getSymbolicName() + ">";
+        }
+
+        @Override
+        public PartialMethod<InterpreterResolvedJavaType, InterpreterResolvedJavaMethod, InterpreterResolvedJavaField> fallbackLookup(Symbol<Name> name, Symbol<Signature> signature,
+                        boolean includePrivate) {
+            for (CremaPartialMethod m : declared) {
+                if ((!m.isPrivate() || includePrivate) && !m.isStatic() && m.getSymbolicName() == name && m.getSymbolicSignature() == signature) {
+                    return m;
+                }
+            }
+            InterpreterResolvedObjectType current = superType;
+            while (current != null) {
+                InterpreterResolvedJavaMethod m = current.lookupDeclaredMethod(name, signature);
+                if (m != null && !m.isStatic() && (!m.isPrivate() || includePrivate)) {
+                    return m;
+                }
+                current = current.getSuperClass();
+            }
+            return null;
         }
     }
 
@@ -1778,11 +1795,47 @@ public class CremaSupportImpl implements CremaSupport {
     }
 
     @Override
-    public void verifySuperAccesses(String externalName, ClassLoader loader, ByteSequence pkgName, Module module,
+    public void verifySuperAccesses(String externalName, Symbol<Name> internalName, int classModifiers, ClassLoader loader, ByteSequence pkgName, Module module,
                     Class<?> superClass, Class<?>[] superInterfaces) {
-        AccessChecks.ensureTypeAccess(externalName, loader, pkgName, module, InterpreterResolvedJavaType.fromClass(superClass));
+        InterpreterResolvedJavaType resolvedSuperClass = InterpreterResolvedJavaType.fromClass(superClass);
+        AccessChecks.ensureTypeAccess(externalName, loader, pkgName, module, resolvedSuperClass);
+        checkSealedSuper(externalName, internalName, classModifiers, pkgName, module, superClass, resolvedSuperClass);
         for (Class<?> superInterface : superInterfaces) {
-            AccessChecks.ensureTypeAccess(externalName, loader, pkgName, module, InterpreterResolvedJavaType.fromClass(superInterface));
+            InterpreterResolvedJavaType resolvedSuperInterface = InterpreterResolvedJavaType.fromClass(superInterface);
+            AccessChecks.ensureTypeAccess(externalName, loader, pkgName, module, resolvedSuperInterface);
+            checkSealedSuper(externalName, internalName, classModifiers, pkgName, module, superInterface, resolvedSuperInterface);
+        }
+    }
+
+    /**
+     * Checks that the runtime-defined class named by {@code externalName} and {@code internalName},
+     * with modifiers {@code classModifiers}, runtime package {@code pkgName}, and runtime module
+     * {@code module}, may directly extend or implement {@code sealedSuper}. The symbolic permitted
+     * subtype names in {@code resolvedSuper} are used because the runtime-defined class may not have
+     * a Java {@link Class} object yet.
+     */
+    private static void checkSealedSuper(String externalName,
+                    Symbol<Name> internalName,
+                    int classModifiers,
+                    ByteSequence pkgName,
+                    Module module,
+                    Class<?> sealedSuper,
+                    InterpreterResolvedJavaType resolvedSuper) {
+        InterpreterResolvedObjectType resolvedSuperType = (InterpreterResolvedObjectType) resolvedSuper;
+        if (!resolvedSuperType.hasPermittedSubclasses()) {
+            return;
+        }
+        if (sealedSuper.getModule() != module) {
+            throw new IncompatibleClassChangeError("Class " + externalName + " cannot inherit from sealed type " + sealedSuper.getName() +
+                            " because it is in a different runtime module");
+        }
+        if (!resolvedSuperType.declaresPermittedSubclass(internalName)) {
+            throw new IncompatibleClassChangeError("Class " + externalName + " is not a permitted subtype of sealed type " + sealedSuper.getName());
+        }
+        // A package-private permitted subtype is only accessible from a sealed type in the same runtime package.
+        if (!Modifier.isPublic(classModifiers) && !pkgName.equals(resolvedSuper.getSymbolicRuntimePackage())) {
+            throw new IncompatibleClassChangeError("Class " + externalName + " cannot inherit from sealed type " + sealedSuper.getName() +
+                            " because it is not accessible from the sealed type");
         }
     }
 

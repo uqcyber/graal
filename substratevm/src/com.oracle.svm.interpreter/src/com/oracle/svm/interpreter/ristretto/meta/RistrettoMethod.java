@@ -280,6 +280,13 @@ public final class RistrettoMethod extends SubstrateMethod {
     }
 
     @Override
+    public boolean shouldBeInlined() {
+        // TODO GR-74452: preserve AOT ForceInline-annotated methods.
+        // TODO GR-74415: interpreter methods do not preserve ForceInline.
+        return false;
+    }
+
+    @Override
     public boolean canBeInlined() {
         InterpreterResolvedJavaMethod interpreter = this.getInterpreterMethod();
         if (!RistrettoUtils.wasAOTCompiled(interpreter)) {
@@ -322,7 +329,7 @@ public final class RistrettoMethod extends SubstrateMethod {
     @Override
     public ConstantPool getConstantPool() {
         if (ristrettoConstantPool == null) {
-            ristrettoConstantPool = RistrettoConstantPool.create(interpreterMethod.getConstantPool());
+            ristrettoConstantPool = RistrettoConstantPool.create(this);
         }
         return ristrettoConstantPool;
     }

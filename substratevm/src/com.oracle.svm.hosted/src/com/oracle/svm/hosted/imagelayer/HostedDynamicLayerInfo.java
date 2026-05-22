@@ -149,7 +149,7 @@ public class HostedDynamicLayerInfo extends DynamicImageLayerInfo {
         if (aMethod.isInSharedLayer()) {
             var loader = HostedImageLayerBuildingSupport.singleton().getLoader();
             var methodData = loader.getHostedMethodData(aMethod);
-            return new MethodNameInfo(methodData.getHostedMethodName().toString(), methodData.getHostedMethodUniqueName().toString());
+            return new MethodNameInfo(methodData.getHostedMethodName(), methodData.getHostedMethodUniqueName());
         } else {
             return null;
         }
@@ -237,8 +237,8 @@ public class HostedDynamicLayerInfo extends DynamicImageLayerInfo {
                     /*
                      * First write out next layer number.
                      */
-                    var snapshotBuilder = ((SVMImageLayerWriter.ImageSingletonWriterImpl) writer).getSnapshotBuilder();
-                    snapshotBuilder.setNextLayerNumber(singleton.nextLayerNumber);
+                    var snapshotWriter = ((SVMImageSingletonWriter) writer).getSnapshotWriter();
+                    snapshotWriter.setNextLayerNumber(singleton.nextLayerNumber);
 
                     /*
                      * Next write the start of the code section
@@ -269,8 +269,8 @@ public class HostedDynamicLayerInfo extends DynamicImageLayerInfo {
     static class SingletonInstantiator implements SingletonLayeredCallbacks.LayeredSingletonInstantiator<HostedDynamicLayerInfo> {
         @Override
         public HostedDynamicLayerInfo createFromLoader(ImageSingletonLoader loader) {
-            var snapshotReader = ((SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl) loader).getSnapshotReader();
-            int layerNumber = snapshotReader.getNextLayerNumber();
+            var snapshotLoader = ((SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl) loader).getSnapshotLoader();
+            int layerNumber = snapshotLoader.getNextLayerNumber();
 
             String codeSectionStartSymbol = loader.readString("codeSectionStartSymbol");
 

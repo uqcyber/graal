@@ -200,6 +200,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
     BytecodeConfigEncoderImplElement configEncoder;
     OldBytecodesBoxElement oldBytecodesBoxElement;
     AbstractBytecodeNodeElement abstractBytecodeNode;
+    BytecodeNodeElement cachedBytecodeNode;
 
     TagNodeElement tagNode;
     TagRootNodeElement tagRootNode;
@@ -319,7 +320,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         instructionsElement.lazyInit();
 
         // Define the interpreter implementations.
-        BytecodeNodeElement cachedBytecodeNode = this.add(new BytecodeNodeElement(this, InterpreterTier.CACHED));
+        cachedBytecodeNode = this.add(new BytecodeNodeElement(this, InterpreterTier.CACHED));
         abstractBytecodeNode.getPermittedSubclasses().add(cachedBytecodeNode.asType());
 
         this.add(bytecodeTransitionImplElement);
@@ -841,6 +842,7 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         }
 
         b.statement("boolean wasCompiled = CompilerDirectives.inCompiledCode()");
+        b.statement("CompilerDirectives.preserveFrameStateHere()");
 
         b.statement("long state = ", encodeState("bci", "sp"));
 
@@ -956,8 +958,8 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         CodeTreeBuilder b = ex.createBuilder();
         b.startDeclaration(types.BytecodeNode, "bc").startStaticCall(types.BytecodeNode, "get").string("callNode").end().end();
         b.startIf().string("bc == null || !(bc instanceof AbstractBytecodeNode bytecodeNode)").end().startBlock();
-        ExecutableElement superImpl = ElementUtils.findMethodInClassHierarchy(ElementUtils.findMethod(types.RootNode, "findInstrumentableCallNode"), model.templateType);
-        if (superImpl.getModifiers().contains(ABSTRACT)) {
+        ExecutableElement parentImpl = findImplementedRootNodeMethod("findInstrumentableCallNode", 3);
+        if (parentImpl == null) {
             // edge case: root node could redeclare findInstrumentableCallNode as abstract.
             b.startReturn().string("null").end();
         } else {
@@ -1650,7 +1652,12 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         CodeExecutableElement ex = overrideImplementRootNodeMethod(model, "isInstrumentable");
         CodeTreeBuilder b = ex.createBuilder();
         if (model.enableTagInstrumentation) {
-            b.statement("return true");
+            ExecutableElement parentImpl = findImplementedRootNodeMethod("isInstrumentable", 0);
+            if (parentImpl != null) {
+                b.startReturn().string("super.isInstrumentable()").end();
+            } else {
+                b.statement("return true");
+            }
         } else {
             b.statement("return false");
         }
@@ -1670,6 +1677,11 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.string("this");
         b.end();
         b.end();
+
+        ExecutableElement parentImpl = findImplementedRootNodeMethod("prepareForCall", 0);
+        if (parentImpl != null) {
+            b.statement("super.prepareForCall()");
+        }
         return ex;
     }
 
@@ -1690,6 +1702,10 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         b.end();
 
         b.statement("getRootNodes().update(b.build())");
+        ExecutableElement parentImpl = findImplementedRootNodeMethod("prepareForInstrumentation", 1);
+        if (parentImpl != null) {
+            b.statement("super.prepareForInstrumentation(materializedTags)");
+        }
         return ex;
     }
 
@@ -1706,13 +1722,21 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         // Disable compilation for the uncached interpreter.
         b.string("bytecode.getTier() != ").staticReference(types.BytecodeTier, "UNCACHED");
 
-        ExecutableElement parentImpl = ElementUtils.findMethodInClassHierarchy(ElementUtils.findMethod(types.RootNode, "prepareForCompilation", 3), model.templateType);
-        if (parentImpl != null && !parentImpl.getModifiers().contains(ABSTRACT)) {
+        ExecutableElement parentImpl = findImplementedRootNodeMethod("prepareForCompilation", 3);
+        if (parentImpl != null) {
             // Delegate to the parent impl.
             b.string(" && ").startCall("super.prepareForCompilation").variables(ex.getParameters()).end();
         }
         b.end();
         return ex;
+    }
+
+    private ExecutableElement findImplementedRootNodeMethod(String name, int parameterCount) {
+        ExecutableElement parentImpl = ElementUtils.findMethodInClassHierarchy(ElementUtils.findMethod(types.RootNode, name, parameterCount), model.templateType);
+        if (parentImpl == null || parentImpl.getModifiers().contains(ABSTRACT)) {
+            return null;
+        }
+        return parentImpl;
     }
 
     /**

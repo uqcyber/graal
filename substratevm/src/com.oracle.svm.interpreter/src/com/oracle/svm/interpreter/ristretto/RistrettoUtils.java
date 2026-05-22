@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,6 +41,7 @@ import com.oracle.svm.core.graal.code.SubstrateCompilationIdentifier;
 import com.oracle.svm.core.graal.code.SubstrateCompilationResult;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateReplacements;
+import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.option.RuntimeOptionParser;
@@ -70,6 +71,7 @@ import com.oracle.svm.interpreter.ristretto.meta.RistrettoMethod;
 import com.oracle.svm.interpreter.ristretto.meta.RistrettoReplacements;
 import com.oracle.svm.interpreter.ristretto.meta.RistrettoType;
 import com.oracle.svm.interpreter.ristretto.verify.RistrettoGraphJVMCITypeVerifier;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shared.option.CommonOptionParser;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
@@ -195,6 +197,23 @@ public class RistrettoUtils {
             throw GraalError.shouldNotReachHere("Unknown type " + type);
         }
         return hub.isRuntimeLoaded();
+    }
+
+    /**
+     * Returns the runtime Java declaring class for the given method across the three method/type
+     * representations Ristretto can see while parsing: runtime-loaded {@link RistrettoType}, direct
+     * interpreter metadata, and shared AOT metadata.
+     */
+    public static Class<?> getDeclaringJavaClass(ResolvedJavaMethod method) {
+        ResolvedJavaType declaringClass = method.getDeclaringClass();
+        if (declaringClass instanceof RistrettoType ristrettoType) {
+            return ristrettoType.getInterpreterType().getJavaClass();
+        } else if (declaringClass instanceof InterpreterResolvedJavaType interpreterType) {
+            return interpreterType.getJavaClass();
+        } else if (declaringClass instanceof SharedType sharedType) {
+            return DynamicHub.toClass(sharedType.getHub());
+        }
+        throw VMError.shouldNotReachHere("Unexpected declaring class for runtime Java declaring-class lookup: " + declaringClass);
     }
 
     public static CompilationResult compile(DebugContext debug, final SubstrateMethod method) {

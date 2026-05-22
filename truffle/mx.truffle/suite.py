@@ -39,10 +39,10 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion": "7.67.0",
+  "mxversion": "7.79.3",
   "name" : "truffle",
-  "version" : "25.1.0",
-  "release" : False,
+  "version_from" : "sdk",
+  "release_from" : "sdk",
   "groupId" : "org.graalvm.truffle",
   "sourceinprojectwhitelist" : [],
   "url" : "http://openjdk.java.net/projects/graal",
@@ -1834,6 +1834,7 @@ suite = {
           "java.sql", # java.sql.date java.sql.Time
           "org.graalvm.collections",
           "org.graalvm.nativeimage",
+          "static org.graalvm.nativebridge",
         ],
         "exports" : [
           # Unqualified exports
@@ -1910,6 +1911,9 @@ suite = {
         "sdk:JNIUTILS",
         "sdk:NATIVEBRIDGE",
         "sdk:POLYGLOT"
+      ],
+      "optionalDependencies" : [
+        "sdk:NATIVEBRIDGE",
       ],
       "description" : "Truffle is a multi-language framework for executing dynamic languages\nthat achieves high performance when combined with Graal.",
       "javadocType": "api",

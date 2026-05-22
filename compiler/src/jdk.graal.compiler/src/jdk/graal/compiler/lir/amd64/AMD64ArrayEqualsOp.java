@@ -470,9 +470,9 @@ public final class AMD64ArrayEqualsOp extends AMD64ComplexVectorOp {
             if (withMask()) {
                 masm.orq(temp, new AMD64Address(mask, result, strideMask, -VECTOR_SIZE));
             }
-            masm.cmpqAndJcc(temp, new AMD64Address(arrayB, result, strideB, -VECTOR_SIZE), ConditionFlag.NotEqual, falseLabel, true);
+            masm.cmpqAndJcc(temp, new AMD64Address(arrayB, result, strideB, -VECTOR_SIZE), ConditionFlag.NotEqual, falseLabel, false);
         }
-        masm.jmpb(trueLabel);
+        masm.jmp(trueLabel);
 
         masm.bind(compareTail);
         masm.movl(length, result);
@@ -496,9 +496,9 @@ public final class AMD64ArrayEqualsOp extends AMD64ComplexVectorOp {
             masm.movl(temp, new AMD64Address(arrayA, 0));
             if (elementKind == JavaKind.Float) {
                 assert !withMask();
-                masm.cmplAndJcc(temp, new AMD64Address(arrayB, 0), ConditionFlag.Equal, trueLabel, true);
+                masm.cmplAndJcc(temp, new AMD64Address(arrayB, 0), ConditionFlag.Equal, trueLabel, false);
                 emitFloatCompare(masm, strideA, strideB, arrayA, arrayB, Register.None, 0, falseLabel, true);
-                masm.jmpb(trueLabel);
+                masm.jmp(trueLabel);
             } else {
                 if (withMask()) {
                     masm.orl(temp, new AMD64Address(mask, 0));

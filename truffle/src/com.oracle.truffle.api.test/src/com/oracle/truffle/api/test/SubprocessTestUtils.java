@@ -43,6 +43,7 @@ package com.oracle.truffle.api.test;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.PrintWriter;
@@ -138,6 +139,11 @@ public final class SubprocessTestUtils {
      * @see Builder#timeout(Duration)
      */
     public static final Duration DEFAULT_TIMEOUT = Duration.ofMinutes(2);
+
+    /**
+     * Timeout to wait for subprocess stdout/stderr reader thread to terminate.
+     */
+    private static final Duration OUTPUT_DRAIN_TIMEOUT = Duration.ofSeconds(10);
 
     /**
      * Disables the subprocess timeout. When set, the subprocess is allowed to run indefinitely.
@@ -845,7 +851,8 @@ public final class SubprocessTestUtils {
         if (onStart != null) {
             onStart.accept(process.toHandle());
         }
-        BufferedReader stdout = new BufferedReader(new InputStreamReader(process.getInputStream()));
+        InputStream processInputStream = process.getInputStream();
+        BufferedReader stdout = new BufferedReader(new InputStreamReader(processInputStream));
         List<String> output = new ArrayList<>();
         if (timeout == NO_TIMEOUT) {
             String line;
@@ -866,6 +873,7 @@ public final class SubprocessTestUtils {
                     // happens when the process ends
                 }
             });
+            outputReader.setDaemon(true);
             outputReader.start();
             boolean finishedOnTime = process.waitFor(timeout.getSeconds(), TimeUnit.SECONDS);
             if (!finishedOnTime) {
@@ -873,7 +881,19 @@ public final class SubprocessTestUtils {
                 dumpThreads(process.toHandle());
                 process.destroyForcibly().waitFor();
             }
-            outputReader.join();
+            /*
+             * The subprocess has terminated, but its child processes may still be writing to stdout/stderr.
+             * Do not block indefinitely on outputReader. Allow a grace period for stream draining, then close
+             * the process stdout and wait for outputReader to finish.
+             */
+            outputReader.join(OUTPUT_DRAIN_TIMEOUT.toMillis());
+            if (outputReader.isAlive()) {
+                processInputStream.close();
+                outputReader.join(OUTPUT_DRAIN_TIMEOUT.toMillis());
+            }
+            if (outputReader.isAlive()) {
+                throw new AssertionError("Failed to stop subprocess output reader");
+            }
             return new Subprocess(processBuilder.command(), env, process.pid(), process.exitValue(), output, !finishedOnTime, argfile);
         }
     }

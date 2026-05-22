@@ -27,8 +27,10 @@ package com.oracle.svm.core.jfr;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.heap.RestrictHeapAccess;
+
 public class JfrGCWhenSerializer implements JfrSerializer {
-    private JfrGCWhen[] values;
+    private final JfrGCWhen[] values;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public JfrGCWhenSerializer() {
@@ -36,6 +38,7 @@ public class JfrGCWhenSerializer implements JfrSerializer {
     }
 
     @Override
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Used on OOME for emergency dumps")
     public void write(JfrChunkWriter writer) {
         writer.writeCompressedLong(JfrType.GCWhen.getId());
         writer.writeCompressedLong(values.length);

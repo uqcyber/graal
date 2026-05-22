@@ -37,7 +37,6 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.core.MemoryWalker;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.SubstrateDiagnostics;
@@ -79,11 +78,13 @@ import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.thread.PlatformThreads;
 import com.oracle.svm.core.thread.ThreadStatus;
+import com.oracle.svm.core.thread.ThreadsLock;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
@@ -113,6 +114,7 @@ public final class HeapImpl extends Heap {
     private final RuntimeCodeInfoGCSupportImpl runtimeCodeInfoGcSupport;
     private final HeapAccounting accounting = new HeapAccounting();
     private final ImageHeapChunkLogger imageHeapChunkLogger = new ImageHeapChunkLogger();
+    private boolean initialized;
 
     /** Head of the linked list of currently pending (ready to be enqueued) {@link Reference}s. */
     private Reference<?> refPendingList;
@@ -433,7 +435,9 @@ public final class HeapImpl extends Heap {
     @Uninterruptible(reason = "Called during startup.")
     @Override
     public void attachThread(IsolateThread isolateThread) {
-        TlabSupport.startupInitialization();
+        if (!initialized) {
+            initialize();
+        }
         TlabSupport.initialize(isolateThread);
     }
 
@@ -441,6 +445,16 @@ public final class HeapImpl extends Heap {
     @Uninterruptible(reason = "Current thread holds the ThreadsLock with exclusive write access.")
     public void detachThread(IsolateThread isolateThread) {
         TlabSupport.disableAndFlushForThread(isolateThread);
+    }
+
+    @Uninterruptible(reason = "Called during startup.")
+    private void initialize() {
+        assert ThreadsLock.hasWriteAccess() : "must hold the ThreadsLock";
+        assert !initialized : "only the first thread may initialize the heap";
+        initialized = true;
+
+        TlabSupport.startupInitialization();
+        gcImpl.updatePolicy();
     }
 
     @Fold

@@ -110,6 +110,12 @@ public interface SharedMethod extends ResolvedJavaMethod {
 
     int getImageCodeOffset();
 
+    /**
+     * Returns the encoded relative IP of this method's deoptimization entry point in image code.
+     *
+     * @see com.oracle.svm.core.code.CodeInfoAccess#relativeIP(com.oracle.svm.core.code.CodeInfo,
+     *      org.graalvm.nativeimage.c.function.CodePointer)
+     */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     int getImageCodeDeoptOffset();
 

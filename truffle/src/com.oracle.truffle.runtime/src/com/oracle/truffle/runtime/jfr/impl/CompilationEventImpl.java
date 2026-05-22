@@ -85,7 +85,7 @@ class CompilationEventImpl extends RootFunctionEventImpl implements CompilationE
 
     @Override
     public void compilationStarted() {
-        CompilationFailureEventImpl failureEvent = new CompilationFailureEventImpl(engineId, id, source, language, rootFunction);
+        CompilationFailureEventImpl failureEvent = new CompilationFailureEventImpl(engineId, id, source, sourceHash, language, rootFunction, astSize);
         if (failureEvent.isEnabled()) {
             failureEvent.begin();
             failure = failureEvent;
@@ -109,7 +109,11 @@ class CompilationEventImpl extends RootFunctionEventImpl implements CompilationE
         end();
         if (failure != null) {
             failure.end();
-            failure.setFailureData(tier, permanent, reason, lazyStackTrace == null ? null : lazyStackTrace.get());
+            if (permanent) {
+                failure.setFailureData(tier, true, reason, lazyStackTrace == null ? null : lazyStackTrace.get());
+            } else {
+                failure = null;
+            }
         }
         truffleTier = tier;
         success = false;

@@ -35,14 +35,13 @@ import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
 import com.oracle.svm.core.collections.AbstractUninterruptibleHashtable;
 import com.oracle.svm.core.collections.UninterruptibleEntry;
-import com.oracle.svm.core.deopt.DeoptimizationSupport;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jfr.sampler.JfrExecutionSampler;
@@ -55,8 +54,8 @@ import com.oracle.svm.core.sampler.SamplerSampleWriter;
 import com.oracle.svm.core.sampler.SamplerSampleWriterData;
 import com.oracle.svm.core.sampler.SamplerSampleWriterDataAccess;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
-import org.graalvm.word.impl.Word;
 
 /**
  * Repository that collects all metadata about stacktraces.
@@ -102,11 +101,6 @@ public class JfrStackTraceRepository implements JfrRepository {
     @NeverInline("Starting a stack walk in the caller frame.")
     @Uninterruptible(reason = "Result is only valid until epoch changes.", callerMustBe = true)
     public long getStackTraceId(int skipCount) {
-        if (DeoptimizationSupport.enabled()) {
-            /* Stack traces are not supported if JIT compilation is used (GR-43686). */
-            return 0;
-        }
-
         /*
          * JFR stack traces use the same thread-local buffers as the execution sampler. So, we need
          * to prevent the sampler from modifying the buffer, while it is used by the code below.
@@ -131,7 +125,7 @@ public class JfrStackTraceRepository implements JfrRepository {
             int errorCode = JfrStackWalker.walkCurrentThread(data, ip, sp, false);
             return switch (errorCode) {
                 case JfrStackWalker.NO_ERROR, JfrStackWalker.TRUNCATED -> storeDeduplicatedStackTrace(data);
-                case JfrStackWalker.BUFFER_SIZE_EXCEEDED -> 0L;
+                case JfrStackWalker.BUFFER_SIZE_EXCEEDED, JfrStackWalker.SKIPPED -> 0L;
                 case JfrStackWalker.UNPARSEABLE_STACK -> throw VMError.shouldNotReachHere("Only the async sampler may encounter an unparseable stack.");
                 default -> throw VMError.shouldNotReachHere("Unexpected return value");
             };

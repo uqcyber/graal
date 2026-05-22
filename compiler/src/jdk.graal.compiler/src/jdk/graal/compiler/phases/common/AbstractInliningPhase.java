@@ -107,7 +107,7 @@ public abstract class AbstractInliningPhase extends BasePhase<HighTierContext> {
      * Determines whether a remaining invoke still refers to a force-inlined target that the current
      * compilation context is capable of inlining.
      */
-    private boolean mustBeInlined(Invoke invoke, HighTierContext context) {
+    protected boolean mustBeInlined(Invoke invoke, HighTierContext context) {
         ResolvedJavaMethod targetMethod = forceInlinedTarget(invoke);
         if (targetMethod == null) {
             return false;

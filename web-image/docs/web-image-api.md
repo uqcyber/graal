@@ -8,9 +8,9 @@ toc_group: web-image
 
 # Working with the Web Image API
 
-This document describes the recommended approach for using the Web Image API to enable JavaScript interoperability in Java applications that are compiled into WebAssembly modules using [GraalVM Native Image Web Image backend](get-started.md), and can run in Node.js or browser environments.
+This document describes the recommended approach for using the Web Image API to enable JavaScript interoperability in JVM applications that are compiled into WebAssembly modules using the [GraalVM Native Image Web Image backend](get-started.md), and can run in Node.js or browser environments.
 
-The [Web Image API](https://www.graalvm.org/sdk/javadoc/org/graalvm/webimage/api/package-summary.html) provides a Java-to-JavaScript interoperability layer for applications compiled to WebAssembly.
+The [Web Image API](https://www.graalvm.org/sdk/javadoc/org/graalvm/webimage/api/package-summary.html) provides a JavaScript interoperability layer for JVM applications compiled to WebAssembly.
 
 > Note: Web Image is experimental and under active development. APIs, tooling, and capabilities may change.
 
@@ -19,10 +19,10 @@ The [Web Image API](https://www.graalvm.org/sdk/javadoc/org/graalvm/webimage/api
 * [Embedding JavaScript Code with `@JS`](#embedding-javascript-code-with-js)
 * [Working with Primitives](#working-with-primitives)
 * [Working with Objects](#working-with-objects)
-* [Creating JavaScript Objects in Java](#creating-javascript-objects-in-java)
+* [Creating JavaScript Objects from Application Code](#creating-javascript-objects-from-application-code)
 * [Creating Instances of JavaScript Classes](#creating-instances-of-javascript-classes)
 * [Functions Are Objects](#functions-are-objects)
-* [Exporting Java Code to JavaScript](#exporting-java-code-to-javascript)
+* [Exporting Application Code to JavaScript](#exporting-application-code-to-javascript)
 * [Passing Arguments](#passing-arguments)
 * [What Counts as a Callable Value?](#what-counts-as-a-callable-value)
 * [Error Handling](#error-handling)
@@ -117,11 +117,11 @@ int price = request.get("price", Integer.class);
 ```
 
 Instead of `Object raw = request.get("price");`.
-Typed `get(...)` is clearer and gives you earlier failures if the data does not match what Java expects.
+Typed `get(...)` is clearer and gives you earlier failures if the data does not match what your application expects.
 
 ## Working with Objects
 
-At present, **`JSObject`** is the primary way to work with JavaScript objects from Java.
+At present, **`JSObject`** is the primary way to work with JavaScript objects from JVM application code.
 The current limitations are:
 
 * `@JS.Import` is not implemented yet
@@ -151,7 +151,7 @@ response.set("discountApplied", JSNumber.of(24));
 response.set("premium", JSBoolean.of(true));
 ```
 
-This ensures that the stored properties are JavaScript values instead of proxied Java objects.
+This ensures that the stored properties are JavaScript values instead of proxied JVM-side objects.
 When returned back to JavaScript, this becomes a normal JavaScript object.
 
 Nested objects are handled in the same way: read the nested property as another `JSObject`, then continue reading from it.
@@ -161,7 +161,7 @@ JSObject user = request.get("user", JSObject.class);
 String tier = user.get("tier", String.class);
 ```
 
-## Creating JavaScript Objects in Java
+## Creating JavaScript Objects from Application Code
 
 The simplest way to create a plain JavaScript object is:
 
@@ -177,7 +177,7 @@ There are also additional `JSObject.create(...)` overloads and related helper me
 * `JSObject.defineProperty(...)`
 * `JSObject.defineProperties(...)`
 
-These methods are useful when you want to construct objects in Java without writing a JavaScript helper.
+These methods are useful when you want to construct objects in application code without writing a JavaScript helper.
 
 Use these helpers for descriptor objects, plain record-like objects, temporary request or response objects.
 
@@ -193,14 +193,14 @@ However, if you need an actual instance of a JavaScript class, such as a browser
 static native JSObject newFoo(int arg1, String arg2);
 ```
 
-In practice, create the instance in JavaScript and then handle it in Java as a `JSObject`.
+In practice, create the instance in JavaScript and then handle it in application code as a `JSObject`.
 The same guidance applies to browser and framework objects.
 If you need something like a JavaScript `Date`, a DOM-like helper object, or an application-specific JavaScript instance, construct it in a small `@JS` helper and return `JSObject`.
 
 ## Functions Are Objects
 
 A JavaScript function can be represented as a `JSObject`.
-You can call it from Java using:
+You can call it from application code using:
 
 * `invoke(args...)`
 * `call(thisArg, args...)`
@@ -217,10 +217,10 @@ Object result = fn.invoke(1, 2);
 This is useful when JavaScript returns callbacks or factories.
 This is also useful when an API returns a function-valued property instead of a plain object.
 
-## Exporting Java Code to JavaScript
+## Exporting Application Code to JavaScript
 
-Another common use of `@JS` is exposing Java code to JavaScript.
-The current practical pattern is to export a Java function through a small bootstrap helper written with `@JS`.
+Another common use of `@JS` is exposing application code to JavaScript.
+The current practical pattern is to export an application function through a small bootstrap helper written with `@JS`.
 
 Example pattern:
 ```java
@@ -233,9 +233,9 @@ Then in `main()`:
 export((a, b) -> JSNumber.of(a.asInt() + b.asInt()));
 ```
 
-Here, `@JS` is used to install a Java-provided function onto the JavaScript side so that browser or Node.js code can call it later.
+Here, `@JS` is used to install an application-provided function onto the JavaScript side so that browser or Node.js code can call it later.
 
-This is different from the simpler `@JS` example shown earlier, where `@JS` is used to run JavaScript from Java:
+This is different from the simpler `@JS` example shown earlier, where `@JS` is used to run JavaScript from application code:
 ```java
 public class Example {
     @JS("console.log(message);")
@@ -261,7 +261,7 @@ static native int add(int a, int b);
 
 ## What Counts as a Callable Value?
 
-JavaScript needs a callable value, and the practical Java-side model is a functional interface.
+JavaScript needs a callable value, and the practical JVM-side model is a functional interface.
 That callable can be a lambda, a method reference, or an implementation of a functional interface.
 Common choices include:
 
@@ -294,12 +294,12 @@ export(Example::handleRequest);
 export(new PricingHandler());
 ```
 
-For structured request/response exchange, `Function<JSObject, JSObject>` is often the most convenient shape: JavaScript passes a plain object, Java reads it with typed `get(...)` calls, and returns a fresh `JSObject`.
+For structured request/response exchange, `Function<JSObject, JSObject>` is often the most convenient shape: JavaScript passes a plain object, the application reads it with typed `get(...)` calls, and returns a fresh `JSObject`.
 
 ## Error Handling
 
 When JavaScript throws a non-Java exception value, it may be surfaced as `ThrownFromJavaScript`.
-That gives Java code access to the thrown object:
+That gives application code access to the thrown object:
 
 ```java
 try {
@@ -310,7 +310,7 @@ try {
 ```
 
 This is useful for APIs called directly from browser JavaScript.
-A returned error object is often easier to inspect in the console or UI than a Java-side exception crossing the boundary.
+A returned error object is often easier to inspect in the console or UI than a JVM-side exception crossing the boundary.
 
 ### Summary
 

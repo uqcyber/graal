@@ -100,7 +100,8 @@ public final class RuntimeDynamicHubMetadata implements DynamicHubMetadata {
     @Override
     public Class<?>[] getPermittedSubClasses(DynamicHub declaringClass) {
         List<Class<?>> permittedSubClasses = new ArrayList<>();
-        for (JavaType permittedSubType : type.getPermittedSubClasses()) {
+        List<? extends JavaType> permittedSubTypes = type.getPermittedSubclasses();
+        for (JavaType permittedSubType : permittedSubTypes) {
             Class<?> permittedSubClass = toClassOrNull(permittedSubType, type);
             if (permittedSubClass != null) {
                 permittedSubClasses.add(permittedSubClass);

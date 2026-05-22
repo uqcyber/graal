@@ -32,7 +32,7 @@ public interface JfrChunkWriter extends JfrUnlockedChunkWriter {
 
     long getChunkStartNanos();
 
-    void setFilename(String filename);
+    void setFileToOpen(String filename);
 
     void maybeOpenFile();
 

@@ -405,6 +405,7 @@ _native_unittest_features = '--features=' + ','.join(('com.oracle.svm.test.Image
                                                       'com.oracle.svm.test.foreign.ForeignTests$TestFeature'))
 
 IMAGE_ASSERTION_FLAGS = svm_experimental_options(['-H:+VerifyGraalGraphs', '-H:+VerifyPhases'])
+RUNTIME_CLASSLOADERS_INIT_ARG = '--initialize-at-run-time=jdk.internal.loader.ClassLoaders'
 
 
 def image_demo_task(extra_image_args=None, flightrecorder=True):
@@ -526,6 +527,11 @@ def svm_gate_body(args, tasks):
             with native_image_context(IMAGE_ASSERTION_FLAGS):
                 native_unittests_task(args.extra_image_builder_arguments)
 
+    with Task('runtime classpath resource lookup', tasks, tags=[GraalTags.native_unittests]) as t:
+        if t:
+            with native_image_context(IMAGE_ASSERTION_FLAGS):
+                runtime_classpath_resource_test_task(args.extra_image_builder_arguments)
+
     # Keep the shared native_unittests gate aligned with GitHub Actions and other low-cost presubmits.
     # The internal all_native_unittests tag opts into the more expensive custom @NativeImageBuildArgs
     # image groups without changing the behavior of existing public gate consumers.
@@ -604,6 +610,8 @@ def svm_gate_body(args, tasks):
     with Task('module build demo', tasks, tags=[GraalTags.hellomodule]) as t:
         if t:
             hellomodule(args.extra_image_builder_arguments)
+            hellomodule(args.extra_image_builder_arguments + svm_experimental_options(['-H:+ClassForNameRespectsClassLoader', '-H:-LegacyJavaOptionMode']))
+            hellomodule(args.extra_image_builder_arguments + svm_experimental_options(['-H:+RuntimeClassLoading', '-H:+AllowJRTFileSystem', '-H:-LegacyJavaOptionMode']))
 
     with Task('Validate JSON build info', tasks, tags=[GraalTags.helloworld]) as t:
         if t:
@@ -764,6 +772,21 @@ def native_unittests_task(extra_build_args=None, include_custom_test_groups=Fals
     if include_custom_test_groups:
         computed = computed + ['--all']
     native_image_context_run(_native_unittest, computed)
+
+def runtime_classpath_resource_test_task(extra_build_args=None):
+    svm_tests_jar = mx.distribution('substratevm:SVM_TESTS').path
+    build_args = svm_experimental_options(['-H:+ClassForNameRespectsClassLoader']) + [RUNTIME_CLASSLOADERS_INIT_ARG]
+    if extra_build_args is not None:
+        build_args += extra_build_args
+    computed = _compute_native_unittest_args(build_args, include_svm_test_features=True)
+    native_image_context_run(_native_unittest, [
+        'com.oracle.svm.test.NativeImageResourceTest',
+    ] + computed + [
+        '--run-args',
+        '--verbose',
+        '-Dsvm.test.expectRuntimeClassPathResource=true',
+        '-Djava.class.path=' + svm_tests_jar,
+    ])
 
 def conditional_config_task(native_image):
     agent_path = build_native_image_agent(native_image)
@@ -1063,10 +1086,12 @@ def standalone_pointsto_unittest(args):
         ]
         guest_modulepath = mx.classpath(guest_modulepath_entries, unique=True)
         upgrade_modulepath = mx.classpath(['compiler:GRAAL'], unique=True)
+        graaljdk_home = mx_compiler.get_graaljdk().home
 
         return [
             '-Dcom.oracle.graal.pointsto.standalone.vmaccess.modulepath=' + guest_modulepath,
             '-Dcom.oracle.graal.pointsto.standalone.vmaccess.upgrade.modulepath=' + upgrade_modulepath,
+            '-Dcom.oracle.graal.pointsto.standalone.vmaccess.java.home=' + graaljdk_home,
         ]
 
     if len(args) > 1 or (args and args[0] not in ('host', 'espresso')):
@@ -1074,7 +1099,6 @@ def standalone_pointsto_unittest(args):
 
     requested_vmaccess = args[0] if args else 'espresso'
     unittest_args = [
-        '--use-graalvm',
         '-Dcom.oracle.graal.pointsto.standalone.vmaccess.name=' + requested_vmaccess,
         'com.oracle.graal.pointsto.standalone.test',
     ]
@@ -2135,10 +2159,10 @@ libsvmjdwp = mx_sdk_vm.GraalVmJreComponent(
 
 mx_sdk_vm.register_graalvm_component(libsvmjdwp)
 
-# At the moment this list is mostly driven by tests and use-cases.
-# Packages get added as needed based on errors such as
-# "Trying to dispatch to compiled code for AOT method ..."
-# or "Cannot load undefined field: ..."
+# Only add packages here to work around the fact that libjvm currently splits AOT and dynamically
+# loaded JDK code at class granularity, not at method or field granularity. Packages get added as
+# needed based on partial-class errors such as "Trying to dispatch to compiled code for AOT method
+# ..." or "Cannot load undefined field: ...". This list must not be used for optimization.
 lib_jvm_preserved_packages = [
     'java.io',
     'java.lang',
@@ -2148,10 +2172,12 @@ lib_jvm_preserved_packages = [
     'java.lang.classfile.constantpool',
     'java.lang.classfile.instruction',
     'java.lang.constant',
+    'java.lang.foreign',
     'java.lang.invoke',
     'java.lang.module',
     'java.lang.ref',
     'java.lang.reflect',
+    'java.lang.runtime',
     'java.math',
     'java.net',
     'java.net.spi',
@@ -2163,6 +2189,7 @@ lib_jvm_preserved_packages = [
     'java.security',
     'java.security.cert',
     'java.security.spec',
+    'java.text',
     'java.time',
     'java.time.chrono',
     'java.time.format',
@@ -2173,15 +2200,25 @@ lib_jvm_preserved_packages = [
     'java.util.concurrent.locks',
     'java.util.function',
     'java.util.jar',
+    'java.util.logging',
     'java.util.regex',
     'java.util.stream',
     'java.util.zip',
     'javax.net',
+    'javax.crypto.spec',
+    'javax.security.auth.x500',
     'jdk.internal.access',
     'jdk.internal.classfile.impl',
     'jdk.internal.constant',
+    'jdk.internal.logger',
     'jdk.internal.misc',
     'sun.invoke.util',
+    'sun.security.util',
+]
+
+lib_jvm_preserved_modules = [
+    'java.xml',
+    'java.xml.crypto',
 ]
 
 mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
@@ -2201,7 +2238,8 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
             use_modules='image',
             destination='<lib:jvm>',
             jar_distributions=['substratevm:SVM_LIBJVM'],
-            build_args=svm_experimental_options(['-H:Preserve=package=' + pkg for pkg in lib_jvm_preserved_packages]),
+            build_args=svm_experimental_options(['-H:Preserve=package=' + pkg for pkg in lib_jvm_preserved_packages] +
+                                                ['-H:Preserve=module=' + module for module in lib_jvm_preserved_modules]),
             headers=False,
             home_finder=False,
         ),
@@ -2422,6 +2460,10 @@ def hellomodule(args):
     proj_dir = join(suite.dir, 'src', 'native-image-module-tests', 'hello.app')
     mx.run_maven(['-e', 'install'], cwd=proj_dir)
     module_path.append(join(proj_dir, 'target', 'hello-app-1.0-SNAPSHOT.jar'))
+    runtime_module_path = list(module_path)
+    proj_dir = join(suite.dir, 'src', 'native-image-module-tests', 'hello.runtime')
+    mx.run_maven(['-e', 'install'], cwd=proj_dir)
+    runtime_module_path.append(join(proj_dir, 'target', 'hello-runtime-1.0-SNAPSHOT.jar'))
     with native_image_context(hosted_assertions=False) as native_image:
         module_path_sep = ';' if mx.is_windows() else ':'
         moduletest_run_args = [
@@ -2439,11 +2481,26 @@ def hellomodule(args):
 
         # Build module into native image
         mx.log('Building image from java modules: ' + str(module_path))
+        runtime_class_loading = any('RuntimeClassLoading' in arg for arg in args)
+        class_loader_lookup = runtime_class_loading or any('ClassForNameRespectsClassLoader' in arg for arg in args)
+        moduletest_build_args = list(moduletest_run_args)
+        if runtime_class_loading:
+            # Assert that QName is loaded from the runtime JRT filesystem by
+            # runtime-loaded code, not made AOT-reachable in the image build.
+            moduletest_build_args = svm_experimental_options(['-H:AbortOnTypeReachable=javax.xml.namespace.QName']) + moduletest_build_args
         built_image = native_image(
-            ['--verbose'] + svm_experimental_options(['-H:Path=' + build_dir]) + args + moduletest_run_args
+            ['--verbose'] + svm_experimental_options(['-H:Path=' + build_dir]) + args + moduletest_build_args
         )
-        mx.log('Running image ' + built_image + ' built from module:')
+        mx.log('Running image ' + built_image + ' built from module without runtime module path:')
         mx.run([built_image])
+        if class_loader_lookup:
+            mx.log('Running image ' + built_image + ' built from module with runtime module path:')
+            runtime_module_path_args = [built_image, '-Dsvm.test.expectRuntimeModulePathFallback=true']
+            if runtime_class_loading:
+                runtime_module_path_args.append('-Dsvm.test.expectRuntimeDefinedModuleLayer=true')
+                runtime_module_path_args.append('-Djava.home=' + _vm_home(None))
+            runtime_module_path_args.append('--module-path=' + module_path_sep.join(runtime_module_path))
+            mx.run(runtime_module_path_args)
 
 
 @mx.command(suite.name, 'cinterfacetutorial', 'Runs the ')
@@ -3137,7 +3194,7 @@ def capnp_compile(args):
     if capnpcjava_home is None or not exists(capnpcjava_home + '/capnpc-java'):
         mx.abort('Clone and build capnproto/capnproto-java from GitHub and point CAPNPROTOJAVA_HOME to its path.')
     srcdir = 'src/com.oracle.svm.hosted/resources/'
-    outdir = 'src/com.oracle.svm.hosted/src/com/oracle/svm/hosted/imagelayer/'
+    outdir = 'src/com.oracle.svm.hosted/src/com/oracle/svm/hosted/snapshot/capnproto/generated/'
     command = ['capnp', 'compile',
                '--import-path=' + capnpcjava_home + '/compiler/src/main/schema/',
                '--output=' + capnpcjava_home + '/capnpc-java:' + outdir,
@@ -3206,7 +3263,10 @@ class StandalonePointstoUnittestsConfig(mx_unittest.MxUnittestConfig):
 
     def processDeps(self, deps):
         if mx.suite('espresso-compiler-stub', fatalIfMissing=False):
+            deps.add(mx.distribution('espresso:ESPRESSO'))
+            deps.add(mx.distribution('espresso:ESPRESSO_LIBS_RESOURCES'))
             deps.add(mx.distribution('espresso-compiler-stub:ESPRESSO_VMACCESS'))
+            deps.add(mx.distribution('truffle:TRUFFLE_NFI_LIBFFI'))
 
     def apply(self, config):
         vmArgs, mainClass, mainClassArgs = config
@@ -3215,6 +3275,8 @@ class StandalonePointstoUnittestsConfig(mx_unittest.MxUnittestConfig):
         vmArgs.extend(['--add-exports=jdk.graal.compiler/jdk.graal.compiler.phases.util=ALL-UNNAMED'])
         # VMAccess needs to access jdk.internal.module.Modules
         vmArgs.extend(['--add-exports=java.base/jdk.internal.module=jdk.graal.compiler.vmaccess'])
+        # Espresso loads Truffle NFI from the org.graalvm.truffle module.
+        vmArgs.extend(['--enable-native-access=org.graalvm.truffle'])
 
         # JVMCI is dynamically exported to Graal when JVMCI is initialized. This is too late
         # for the junit harness which uses reflection to find @Test methods. In addition, the

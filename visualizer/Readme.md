@@ -26,7 +26,7 @@ To run the unittests included in IGV run command:
 
 #### Creating a release
 
-To create a release build, use the command `mx release` which will run the maven commands to create
+To create a release build, use the command `mx releaseigv` which will run the maven commands to create
 a build without the `-SNAPSHOT` part of the version string.  It will then update the version string
 to the sequential number and commit those changes.  It will also create a tag for the released
 version though this will have to be propagated manually.  You can respin the build by deleting the

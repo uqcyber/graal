@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -215,20 +215,26 @@ final class ProcessIsolateThreadSupport {
             try (SocketChannel s = local.accept()) {
                 String peerAddress = readConnectRequest(s);
                 peer = UnixDomainSocketAddress.of(peerAddress);
+                listenThread = Thread.currentThread();
+                state = State.CONNECTED;
+                return true;
             } catch (CloseException ce) {
                 handleClose();
                 throw ce;
             }
         } else {
             // isolate subprocess
+            listenThread = Thread.currentThread();
+            state = State.CONNECTED;
+            installParentProcessWatchDog();
             try (SocketChannel s = SocketChannel.open(peer)) {
                 writeConnectRequest(s, getLocalAddress().toString());
+                return state == State.CONNECTED;
+            } catch (Throwable t) {
+                state = State.CLOSED;
+                throw t;
             }
-            installParentProcessWatchDog();
         }
-        listenThread = Thread.currentThread();
-        state = State.CONNECTED;
-        return true;
     }
 
     private void installParentProcessWatchDog() {

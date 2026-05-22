@@ -32,16 +32,14 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.JavaMainWrapper;
-import com.oracle.svm.shared.util.SubstrateUtil;
-import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
 import com.oracle.svm.core.jfr.events.ThreadCPULoadEvent;
 import com.oracle.svm.core.jfr.events.ThreadEndEvent;
 import com.oracle.svm.core.jfr.events.ThreadStartEvent;
 import com.oracle.svm.core.sampler.SamplerBuffer;
-import com.oracle.svm.core.sampler.SamplerBufferPool;
 import com.oracle.svm.core.sampler.SamplerStatistics;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.PlatformThreads;
@@ -53,9 +51,10 @@ import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
 import com.oracle.svm.core.threadlocal.FastThreadLocalLong;
 import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.util.SubstrateUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
-import org.graalvm.word.impl.Word;
 
 /**
  * This class holds various JFR-specific thread local values.
@@ -187,78 +186,6 @@ public class JfrThreadLocal implements ThreadListener {
         if (buffer.isNonNull()) {
             SubstrateJVM.getSamplerBufferPool().pushFullBuffer(buffer);
             samplerBuffer.set(isolateThread, Word.nullPointer());
-        }
-    }
-
-    @Uninterruptible(reason = "Accesses various JFR buffers.")
-    public static void stopRecordingAfterEmergencyDump(IsolateThread isolateThread, boolean freeJavaBuffer, SamplerBufferPool samplerBufferPool) {
-        /* Discard event buffers. The emergency dump file was already finalized. */
-        JfrBuffer nb = nativeBuffer.get(isolateThread);
-        nativeBuffer.set(isolateThread, Word.nullPointer());
-        discardBufferAndFree(nb);
-
-        JfrBuffer jb = javaBuffer.get(isolateThread);
-        if (freeJavaBuffer) {
-            javaBuffer.set(isolateThread, Word.nullPointer());
-            discardBufferAndFree(jb);
-        } else {
-            // Do not reset the thread local since we may need it to reinstate the buffer in the
-            // next recording.
-            discardBufferAndRetire(jb);
-        }
-
-        /* Clear the other event-related thread-locals. */
-        javaEventWriter.set(isolateThread, null);
-        dataLost.set(isolateThread, Word.unsigned(0));
-
-        /* Clear stacktrace-related thread-locals. */
-        missedSamples.set(isolateThread, 0);
-        unparseableStacks.set(isolateThread, 0);
-
-        SamplerBuffer buffer = samplerBuffer.get(isolateThread);
-        if (buffer.isNonNull()) {
-            samplerBufferPool.releaseBuffer(buffer);
-            samplerBuffer.set(isolateThread, Word.nullPointer());
-        }
-    }
-
-    @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
-    private static void discardBufferAndFree(JfrBuffer buffer) {
-        if (buffer.isNull()) {
-            return;
-        }
-
-        /* Retired buffers can be freed right away. */
-        JfrBufferNode node = buffer.getNode();
-        if (node.isNull()) {
-            assert JfrBufferAccess.isRetired(buffer);
-            JfrBufferAccess.free(buffer);
-            return;
-        }
-
-        /* Free the buffer but leave the node alive as it may still be needed. */
-        JfrBufferNodeAccess.lockNoTransition(node);
-        try {
-            node.setBuffer(Word.nullPointer());
-            JfrBufferAccess.free(buffer);
-        } finally {
-            JfrBufferNodeAccess.unlock(node);
-        }
-    }
-
-    @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
-    private static void discardBufferAndRetire(JfrBuffer buffer) {
-        assert VMOperation.isInProgressAtSafepoint();
-        if (buffer.isNull() || JfrBufferAccess.isRetired(buffer)) {
-            return;
-        }
-
-        JfrBufferNode node = buffer.getNode();
-        JfrBufferNodeAccess.lockNoTransition(node);
-        try {
-            JfrBufferAccess.setRetired(buffer);
-        } finally {
-            JfrBufferNodeAccess.unlock(node);
         }
     }
 
@@ -546,12 +473,7 @@ public class JfrThreadLocal implements ThreadListener {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static void increaseMissedSamples() {
-        missedSamples.set(getMissedSamples() + 1);
-    }
-
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public static long getMissedSamples() {
-        return missedSamples.get();
+        missedSamples.set(missedSamples.get() + 1);
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)

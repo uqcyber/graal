@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,6 +38,8 @@ import jdk.graal.compiler.api.test.Graal;
 import jdk.graal.compiler.core.test.GraalCompilerTest;
 import jdk.graal.compiler.hotspot.GraalHotSpotVMConfig;
 import jdk.graal.compiler.hotspot.HotSpotGraalRuntimeProvider;
+import jdk.graal.compiler.replacements.nodes.BigIntegerLeftShiftWorkerNode;
+import jdk.graal.compiler.replacements.nodes.BigIntegerRightShiftWorkerNode;
 import jdk.graal.compiler.runtime.RuntimeProvider;
 import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.code.InvalidInstalledCodeException;
@@ -182,7 +184,7 @@ public final class BigIntegerIntrinsicsTest extends HotSpotGraalCompilerTest {
     @Test
     public void testLeftShiftWorker() throws ClassNotFoundException {
         // Intrinsic must be available.
-        Assume.assumeTrue(config.bigIntegerLeftShiftWorker != 0L);
+        Assume.assumeTrue(isBigIntegerLeftShiftWorkerSupported());
 
         Class<?> javaclass = Class.forName("java.math.BigInteger");
 
@@ -210,14 +212,44 @@ public final class BigIntegerIntrinsicsTest extends HotSpotGraalCompilerTest {
         }
     }
 
+    @Test
+    public void testLeftShiftWorkerStubProbe() throws InvalidInstalledCodeException {
+        Assume.assumeTrue(isBigIntegerLeftShiftWorkerSupported());
+
+        int[] mag = randomInts(97);
+        mag[0] |= 1;
+        int shiftCount = 17;
+        int[] expected = shiftLeftExpected(mag, shiftCount);
+
+        ResolvedJavaMethod method = getResolvedJavaMethod(BigInteger.class, "shiftLeft", int[].class, int.class);
+        InstalledCode intrinsic = getCode(method, null, true, true, GraalCompilerTest.getInitialOptions());
+        assertTrue(intrinsic.isValid());
+        assertDeepEquals(expected, intrinsic.executeVarargs(mag, shiftCount));
+        intrinsic.invalidate();
+    }
+
     public static BigInteger bigIntegerLeftShiftWorker(BigInteger src, int n) {
         return src.shiftLeft(n);
     }
 
     @Test
+    public void testLeftShiftWorkerCompileOnly() throws InvalidInstalledCodeException {
+        Assume.assumeTrue(isBigIntegerLeftShiftWorkerSupported());
+
+        ResolvedJavaMethod method = getResolvedJavaMethod("bigIntegerLeftShiftWorkerCompileProbe");
+        InstalledCode intrinsic = getCode(method, null, true, true, GraalCompilerTest.getInitialOptions());
+        assertTrue(intrinsic.isValid());
+        intrinsic.invalidate();
+    }
+
+    public static BigInteger bigIntegerLeftShiftWorkerCompileProbe(BigInteger src) {
+        return src.shiftLeft(17);
+    }
+
+    @Test
     public void testRightShiftWorker() throws ClassNotFoundException {
         // Intrinsic must be available.
-        Assume.assumeTrue(config.bigIntegerLeftShiftWorker != 0L);
+        Assume.assumeTrue(isBigIntegerRightShiftWorkerSupported());
 
         Class<?> javaclass = Class.forName("java.math.BigInteger");
 
@@ -245,8 +277,79 @@ public final class BigIntegerIntrinsicsTest extends HotSpotGraalCompilerTest {
         }
     }
 
+    @Test
+    public void testRightShiftWorkerStubProbe() throws InvalidInstalledCodeException {
+        Assume.assumeTrue(isBigIntegerRightShiftWorkerSupported());
+
+        BigInteger big = new BigInteger(4096, rnd).setBit(4095);
+        int shiftCount = 17;
+        BigInteger expected = big.shiftRight(shiftCount);
+
+        ResolvedJavaMethod method = getResolvedJavaMethod(BigInteger.class, "shiftRightImpl", int.class);
+        InstalledCode intrinsic = getCode(method, null, true, true, GraalCompilerTest.getInitialOptions());
+        assertTrue(intrinsic.isValid());
+        assertDeepEquals(expected, intrinsic.executeVarargs(big, shiftCount));
+        intrinsic.invalidate();
+    }
+
     public static BigInteger bigIntegerRightShiftWorker(BigInteger src, int n) {
         return src.shiftRight(n);
+    }
+
+    @Test
+    public void testRightShiftWorkerCompileOnly() throws InvalidInstalledCodeException {
+        Assume.assumeTrue(isBigIntegerRightShiftWorkerSupported());
+
+        ResolvedJavaMethod method = getResolvedJavaMethod("bigIntegerRightShiftWorkerCompileProbe");
+        InstalledCode intrinsic = getCode(method, null, true, true, GraalCompilerTest.getInitialOptions());
+        assertTrue(intrinsic.isValid());
+        intrinsic.invalidate();
+    }
+
+    public static BigInteger bigIntegerRightShiftWorkerCompileProbe(BigInteger src) {
+        return src.shiftRight(17);
+    }
+
+    private static int[] randomInts(int length) {
+        int[] values = new int[length];
+        for (int i = 0; i < values.length; i++) {
+            values[i] = rnd.nextInt();
+        }
+        return values;
+    }
+
+    private static int[] shiftLeftExpected(int[] mag, int n) {
+        int nInts = n >>> 5;
+        int nBits = n & 0x1f;
+        int magLen = mag.length;
+        int[] newMag;
+
+        if (nBits == 0) {
+            newMag = new int[magLen + nInts];
+            System.arraycopy(mag, 0, newMag, 0, magLen);
+        } else {
+            int i = 0;
+            int nBits2 = 32 - nBits;
+            int highBits = mag[0] >>> nBits2;
+            if (highBits != 0) {
+                newMag = new int[magLen + nInts + 1];
+                newMag[i++] = highBits;
+            } else {
+                newMag = new int[magLen + nInts];
+            }
+            int numIter = magLen - 1;
+            leftShiftWorkerExpected(newMag, mag, i, nBits, numIter);
+            newMag[numIter + i] = mag[numIter] << nBits;
+        }
+        return newMag;
+    }
+
+    private static void leftShiftWorkerExpected(int[] newArr, int[] oldArr, int newIdx, int shiftCount, int numIter) {
+        int shiftCountRight = 32 - shiftCount;
+        int oldIdx = 0;
+        while (oldIdx < numIter) {
+            newArr[newIdx++] = (oldArr[oldIdx++] << shiftCount) | (oldArr[oldIdx] >>> shiftCountRight);
+        }
     }
 
     private class TestIntrinsic {
@@ -305,6 +408,14 @@ public final class BigIntegerIntrinsicsTest extends HotSpotGraalCompilerTest {
 
     private static BigInteger bigTwo = BigInteger.valueOf(2);
     private static Random rnd = GraalCompilerTest.getRandomInstance();
+
+    private boolean isBigIntegerLeftShiftWorkerSupported() {
+        return BigIntegerLeftShiftWorkerNode.isSupported(getTarget().arch);
+    }
+
+    private boolean isBigIntegerRightShiftWorkerSupported() {
+        return BigIntegerRightShiftWorkerNode.isSupported(getTarget().arch);
+    }
 
     private static BigInteger randomBig(int i) {
         return new BigInteger(rnd.nextInt(4096) + i2sz(i), rnd);

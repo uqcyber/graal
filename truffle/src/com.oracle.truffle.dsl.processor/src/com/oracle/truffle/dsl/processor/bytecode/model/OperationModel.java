@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -189,7 +189,6 @@ public class OperationModel implements PrettyPrintable {
 
     public OperationArgument[] operationBeginArguments = EMPTY_ARGUMENTS;
     public OperationArgument[] operationEndArguments = EMPTY_ARGUMENTS;
-    public boolean operationBeginArgumentVarArgs = false;
 
     public OperationModel(BytecodeDSLModel parent, int id, OperationKind kind, String name, String builderName, String javadoc) {
         this.parent = parent;
@@ -262,11 +261,6 @@ public class OperationModel implements PrettyPrintable {
             throw new AssertionError("operation already set");
         }
         instruction.operation = this;
-        return this;
-    }
-
-    public OperationModel setOperationBeginArgumentVarArgs(boolean varArgs) {
-        this.operationBeginArgumentVarArgs = varArgs;
         return this;
     }
 

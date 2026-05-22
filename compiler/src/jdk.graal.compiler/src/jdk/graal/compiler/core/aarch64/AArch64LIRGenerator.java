@@ -65,7 +65,9 @@ import jdk.graal.compiler.lir.aarch64.AArch64AtomicMove.CompareAndSwapOp;
 import jdk.graal.compiler.lir.aarch64.AArch64Base64DecodeOp;
 import jdk.graal.compiler.lir.aarch64.AArch64Base64EncodeOp;
 import jdk.graal.compiler.lir.aarch64.AArch64BigIntegerMulAddOp;
+import jdk.graal.compiler.lir.aarch64.AArch64BigIntegerLeftShiftOp;
 import jdk.graal.compiler.lir.aarch64.AArch64BigIntegerMultiplyToLenOp;
+import jdk.graal.compiler.lir.aarch64.AArch64BigIntegerRightShiftOp;
 import jdk.graal.compiler.lir.aarch64.AArch64BigIntegerSquareToLenOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ByteSwap;
 import jdk.graal.compiler.lir.aarch64.AArch64CacheWritebackOp;
@@ -715,7 +717,7 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
         return result;
     }
 
-    protected abstract int getVMPageSize();
+    protected abstract int getPageSizeForReadBoundaryCheck();
 
     protected int getSoftwarePrefetchHintDistance() {
         return -1;
@@ -724,7 +726,7 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     @Override
     public Variable emitCountPositives(EnumSet<?> runtimeCheckedCPUFeatures, Value array, Value length) {
         Variable result = newVariable(LIRKind.value(AArch64Kind.DWORD));
-        append(new AArch64CountPositivesOp(this, result, asAllocatable(array), asAllocatable(length), getVMPageSize(), getSoftwarePrefetchHintDistance()));
+        append(new AArch64CountPositivesOp(this, result, asAllocatable(array), asAllocatable(length), getPageSizeForReadBoundaryCheck(), getSoftwarePrefetchHintDistance()));
         return result;
     }
 
@@ -837,6 +839,40 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     @Override
     public void emitBigIntegerSquareToLen(Value x, Value len, Value z, Value zlen) {
         append(new AArch64BigIntegerSquareToLenOp(asAllocatable(x), asAllocatable(len), asAllocatable(z), asAllocatable(zlen)));
+    }
+
+    @Override
+    public void emitBigIntegerLeftShiftWorker(Value newArr, Value oldArr, Value newIdx, Value shiftCount, Value numIter) {
+        RegisterValue rNewArr = AArch64.r0.asValue(newArr.getValueKind());
+        RegisterValue rOldArr = AArch64.r1.asValue(oldArr.getValueKind());
+        RegisterValue rNewIdx = AArch64.r2.asValue(newIdx.getValueKind());
+        RegisterValue rShiftCount = AArch64.r3.asValue(shiftCount.getValueKind());
+        RegisterValue rNumIter = AArch64.r4.asValue(numIter.getValueKind());
+
+        emitMove(rNewArr, newArr);
+        emitMove(rOldArr, oldArr);
+        emitMove(rNewIdx, newIdx);
+        emitMove(rShiftCount, shiftCount);
+        emitMove(rNumIter, numIter);
+
+        append(new AArch64BigIntegerLeftShiftOp(rNewArr, rOldArr, rNewIdx, rShiftCount, rNumIter));
+    }
+
+    @Override
+    public void emitBigIntegerRightShiftWorker(Value newArr, Value oldArr, Value newIdx, Value shiftCount, Value numIter) {
+        RegisterValue rNewArr = AArch64.r0.asValue(newArr.getValueKind());
+        RegisterValue rOldArr = AArch64.r1.asValue(oldArr.getValueKind());
+        RegisterValue rNewIdx = AArch64.r2.asValue(newIdx.getValueKind());
+        RegisterValue rShiftCount = AArch64.r3.asValue(shiftCount.getValueKind());
+        RegisterValue rNumIter = AArch64.r4.asValue(numIter.getValueKind());
+
+        emitMove(rNewArr, newArr);
+        emitMove(rOldArr, oldArr);
+        emitMove(rNewIdx, newIdx);
+        emitMove(rShiftCount, shiftCount);
+        emitMove(rNumIter, numIter);
+
+        append(new AArch64BigIntegerRightShiftOp(rNewArr, rOldArr, rNewIdx, rShiftCount, rNumIter));
     }
 
     @Override

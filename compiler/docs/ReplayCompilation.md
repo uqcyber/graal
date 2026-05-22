@@ -162,8 +162,13 @@ The below command builds the PAPI bridge library using the PAPI library availabl
 ENABLE_PAPI_BRIDGE=true mx build --dependencies PAPI_BRIDGE
 ```
 
-The launcher accepts a comma-separated list of event names. The event counts are reported for every benchmark iteration.
+The launcher accepts a comma-separated list of event names. The event counts are collected for every replayed
+compilation separately and the per-iteration totals are reported.
 
 ```shell
 ENABLE_PAPI_BRIDGE=true mx replaycomp ./replay-files --benchmark --event-names PAPI_TOT_INS
 ```
+
+With `--benchmark --results-file=RESULTS_FILE`, the launcher writes a JSON array. Each replayed compilation produces a
+`compilation` record with identifying fields, metrics, and optional PAPI event counters. Each benchmark iteration also
+ends with an `iteration_total` record containing the aggregate metrics and events for that iteration.

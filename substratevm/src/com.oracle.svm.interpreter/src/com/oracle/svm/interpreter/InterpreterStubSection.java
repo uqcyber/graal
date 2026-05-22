@@ -86,6 +86,23 @@ import jdk.vm.ci.code.RegisterConfig;
 import jdk.vm.ci.code.ValueKindFactory;
 import jdk.vm.ci.meta.JavaKind;
 
+/**
+ * Generates and owns the machine-code stubs used to enter Crema interpreter methods from compiled
+ * code and from vtable dispatch.
+ *
+ * <p>
+ * The runtime entry helpers form an ABI boundary: while they are deciding whether a valid compiled
+ * entry point can be used, references may be held in locations that the GC does not describe and
+ * installed code must not be deoptimized between the entry-point lookup and the branch to that
+ * code. Those helpers therefore remain {@link Uninterruptible} until the slow path is known to be
+ * required.
+ *
+ * <p>
+ * When no compiled body is available, execution deliberately switches back to interruptible Java
+ * code before calling {@link Interpreter#execute(InterpreterResolvedJavaMethod, Object[])}. Guest
+ * Java exceptions are then propagated according to the normal interpreter entry-point contract, so
+ * callers observe the same exception they would have seen from a compiled call.
+ */
 @InternalVMMethod
 public abstract class InterpreterStubSection {
     @Platforms(Platform.HOSTED_ONLY.class) //

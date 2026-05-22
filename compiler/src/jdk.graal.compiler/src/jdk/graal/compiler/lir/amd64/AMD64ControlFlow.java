@@ -666,8 +666,7 @@ public class AMD64ControlFlow {
                         masm.cmpq(keyRegister, (AMD64Address) crb.asLongConstRef(jc));
                         break;
                     case Object:
-                        AMD64Move.const2reg(crb, masm, asRegister(scratch), jc, AMD64Kind.QWORD);
-                        masm.cmpptr(keyRegister, asRegister(scratch));
+                        emitObjectComparison(crb, masm, keyRegister, asRegister(scratch), jc);
                         break;
                     default:
                         throw new GraalError("switch only supported for int, long and object");
@@ -679,6 +678,11 @@ public class AMD64ControlFlow {
                 emitComparison(keyConstants[index]);
                 masm.jcc(intCond(condition), target);
             }
+        }
+
+        protected void emitObjectComparison(CompilationResultBuilder crb, AMD64MacroAssembler masm, Register keyRegister, Register scratchRegister, JavaConstant jc) {
+            AMD64Move.const2reg(crb, masm, scratchRegister, jc, AMD64Kind.QWORD);
+            masm.cmpptr(keyRegister, scratchRegister);
         }
     }
 

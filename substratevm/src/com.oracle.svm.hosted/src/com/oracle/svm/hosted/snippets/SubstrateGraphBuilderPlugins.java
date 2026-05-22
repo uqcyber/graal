@@ -53,7 +53,6 @@ import org.graalvm.word.UnsignedWord;
 import com.oracle.graal.pointsto.AbstractAnalysisEngine;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.ArenaIntrinsics;
-import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.MissingRegistrationSupport;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.ParsingReason;
@@ -1092,7 +1091,7 @@ public class SubstrateGraphBuilderPlugins {
         if (clazzOrHub instanceof Class<?> clazz) {
             return RuntimeAssertionsSupport.singleton().desiredAssertionStatus(clazz);
         } else if (clazzOrHub instanceof DynamicHub hub) {
-            return hub.desiredAssertionStatus();
+            return RuntimeAssertionsSupport.singleton().desiredAssertionStatus(hub.getHostedJavaClass());
         }
         return null;
     }
@@ -1254,7 +1253,7 @@ public class SubstrateGraphBuilderPlugins {
                     ValueNode compressedObj = SubstrateCompressionNode.compress(b.getGraph(), objectNode, ImageSingletons.lookup(CompressEncoding.class));
                     JavaKind compressedIntKind = JavaKind.fromWordSize(ObjectLayout.singleton().getReferenceSize());
                     ValueNode compressedValue = b.add(WordCastNode.narrowOopToUntrackedWord(compressedObj, compressedIntKind));
-                    b.addPush(JavaKind.Object, ZeroExtendNode.convertUnsigned(compressedValue, FrameAccess.getWordStamp(), NodeView.DEFAULT));
+                    b.addPush(JavaKind.Object, ZeroExtendNode.convertUnsigned(compressedValue, SubstrateTarget.getWordStamp(), NodeView.DEFAULT));
                 } else {
                     b.addPush(JavaKind.Object, WordCastNode.objectToUntrackedPointer(objectNode, SubstrateTarget.getWordKind()));
                 }

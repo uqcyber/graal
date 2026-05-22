@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,6 +37,7 @@ import com.oracle.svm.espresso.classfile.attributes.BootstrapMethodsAttribute;
 import com.oracle.svm.espresso.classfile.descriptors.Name;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
+import com.oracle.svm.interpreter.metadata.BytecodeStream;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedObjectType;
 
@@ -140,6 +141,40 @@ public final class ResolvedInvokeDynamicConstant {
 
     public CallSiteLink getCallSiteLink(int extraCPI) {
         return callSiteLinks[extraCPI - 1];
+    }
+
+    /**
+     * Returns the published call-site link for the exact bytecode location, or {@code null} if the
+     * site has not linked yet.
+     */
+    public CallSiteLink getCallSiteLink(InterpreterResolvedJavaMethod method, int bci) {
+        int extraCPI = getCallSiteLinkExtraCPI(method, bci);
+        if (extraCPI == 0) {
+            return null;
+        }
+        return getCallSiteLink(extraCPI);
+    }
+
+    /**
+     * Returns the published call-site link for {@code extraCPI}, retrying if the caller observed a
+     * partially patched extra CPI while the interpreter was publishing the linked call site.
+     *
+     * <p>
+     * {@link BytecodeStream#patchIndyExtraCPI(byte[], int, int)} writes the low 16-bit slot
+     * non-atomically. A racing parser or interpreter execution may therefore see only one of the
+     * two bytes and land on another already-published call-site link for the same
+     * {@code invokedynamic} constant. The {@link CallSiteLink#matchesCallSite} check filters out
+     * that transient value and retries until the bytecode view for {@code method}@{@code bci}
+     * exposes the full linked slot.
+     */
+    public CallSiteLink getCallSiteLink(InterpreterResolvedJavaMethod method, byte[] code, int bci, int extraCPI) {
+        int currentExtraCPI = extraCPI;
+        CallSiteLink link = getCallSiteLink(currentExtraCPI);
+        while (!link.matchesCallSite(method, bci)) {
+            currentExtraCPI = BytecodeStream.readIndyExtraCPIVolatile(code, bci);
+            link = getCallSiteLink(currentExtraCPI);
+        }
+        return link;
     }
 
     private CallSiteLink createCallSiteLink(RuntimeInterpreterConstantPool pool, Class<?> accessingKlass, InterpreterResolvedJavaMethod method, int bci) {

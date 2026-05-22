@@ -1599,7 +1599,12 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     private void createHandleExceptionTarget(FixedWithNextNode afterExceptionLoaded, int bci, FrameStateBuilder dispatchState) {
         FixedWithNextNode afterInstrumentation = afterExceptionLoaded;
         for (NodePlugin plugin : graphBuilderConfig.getPlugins().getNodePlugins()) {
-            afterInstrumentation = plugin.instrumentExceptionDispatch(graph, afterInstrumentation, () -> dispatchState.create(bci, getNonIntrinsicAncestor(), false, null, null));
+            /*
+             * Run instrumentation before createTarget so plugins can still update the mutable
+             * dispatch state that is used for exception-handler merge construction.
+             */
+            afterInstrumentation = plugin.instrumentExceptionDispatch(graph, bci, afterInstrumentation, dispatchState,
+                            () -> dispatchState.create(bci, getNonIntrinsicAncestor(), false, null, null));
             assert afterInstrumentation.next() == null : "exception dispatch instrumentation will be linked to dispatch block";
         }
 

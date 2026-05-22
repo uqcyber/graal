@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -58,6 +58,7 @@ import org.graalvm.wasm.WasmLanguage;
 import org.graalvm.wasm.WasmModule;
 import org.graalvm.wasm.WasmTable;
 import org.graalvm.wasm.WasmTag;
+import org.graalvm.wasm.WasmType;
 import org.graalvm.wasm.api.Dictionary;
 import org.graalvm.wasm.api.Executable;
 import org.graalvm.wasm.api.Sequence;
@@ -66,6 +67,8 @@ import org.graalvm.wasm.exception.WasmJsApiException;
 import org.graalvm.wasm.globals.WasmGlobal;
 import org.graalvm.wasm.memory.WasmMemory;
 import org.graalvm.wasm.memory.WasmMemoryLibrary;
+import org.graalvm.wasm.parser.bytecode.BytecodeParser;
+import org.graalvm.wasm.parser.ir.CodeEntry;
 import org.graalvm.wasm.test.WasmTestUtils;
 import org.graalvm.wasm.types.FunctionType;
 import org.graalvm.wasm.types.NumberType;
@@ -571,5 +574,50 @@ public class MultiInstantiationSuite {
                 Assert.assertEquals("Return value of main", List.of(42L, 6, 8, 2.72), List.copyOf(result2.as(List.class)));
             });
         }
+    }
+
+    // Tests that exercise the BytecodeParser#readCodeEntries code path that is used when
+    // instantiating a module multiple times.
+    @Test
+    public void testRereadCodeEntryWithDefinedTypeZeroParam() throws IOException, InterruptedException {
+        CodeEntry[] codeEntries = readCodeEntries(WasmBinaryTools.compileWat("main", """
+                        (module
+                          (type (;0;) (func))
+                          (type (;1;) (func (param (ref 0))))
+                          (func (type 0))
+                          (func (type 1) (param (ref 0))
+                            local.get 0
+                            drop)
+                        )
+                        """, EnumSet.of(WasmBinaryTools.WabtOption.FUNCTION_REFERENCES)));
+
+        Assert.assertArrayEquals(new int[]{WasmType.withNullable(false, 0)}, codeEntries[1].localTypes());
+    }
+
+    @Test
+    public void testRereadCodeEntryWithDefinedTypeZeroResult() throws IOException, InterruptedException {
+        CodeEntry[] codeEntries = readCodeEntries(WasmBinaryTools.compileWat("main", """
+                        (module
+                          (type (;0;) (func))
+                          (type (;1;) (func (result (ref 0))))
+                          (func (type 0))
+                          (func (type 1) (result (ref 0))
+                            unreachable)
+                        )
+                        """, EnumSet.of(WasmBinaryTools.WabtOption.FUNCTION_REFERENCES)));
+
+        Assert.assertArrayEquals(new int[]{WasmType.withNullable(false, 0)}, codeEntries[1].resultTypes());
+    }
+
+    private static CodeEntry[] readCodeEntries(byte[] binary) {
+        CodeEntry[][] codeEntries = new CodeEntry[1][];
+        try (Context context = Context.newBuilder(WasmLanguage.ID).build()) {
+            WasmTestUtils.runInWasmContext(context, c -> {
+                WebAssembly wasm = new WebAssembly(c);
+                WasmModule module = wasm.moduleDecode(binary);
+                codeEntries[0] = BytecodeParser.readCodeEntries(module);
+            });
+        }
+        return codeEntries[0];
     }
 }

@@ -42,16 +42,30 @@
 package org.graalvm.wasm.parser.validation;
 
 import org.graalvm.wasm.constants.ExceptionHandlerType;
+import org.graalvm.wasm.parser.bytecode.BytecodeFixup;
 
 /**
  * Representation of an exception handler during parsing.
+ *
+ * <pre>
+ * Encoded exception-table layout:
+ *
+ *   from | to | type | tag | target
+ *
+ * Field meanings by handler kind:
+ *   CATCH, CATCH_REF, CATCH_ALL, CATCH_ALL_REF, LEGACY_CATCH, LEGACY_CATCH_ALL:
+ *     target = transfer destination bytecode offset
+ *
+ *   LEGACY_DELEGATE:
+ *     target = exception-table search continuation offset
+ * </pre>
  */
-public final class ExceptionHandler {
+public final class ExceptionHandler implements BytecodeFixup {
     /** {@link ExceptionHandlerType}. */
     private final int type;
-    /** Tag index. */
+    /** Tag index expected by typed catches, or {@code -1} when no tag match is required. */
     private final int tag;
-    /** Target label bytecode offset. */
+    /** Transfer destination bytecode offset, or exception-table continuation offset. */
     private int target = -1;
 
     public ExceptionHandler(int type, int tag) {
@@ -59,10 +73,21 @@ public final class ExceptionHandler {
         this.tag = tag;
     }
 
+    public ExceptionHandler(int type, int tag, int target) {
+        this(type, tag);
+        this.target = target;
+    }
+
+    /**
+     * Returns the encoded handler kind.
+     */
     public int type() {
         return type;
     }
 
+    /**
+     * Returns the tag index matched by typed catches, or {@code -1} for untyped handlers.
+     */
     public int tag() {
         return tag;
     }
@@ -71,8 +96,9 @@ public final class ExceptionHandler {
         return target;
     }
 
-    public void setTarget(int target) {
-        this.target = target;
+    @Override
+    public void patch(int targetOffset) {
+        this.target = targetOffset;
     }
 
     @Override

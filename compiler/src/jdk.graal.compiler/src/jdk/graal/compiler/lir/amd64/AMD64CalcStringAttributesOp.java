@@ -248,7 +248,7 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
         // tail for 0 - 1 bytes
         asm.testlAndJcc(lengthTail, lengthTail, Zero, returnAscii, true);
         asm.movzbq(len, new AMD64Address(arr));
-        asm.testAndJcc(AMD64BaseAssembler.OperandSize.QWORD, len, 0x80, NotZero, returnLatin1, true);
+        asm.testAndJcc(AMD64BaseAssembler.OperandSize.QWORD, len, 0x80, NotZero, returnLatin1, false);
         asm.jmpb(returnAscii);
 
         emitExitAtEnd(asm, ret, returnAscii, end, CalcStringAttributesEncoding.CR_7BIT);
@@ -361,7 +361,7 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
         // create bmp mask 0xff00
         asm.psllw(vectorSize, vecMaskBMP, vecMaskAscii, 1);
 
-        vectorLoopPrologue(asm, arr, len, lengthTail, tailLessThan32, tailLessThan16, true);
+        vectorLoopPrologue(asm, arr, len, lengthTail, tailLessThan32, tailLessThan16, false);
 
         // ascii loop: check if all chars are |<| 0x80 with PTEST mask 0xff80
         emitPTestLoop(crb, asm, arr, len, vecArray, vecMaskAscii, latin1Entry);
@@ -377,9 +377,9 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
             bmpTail(asm, arr, lengthTail, vecArray, vecMaskAscii, vecMaskBMP, tailLessThan32, tailLessThan16, returnBMP, returnLatin1, returnAscii);
         }
 
-        emitExit(asm, ret, returnAscii, end, CalcStringAttributesEncoding.CR_7BIT);
-        emitExit(asm, ret, returnLatin1, end, CalcStringAttributesEncoding.CR_8BIT);
-        emitExit(asm, ret, returnBMP, end, CalcStringAttributesEncoding.CR_16BIT);
+        emitExit(asm, ret, returnAscii, end, CalcStringAttributesEncoding.CR_7BIT, false);
+        emitExit(asm, ret, returnLatin1, end, CalcStringAttributesEncoding.CR_8BIT, false);
+        emitExit(asm, ret, returnBMP, end, CalcStringAttributesEncoding.CR_16BIT, false);
 
         asm.bind(tailLessThan16);
         // move masks into general purpose registers for regular TEST instructions
@@ -393,11 +393,11 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
         asm.bind(tailLessThan4);
         // tail for 0 - 3 bytes
         // since we're on a 2-byte stride, the only possible lengths are 0 and 2 bytes
-        asm.testlAndJcc(lengthTail, lengthTail, Zero, returnAscii, true);
+        asm.testlAndJcc(lengthTail, lengthTail, Zero, returnAscii, false);
         asm.movzwq(len, new AMD64Address(arr));
-        asm.testAndJcc(AMD64BaseAssembler.OperandSize.QWORD, len, 0xff80, Zero, returnAscii, true);
-        asm.testAndJcc(AMD64BaseAssembler.OperandSize.QWORD, len, 0xff00, Zero, returnLatin1, true);
-        asm.jmpb(returnBMP);
+        asm.testAndJcc(AMD64BaseAssembler.OperandSize.QWORD, len, 0xff80, Zero, returnAscii, false);
+        asm.testAndJcc(AMD64BaseAssembler.OperandSize.QWORD, len, 0xff00, Zero, returnLatin1, false);
+        asm.jmp(returnBMP);
 
         asm.bind(end);
     }
@@ -429,11 +429,12 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
 
         // ascii
         emitTestCurr(asm, size, arr, maskAscii, null, latin1Cur);
-        emitTestTail(asm, size, arr, lengthTail, maskAscii, null, latin1Tail, returnAscii);
+        emitTestTail(asm, size, arr, lengthTail, maskAscii, null, latin1Tail, returnAscii, true, size != AMD64BaseAssembler.OperandSize.DWORD);
 
         // latin1
         emitTestCurr(asm, size, arr, maskBMP, latin1Cur, returnBMP);
-        emitTestTail(asm, size, arr, lengthTail, maskBMP, latin1Tail, returnBMP, returnLatin1);
+        emitTestTail(asm, size, arr, lengthTail, maskBMP, latin1Tail, returnBMP, returnLatin1, size != AMD64BaseAssembler.OperandSize.DWORD,
+                        size != AMD64BaseAssembler.OperandSize.DWORD);
     }
 
     private static void emitTestCurr(AMD64MacroAssembler asm, AMD64BaseAssembler.OperandSize size, Register arr, Register mask, Label entry, Label match) {
@@ -441,12 +442,13 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
         asm.testAndJcc(size, mask, new AMD64Address(arr), NotZero, match, true);
     }
 
-    private void emitTestTail(AMD64MacroAssembler asm, AMD64BaseAssembler.OperandSize size, Register arr, Register lengthTail, Register mask, Label entry, Label match, Label noMatch) {
+    private void emitTestTail(AMD64MacroAssembler asm, AMD64BaseAssembler.OperandSize size, Register arr, Register lengthTail, Register mask, Label entry, Label match, Label noMatch,
+                    boolean isShortMatchJmp, boolean isShortNoMatchJmp) {
         // tail: align the last vector load to the end of the array, overlapping with the
         // main loop's last load
         bind(asm, entry);
-        asm.testAndJcc(size, mask, new AMD64Address(arr, lengthTail, stride, -size.getBytes()), NotZero, match, true);
-        asm.jmpb(noMatch);
+        asm.testAndJcc(size, mask, new AMD64Address(arr, lengthTail, stride, -size.getBytes()), NotZero, match, isShortMatchJmp);
+        asm.jmp(noMatch, isShortNoMatchJmp);
     }
 
     private static final byte TOO_SHORT = 1 << 0;
@@ -746,7 +748,7 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
             if (supportsAVX2AndYMM()) {
                 asm.cmplAndJcc(lengthTail, 16, Less, tailLessThan16, true);
                 loadLessThan32IntoYMMOrdered(crb, asm, stride, xmmTailShuffleMask, arr, lengthTail, tmp, vecArray, vecTmp1, vecTmp2);
-                asm.jmp(tailSingleVector);
+                asm.jmpb(tailSingleVector);
                 asm.bind(tailLessThan16);
             }
             asm.cmplAndJcc(lengthTail, 8, Less, tailLessThan8, true);
@@ -1482,7 +1484,7 @@ public final class AMD64CalcStringAttributesOp extends AMD64ComplexVectorOp {
         asm.bind(entry);
         asm.shlq(ret, 32);
         asm.orq(ret, returnValue);
-        asm.jmpb(end);
+        asm.jmp(end);
     }
 
     private static void emitExitMultiByteAtEnd(AMD64MacroAssembler asm, Register ret, Label entry, Label end, int returnValue) {
