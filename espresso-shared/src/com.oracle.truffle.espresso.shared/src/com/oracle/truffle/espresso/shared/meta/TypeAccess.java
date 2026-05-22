@@ -130,7 +130,7 @@ public interface TypeAccess<C extends TypeAccess<C, M, F>, M extends MethodAcces
      *
      * @see Tables#getImplicitInterfaceMethods()
      * @implNote If this type's VTable was created using
-     *           {@link VTable#create(PartialType, boolean, boolean, boolean)}, this method can
+     *           {@link VTable#create(PartialType)}, this method can
      *           simply return the result of {@link Tables#getImplicitInterfaceMethods()}
      */
     List<M> getImplicitInterfaceMethodsList();

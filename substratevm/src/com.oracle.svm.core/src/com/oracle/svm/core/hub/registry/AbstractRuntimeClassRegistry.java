@@ -255,9 +255,8 @@ public abstract sealed class AbstractRuntimeClassRegistry extends AbstractClassR
         ClassLoader classLoader = getClassLoader();
         ByteSequence pkgString = TypeSymbols.getRuntimePackage(type);
         Module module = findModule(pkgString);
-
         String externalName = getExternalName(parsed, info);
-        CremaSupport.singleton().verifySuperAccesses(externalName, getClassLoader(), pkgString, module, superClass, superInterfaces);
+        CremaSupport.singleton().verifySuperAccesses(externalName, parsed.getName(), parsed.getFlags(), getClassLoader(), pkgString, module, superClass, superInterfaces);
         DynamicHub hub = CremaSupport.singleton().createHub(parsed, info, typeID, externalName, module, classLoader, superClass, superInterfaces);
         return DynamicHub.toClass(hub);
     }

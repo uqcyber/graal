@@ -51,6 +51,7 @@ import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTarget;
+import com.oracle.svm.core.graal.nodes.ComputedIndirectCallTargetNode;
 import com.oracle.svm.core.graal.nodes.DeoptEntryNode;
 import com.oracle.svm.core.graal.nodes.DeoptEntrySupport;
 import com.oracle.svm.core.graal.nodes.DeoptProxyAnchorNode;
@@ -455,10 +456,29 @@ public class RuntimeCompiledMethodSupport {
 
         @Override
         protected Object replaceObjectForEncoding(Object object) {
+            if (object instanceof ComputedIndirectCallTargetNode.Computation[] computations) {
+                /*
+                 * Keep the node data array identity stable for graph encoding verification while
+                 * normalizing nested constants for runtime compilation.
+                 */
+                replaceAddressComputationConstants(computations);
+            }
             if (object instanceof ImageHeapConstant heapConstant) {
                 return SubstrateGraalUtils.hostedToRuntime(heapConstant, heapScanner.getConstantReflection());
             }
             return object;
+        }
+
+        private void replaceAddressComputationConstants(ComputedIndirectCallTargetNode.Computation[] computations) {
+            for (int i = 0; i < computations.length; i++) {
+                if (computations[i] instanceof ComputedIndirectCallTargetNode.FieldLoadIfZero fieldLoadIfZero) {
+                    JavaConstant hostedObject = fieldLoadIfZero.getObject();
+                    JavaConstant runtimeObject = SubstrateGraalUtils.hostedToRuntime(hostedObject, heapScanner.getConstantReflection());
+                    if (!runtimeObject.equals(hostedObject)) {
+                        computations[i] = new ComputedIndirectCallTargetNode.FieldLoadIfZero(runtimeObject, fieldLoadIfZero.getField());
+                    }
+                }
+            }
         }
     }
 

@@ -57,7 +57,7 @@ public class TestEmergencyDumpMetadataOnly extends JfrRecordingTest {
         Files.deleteIfExists(dumpFile);
 
         Recording recording = startRecording(events);
-        SubstrateJVM.get().vmOutOfMemoryErrorRotation();
+        SubstrateJVM.get().dumpOnOutOfMemoryError();
         recording.stop();
         recording.close();
 

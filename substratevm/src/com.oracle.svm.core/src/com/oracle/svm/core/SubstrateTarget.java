@@ -44,6 +44,8 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.core.common.type.Stamp;
+import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.vm.ci.code.Architecture;
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.meta.JavaKind;
@@ -68,6 +70,10 @@ public class SubstrateTarget extends TargetDescription {
     @Fold
     public static Architecture getArchitecture() {
         return singleton().arch;
+    }
+
+    public static Stamp getWordStamp() {
+        return StampFactory.forKind(getWordKind());
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)

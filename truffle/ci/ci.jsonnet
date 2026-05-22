@@ -267,7 +267,7 @@
     ),
 
     # Truffle Coverage
-    [linux_amd64 + weekly + jdk_21_oracle + truffle_coverage],
+    [linux_amd64 + weekly + jdk_latest_oracle + truffle_coverage],
 
     # Truffle Benchmarks
     [linux_amd64  + tier3  + jdk_latest_labs + jmh_benchmark_test],

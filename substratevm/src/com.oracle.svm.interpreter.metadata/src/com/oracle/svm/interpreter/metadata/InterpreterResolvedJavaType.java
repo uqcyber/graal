@@ -34,6 +34,7 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.WordBase;
 
 import com.oracle.svm.core.SubstrateMetadata;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.espresso.classfile.descriptors.Name;
@@ -230,6 +231,57 @@ public abstract class InterpreterResolvedJavaType extends InterpreterAnnotated i
     @Override
     public abstract InterpreterResolvedJavaMethod[] getDeclaredMethods(boolean forceLink);
 
+    /**
+     * Resolves the target using the same metadata shape that interpreter dispatch uses.
+     */
+    private InterpreterResolvedJavaMethod resolveMethod(InterpreterResolvedJavaMethod method) {
+        /*
+         * This query asks which implementation a concrete receiver class would dispatch to for the
+         * seed method. Interface types do not own such a class dispatch table, and unrelated
+         * receiver classes may have an arbitrary method at the same vtable index.
+         */
+        if (isInterface() || !method.getDeclaringClass().isAssignableFrom(this)) {
+            return null;
+        }
+        if (method.canBeStaticallyBound()) {
+            return method;
+        }
+        if (method.hasDispatchIndex()) {
+            /*
+             * Virtual and interface methods publish a dispatch index into the runtime-loaded
+             * receiver's interpreter vtable.
+             */
+            return resolveInterpreterDispatch(method);
+        }
+        if (method.isDevirtualized()) {
+            return method.devirtualizationTarget();
+        }
+        return null;
+    }
+
+    private InterpreterResolvedJavaMethod resolveInterpreterDispatch(InterpreterResolvedJavaMethod method) {
+        if (isArray()) {
+            /*
+             * Interpreter virtual dispatch keeps array receivers on the seed method because arrays
+             * do not have an interpreter vtable.
+             */
+            return method;
+        }
+        if (!(this instanceof InterpreterResolvedObjectType receiverType)) {
+            return null;
+        }
+        /*
+         * Interface dispatch indices are relative to the receiver's interface table in open type
+         * world images; closed type world images and virtual dispatch already use direct vtable
+         * indices.
+         */
+        int vtableIndex = method.getVTableIndex();
+        if (!SubstrateOptions.useClosedTypeWorldHubLayout() && method.getDeclaringClass().isInterface()) {
+            vtableIndex += receiverType.determineITableStartingIndex(method.getDeclaringClass());
+        }
+        return receiverType.lookupVTableEntry(vtableIndex);
+    }
+
     @Override
     public final boolean isMagicAccessor() {
         return false;
@@ -341,7 +393,10 @@ public abstract class InterpreterResolvedJavaType extends InterpreterAnnotated i
 
     @Override
     public final ResolvedJavaMethod resolveMethod(ResolvedJavaMethod method, ResolvedJavaType callerType) {
-        throw VMError.intentionallyUnimplemented();
+        if (method instanceof InterpreterResolvedJavaMethod interpreterMethod) {
+            return resolveMethod(interpreterMethod);
+        }
+        return null;
     }
 
     @Override

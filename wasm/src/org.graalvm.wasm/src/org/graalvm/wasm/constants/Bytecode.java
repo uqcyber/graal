@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -405,18 +405,24 @@ public class Bytecode {
     // Misc - Exception opcodes
     public static final int THROW = 0x1B;
     public static final int THROW_REF = 0x1C;
+    public static final int RETHROW = 0x1D;
+    public static final int LEGACY_CATCH_DROP = 0x1E;
+    public static final int LEGACY_CATCH_UNWIND = 0x27;
+    public static final int LEGACY_SKIP_LABEL_U8 = 0x28;
+    public static final int LEGACY_SKIP_LABEL_U16 = 0x29;
+    public static final int LEGACY_SKIP_LABEL_I32 = 0x2A;
 
     // Misc - Typed function references opcodes
-    public static final int TABLE_GET = 0x1D;
-    public static final int TABLE_SET = 0x1E;
-    public static final int REF_AS_NON_NULL = 0x1F;
-    public static final int BR_ON_NULL_U8 = 0x20;
-    public static final int BR_ON_NULL_I32 = 0x21;
-    public static final int BR_ON_NON_NULL_U8 = 0x22;
-    public static final int BR_ON_NON_NULL_I32 = 0x23;
+    public static final int TABLE_GET = 0x1F;
+    public static final int TABLE_SET = 0x20;
+    public static final int REF_AS_NON_NULL = 0x21;
+    public static final int BR_ON_NULL_U8 = 0x22;
+    public static final int BR_ON_NULL_I32 = 0x23;
+    public static final int BR_ON_NON_NULL_U8 = 0x24;
+    public static final int BR_ON_NON_NULL_I32 = 0x25;
 
     // Misc - GC opcodes
-    public static final int REF_EQ = 0x24;
+    public static final int REF_EQ = 0x26;
 
     // Atomic opcodes
     public static final int ATOMIC_I32_LOAD = 0x00;

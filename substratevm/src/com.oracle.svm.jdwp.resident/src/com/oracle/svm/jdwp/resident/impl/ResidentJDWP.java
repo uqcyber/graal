@@ -48,8 +48,8 @@ import com.oracle.svm.core.thread.ThreadsLock;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.espresso.shared.resolver.CallKind;
 import com.oracle.svm.interpreter.DebuggerSupport;
-import com.oracle.svm.interpreter.EspressoFrame;
 import com.oracle.svm.interpreter.InterpreterFrame;
+import com.oracle.svm.interpreter.InterpreterFrameUtil;
 import com.oracle.svm.interpreter.InterpreterToVM;
 import com.oracle.svm.interpreter.SemanticJavaException;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaField;
@@ -1209,7 +1209,7 @@ public final class ResidentJDWP implements JDWP {
                 thisObject = null;
             } else {
                 InterpreterFrame interpreterFrame = (InterpreterFrame) interpreterJavaFrameInfo.getInterpreterFrame();
-                thisObject = EspressoFrame.getThis(interpreterFrame);
+                thisObject = InterpreterFrameUtil.getThis(interpreterFrame);
             }
         } else {
             FrameInfoQueryResult frameInfoQueryResult = (FrameInfoQueryResult) frameSourceInfo;
@@ -1632,42 +1632,42 @@ public final class ResidentJDWP implements JDWP {
         InterpreterFrame interpreterFrame = (InterpreterFrame) interpreterJavaFrameInfo.getInterpreterFrame();
         switch (tag) {
             case TagConstants.BYTE -> {
-                int value = EspressoFrame.getLocalInt(interpreterFrame, slot);
+                int value = InterpreterFrameUtil.getLocalInt(interpreterFrame, slot);
                 writer.writeByte(TagConstants.BYTE);
                 writer.writeByte((byte) value);
             }
             case TagConstants.BOOLEAN -> {
-                int value = EspressoFrame.getLocalInt(interpreterFrame, slot);
+                int value = InterpreterFrameUtil.getLocalInt(interpreterFrame, slot);
                 writer.writeByte(TagConstants.BOOLEAN);
                 writer.writeBoolean(value != 0);
             }
             case TagConstants.SHORT -> {
-                int value = EspressoFrame.getLocalInt(interpreterFrame, slot);
+                int value = InterpreterFrameUtil.getLocalInt(interpreterFrame, slot);
                 writer.writeByte(TagConstants.SHORT);
                 writer.writeShort((short) value);
             }
             case TagConstants.CHAR -> {
-                int value = EspressoFrame.getLocalInt(interpreterFrame, slot);
+                int value = InterpreterFrameUtil.getLocalInt(interpreterFrame, slot);
                 writer.writeByte(TagConstants.CHAR);
                 writer.writeChar((char) value);
             }
             case TagConstants.INT -> {
-                int value = EspressoFrame.getLocalInt(interpreterFrame, slot);
+                int value = InterpreterFrameUtil.getLocalInt(interpreterFrame, slot);
                 writer.writeByte(TagConstants.INT);
                 writer.writeInt(value);
             }
             case TagConstants.LONG -> {
-                long value = EspressoFrame.getLocalLong(interpreterFrame, slot);
+                long value = InterpreterFrameUtil.getLocalLong(interpreterFrame, slot);
                 writer.writeByte(TagConstants.LONG);
                 writer.writeLong(value);
             }
             case TagConstants.FLOAT -> {
-                float value = EspressoFrame.getLocalFloat(interpreterFrame, slot);
+                float value = InterpreterFrameUtil.getLocalFloat(interpreterFrame, slot);
                 writer.writeByte(TagConstants.FLOAT);
                 writer.writeFloat(value);
             }
             case TagConstants.DOUBLE -> {
-                double value = EspressoFrame.getLocalDouble(interpreterFrame, slot);
+                double value = InterpreterFrameUtil.getLocalDouble(interpreterFrame, slot);
                 writer.writeByte(TagConstants.DOUBLE);
                 writer.writeDouble(value);
             }
@@ -1676,7 +1676,7 @@ public final class ResidentJDWP implements JDWP {
                 // Write nothing here.
             }
             default -> {
-                Object value = EspressoFrame.getLocalObject(interpreterFrame, slot);
+                Object value = InterpreterFrameUtil.getLocalObject(interpreterFrame, slot);
                 writeTaggedObject(writer, value);
             }
         }
@@ -1852,16 +1852,16 @@ public final class ResidentJDWP implements JDWP {
         InterpreterFrame interpreterFrame = (InterpreterFrame) interpreterJavaFrameInfo.getInterpreterFrame();
         // @formatter:off
         switch (tag) {
-            case TagConstants.BYTE    -> EspressoFrame.setLocalInt(interpreterFrame, slot, (byte) reader.readByte());
-            case TagConstants.BOOLEAN -> EspressoFrame.setLocalInt(interpreterFrame, slot, reader.readBoolean() ? 1 : 0);
-            case TagConstants.SHORT   -> EspressoFrame.setLocalInt(interpreterFrame, slot, reader.readShort());
-            case TagConstants.CHAR    -> EspressoFrame.setLocalInt(interpreterFrame, slot, reader.readChar());
-            case TagConstants.INT     -> EspressoFrame.setLocalInt(interpreterFrame, slot, reader.readInt());
-            case TagConstants.LONG    -> EspressoFrame.setLocalLong(interpreterFrame, slot, reader.readLong());
-            case TagConstants.FLOAT   -> EspressoFrame.setLocalFloat(interpreterFrame, slot, reader.readFloat());
-            case TagConstants.DOUBLE  -> EspressoFrame.setLocalDouble(interpreterFrame, slot, reader.readDouble());
+            case TagConstants.BYTE    -> InterpreterFrameUtil.setLocalInt(interpreterFrame, slot, (byte) reader.readByte());
+            case TagConstants.BOOLEAN -> InterpreterFrameUtil.setLocalInt(interpreterFrame, slot, reader.readBoolean() ? 1 : 0);
+            case TagConstants.SHORT   -> InterpreterFrameUtil.setLocalInt(interpreterFrame, slot, reader.readShort());
+            case TagConstants.CHAR    -> InterpreterFrameUtil.setLocalInt(interpreterFrame, slot, reader.readChar());
+            case TagConstants.INT     -> InterpreterFrameUtil.setLocalInt(interpreterFrame, slot, reader.readInt());
+            case TagConstants.LONG    -> InterpreterFrameUtil.setLocalLong(interpreterFrame, slot, reader.readLong());
+            case TagConstants.FLOAT   -> InterpreterFrameUtil.setLocalFloat(interpreterFrame, slot, reader.readFloat());
+            case TagConstants.DOUBLE  -> InterpreterFrameUtil.setLocalDouble(interpreterFrame, slot, reader.readDouble());
             case TagConstants.VOID -> { } // nothing
-            default -> EspressoFrame.setLocalObject(interpreterFrame, slot, readReferenceOrNull(reader));
+            default -> InterpreterFrameUtil.setLocalObject(interpreterFrame, slot, readReferenceOrNull(reader));
         }
         // @formatter:on
     }

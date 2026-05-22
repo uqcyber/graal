@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,6 +42,8 @@ package com.oracle.truffle.api.bytecode.test;
 
 import static org.junit.Assert.assertEquals;
 
+import java.util.Set;
+
 import org.junit.Test;
 
 import com.oracle.truffle.api.bytecode.BytecodeConfig;
@@ -69,6 +71,54 @@ public class RootNodeOverridesTest {
     private static RootNodeWithParentOverrides parseRootNodeWithParentOverrides(BytecodeParser<RootNodeWithParentOverridesGen.Builder> builder) {
         BytecodeRootNodes<RootNodeWithParentOverrides> nodes = RootNodeWithParentOverridesGen.create(LANGUAGE, BytecodeConfig.DEFAULT, builder);
         return nodes.getNode(0);
+    }
+
+    @Test
+    public void testPrepareForCall() {
+        RootNodeWithOverrides root = parseRootNodeWithOverrides(b -> {
+            b.beginRoot();
+            b.beginReturn();
+            b.emitLoadConstant(42L);
+            b.endReturn();
+            b.endRoot();
+        });
+
+        assertEquals(0, root.prepareForCallCount);
+        root.getCallTarget();
+        assertEquals(1, root.prepareForCallCount);
+        root.getCallTarget();
+        assertEquals(1, root.prepareForCallCount);
+    }
+
+    @Test
+    public void testIsInstrumentable() {
+        RootNodeWithOverrides root = parseRootNodeWithOverrides(b -> {
+            b.beginRoot();
+            b.beginReturn();
+            b.emitLoadConstant(42L);
+            b.endReturn();
+            b.endRoot();
+        });
+
+        root.instrumentable = false;
+        assertEquals(false, root.isInstrumentable());
+        root.instrumentable = true;
+        assertEquals(true, root.isInstrumentable());
+    }
+
+    @Test
+    public void testPrepareForInstrumentation() {
+        RootNodeWithOverrides root = parseRootNodeWithOverrides(b -> {
+            b.beginRoot();
+            b.beginReturn();
+            b.emitLoadConstant(42L);
+            b.endReturn();
+            b.endRoot();
+        });
+
+        assertEquals(0, root.prepareForInstrumentationCount);
+        root.prepareForInstrumentation(Set.of());
+        assertEquals(1, root.prepareForInstrumentationCount);
     }
 
     @Test
@@ -171,9 +221,12 @@ public class RootNodeOverridesTest {
         }
     }
 
-    @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableUncachedInterpreter = true)
+    @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableUncachedInterpreter = true, enableTagInstrumentation = true)
     abstract static class RootNodeWithOverrides extends RootNode implements BytecodeRootNode {
         public boolean readyForCompilation = false;
+        public boolean instrumentable = true;
+        public int prepareForCallCount = 0;
+        public int prepareForInstrumentationCount = 0;
 
         protected RootNodeWithOverrides(BytecodeDSLTestLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -191,6 +244,24 @@ public class RootNodeOverridesTest {
         @Override
         public boolean prepareForCompilation(boolean rootCompilation, int compilationTier, boolean lastTier) {
             return readyForCompilation;
+        }
+
+        // The generated code should delegate to this method.
+        @Override
+        public void prepareForCall() {
+            prepareForCallCount++;
+        }
+
+        // The generated code should delegate to this method.
+        @Override
+        public boolean isInstrumentable() {
+            return instrumentable;
+        }
+
+        // The generated code should delegate to this method.
+        @Override
+        public void prepareForInstrumentation(Set<Class<?>> tags) {
+            prepareForInstrumentationCount++;
         }
 
     }

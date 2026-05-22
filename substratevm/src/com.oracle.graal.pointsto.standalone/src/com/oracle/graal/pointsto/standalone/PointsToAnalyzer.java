@@ -99,8 +99,11 @@ public final class PointsToAnalyzer {
      * based on espresso guest context.
      */
     private static final String DEFAULT_VM_ACCESS_NAME = "espresso";
-    private static final String VM_ACCESS_MODULE_PATH_PROPERTY = "com.oracle.graal.pointsto.standalone.vmaccess.modulepath";
-    private static final String VM_ACCESS_UPGRADE_MODULE_PATH_PROPERTY = "com.oracle.graal.pointsto.standalone.vmaccess.upgrade.modulepath";
+    private static final String VM_ACCESS_PROPERTY_PREFIX = "com.oracle.graal.pointsto.standalone.vmaccess.";
+    private static final String VM_ACCESS_MODULE_PATH_PROPERTY = VM_ACCESS_PROPERTY_PREFIX + "modulepath";
+    private static final String VM_ACCESS_UPGRADE_MODULE_PATH_PROPERTY = VM_ACCESS_PROPERTY_PREFIX + "upgrade.modulepath";
+    private static final String VM_ACCESS_JAVA_HOME_PROPERTY = VM_ACCESS_PROPERTY_PREFIX + "java.home";
+    private static final String VM_ACCESS_NAME_PROPERTY = VM_ACCESS_PROPERTY_PREFIX + "name";
     private static final List<String> BASE_VM_ACCESS_MODULES = List.of("jdk.graal.compiler", "java.scripting");
     private static final String ESPRESSO_LOG_LEVEL_PROPERTY = "espresso.test.log.level";
 
@@ -355,7 +358,7 @@ public final class PointsToAnalyzer {
             /*
              * Make sure we use the modules prepared for GraalVM.
              */
-            String javaHome = GraalServices.getSavedProperty("java.home");
+            String javaHome = GraalServices.getSavedProperty(VM_ACCESS_JAVA_HOME_PROPERTY, GraalServices.getSavedProperty("java.home"));
             AnalysisError.guarantee(javaHome != null, "Missing required property java.home.");
             builder.vmOption("JavaHome=" + javaHome);
             /*
@@ -371,7 +374,7 @@ public final class PointsToAnalyzer {
      * builder when no explicit selection was saved.
      */
     private static VMAccess.Builder getVmAccessBuilder() {
-        String requestedAccessName = GraalServices.getSavedProperty("com.oracle.graal.pointsto.standalone.vmaccess.name", DEFAULT_VM_ACCESS_NAME);
+        String requestedAccessName = GraalServices.getSavedProperty(VM_ACCESS_NAME_PROPERTY, DEFAULT_VM_ACCESS_NAME);
         ServiceLoader<VMAccess.Builder> loader = ServiceLoader.load(VMAccess.Builder.class);
         VMAccess.Builder selected = null;
         for (VMAccess.Builder builder : loader) {

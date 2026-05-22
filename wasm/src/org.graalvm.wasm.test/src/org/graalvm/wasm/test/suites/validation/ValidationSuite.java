@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -968,12 +968,15 @@ public class ValidationSuite extends WasmFileSuite {
                                         null),
 
                         binaryCase("Invalid instruction",
-                                        "Legacy exception handling is not supported (opcode: 0x06)",
+                                        "Legacy exception handling is not enabled (opcode: 0x06)",
 
                                         // (module
-                                        // (func
+                                        // (type (func))
+                                        // (func (type 0)
+                                        // try (type 0)
                                         // 0x06
                                         // drop
+                                        // end
                                         // )
                                         // )
                                         "00 61 73 6D 01 00 00 00 01 04 01 60 00 00 03 02 01 00 0A 07 01 05 00 06 00 1A 0B",

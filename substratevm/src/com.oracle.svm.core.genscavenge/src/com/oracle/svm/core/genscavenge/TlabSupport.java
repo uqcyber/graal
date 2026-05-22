@@ -129,21 +129,15 @@ public class TlabSupport {
     /* Expected number of refills between GCs. */
     private static UnsignedWord targetRefills = Word.unsigned(1);
 
-    private static boolean initialized;
-
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+8/src/hotspot/share/gc/shared/threadLocalAllocBuffer.cpp#L226-L267")
     @Uninterruptible(reason = "Accesses TLAB")
     public static void startupInitialization() {
-        if (!initialized) {
-            TlabOptionCache.singleton().cacheOptionValues();
+        TlabOptionCache.singleton().cacheOptionValues();
 
-            // Assuming each thread's active tlab is, on average, 1/2 full at a GC.
-            targetRefills = Word.unsigned(100 / (2 * TLAB_WASTE_TARGET_PERCENT));
-            // The value has to be at least one as it is used in a division.
-            targetRefills = UnsignedUtils.max(targetRefills, Word.unsigned(1));
-
-            initialized = true;
-        }
+        // Assuming each thread's active tlab is, on average, 1/2 full at a GC.
+        targetRefills = Word.unsigned(100 / (2 * TLAB_WASTE_TARGET_PERCENT));
+        // The value has to be at least one as it is used in a division.
+        targetRefills = UnsignedUtils.max(targetRefills, Word.unsigned(1));
     }
 
     @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23-ga/src/hotspot/share/gc/shared/threadLocalAllocBuffer.cpp#L208-L225")

@@ -30,7 +30,6 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.LocationIdentity;
 
-import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.meta.KnownOffsets;
@@ -94,7 +93,7 @@ public final class PLTGOTNonSnippetLowerings {
                 ValueNode offsetNode = ConstantNode.forIntegerKind(SubstrateTarget.getWordKind(), GOTAccess.getGotEntryOffsetFromHeapRegister(targetGotEntry), graph);
                 OffsetAddressNode offsetAddressNode = graph.unique(new OffsetAddressNode(heapBaseNode, offsetNode));
                 ReadNode methodAddress = graph
-                                .add(new ReadNode(offsetAddressNode, LocationIdentity.ANY_LOCATION, FrameAccess.getWordStamp(), BarrierType.NONE, MemoryOrderMode.PLAIN));
+                                .add(new ReadNode(offsetAddressNode, LocationIdentity.ANY_LOCATION, SubstrateTarget.getWordStamp(), BarrierType.NONE, MemoryOrderMode.PLAIN));
                 SubstrateGOTCallTargetNode loweredCallTarget = graph.add(
                                 new SubstrateGOTCallTargetNode(methodAddress, parameters.toArray(ValueNode.EMPTY_ARRAY), callTarget.returnStamp(), signature, callee, callType, invokeKind));
 

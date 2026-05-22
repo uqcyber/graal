@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -507,7 +507,7 @@ public final class BytecodeOSRMetadata {
 
         // Forces spawning of a frame state. This ensures we return to the interpreter state after
         // the complete execution of the OSR call.
-        forceStateSplit();
+        CompilerDirectives.preserveFrameStateHere();
         // Do not use an invalidating deopt here for two reasons:
         // - The compiler does not propagate the deopt upwards, meaning the return value computed in
         // compiled code will be restored during the transfer to interpreter.
@@ -526,10 +526,6 @@ public final class BytecodeOSRMetadata {
         restoreLoop(state.frameDescriptor, source, target);
         // transfer auxiliary slots
         transferAuxiliarySlots(source, target, state);
-    }
-
-    @TruffleBoundary(allowInlining = false)
-    private static void forceStateSplit() {
     }
 
     private static void validateDescriptors(FrameWithoutBoxing source, FrameWithoutBoxing target, LazyState state) {

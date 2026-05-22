@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,12 +29,14 @@ import java.util.function.Function;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.graal.meta.SubstrateField;
 import com.oracle.svm.graal.meta.SubstrateType;
+import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaType;
 import com.oracle.svm.interpreter.ristretto.RistrettoUtils;
 
 import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.vm.ci.meta.ResolvedJavaField;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
@@ -91,6 +93,15 @@ public final class RistrettoType extends SubstrateType {
     @Override
     public SubstrateField[] getInstanceFields(boolean includeSuperclasses) {
         return RistrettoUtils.toRFields(interpreterType.getInstanceFields(includeSuperclasses));
+    }
+
+    @Override
+    public ResolvedJavaMethod resolveConcreteMethod(ResolvedJavaMethod method, ResolvedJavaType callerType) {
+        if (method instanceof RistrettoMethod rMethod) {
+            InterpreterResolvedJavaMethod resolvedMethod = (InterpreterResolvedJavaMethod) interpreterType.resolveConcreteMethod(rMethod.getInterpreterMethod(), callerType);
+            return resolvedMethod == null ? null : RistrettoMethod.getOrCreate(resolvedMethod);
+        }
+        return super.resolveConcreteMethod(method, callerType);
     }
 
     @Override

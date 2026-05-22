@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@ package com.oracle.svm.interpreter.ristretto.meta;
 
 import java.util.function.Function;
 
+import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.graal.meta.SubstrateField;
 import com.oracle.svm.graal.meta.SubstrateType;
 import com.oracle.svm.interpreter.metadata.CremaResolvedObjectType;
@@ -108,17 +109,19 @@ public final class RistrettoField extends SubstrateField {
         if (fieldType instanceof InterpreterResolvedJavaType iType) {
             return RistrettoType.getOrCreate(iType);
         }
-        if (fieldType instanceof UnresolvedJavaType unresolvedJavaType) {
-            throw GraalError.shouldNotReachHere("Cannot have unresolved fields for resolved types " + getDeclaringClass() + " -> " + unresolvedJavaType);
-        }
-        throw GraalError.shouldNotReachHere("Must have a ristretto type available at this point for " + interpreterField + " but is " + fieldType);
+        return fieldType;
     }
 
     @Override
     public JavaKind getStorageKind() {
         JavaType fieldType = getType();
         if (fieldType instanceof UnresolvedJavaType) {
-            throw GraalError.shouldNotReachHere("Trying to get storage kind of unresolved field " + fieldType);
+            /*
+             * Without a shared type there is no shared-world storage kind to query yet. Fall back
+             * to the descriptor-derived Java kind, preserving the word-storage override used by
+             * Crema for symbolic runtime-loaded fields.
+             */
+            return interpreterField.isWordStorage() ? SubstrateTarget.getWordKind() : interpreterField.getJavaKind();
         } else {
             GraalError.guarantee(fieldType instanceof RistrettoType, "Must have a ristretto field or an unresolved one but found %s", fieldType);
             return ((RistrettoType) fieldType).getStorageKind();

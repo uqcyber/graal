@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,9 +38,17 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 
 public class SubstrateMetaAccessExtensionProvider implements MetaAccessExtensionProvider {
 
+    /**
+     * Runtime-loaded bytecode may ask for a storage kind before its referenced type has been
+     * resolved into {@link SharedType} metadata. Keep the descriptor-derived kind in that case
+     * instead of forcing a premature {@link SharedType} cast.
+     */
     @Override
     public JavaKind getStorageKind(JavaType type) {
-        return ((SharedType) type).getStorageKind();
+        if (type instanceof SharedType sharedType) {
+            return sharedType.getStorageKind();
+        }
+        return type.getJavaKind();
     }
 
     @Override

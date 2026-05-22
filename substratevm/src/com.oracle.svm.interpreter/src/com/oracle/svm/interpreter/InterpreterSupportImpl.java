@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -87,14 +87,16 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
     private static final int MAX_SYMBOL_LOG_LENGTH = 255;
 
     private final int bciSlot;
+    private final int startBCISlot;
     private final int interpretedMethodSlot;
     private final int interpretedFrameSlot;
     private final int intrinsicMethodSlot;
     private final int intrinsicFrameSlot;
     private final ConcurrentHashMap<PreparedSignature, PreparedSignature> preparedSignatures;
 
-    InterpreterSupportImpl(int bciSlot, int interpretedMethodSlot, int interpretedFrameSlot, int intrinsicMethodSlot, int intrinsicFrameSlot) {
+    InterpreterSupportImpl(int bciSlot, int startBCISlot, int interpretedMethodSlot, int interpretedFrameSlot, int intrinsicMethodSlot, int intrinsicFrameSlot) {
         this.bciSlot = bciSlot;
+        this.startBCISlot = startBCISlot;
         this.interpretedMethodSlot = interpretedMethodSlot;
         this.interpretedFrameSlot = interpretedFrameSlot;
         this.intrinsicMethodSlot = intrinsicMethodSlot;
@@ -158,12 +160,21 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
         throw VMError.shouldNotReachHere("Interpreter deoptimization requires deopt support");
     }
 
+    /**
+     * Bridges the generic deoptimization stub ABI into the Ristretto-specific interpreter handoff.
+     *
+     * <p>
+     * When this hook runs, the raw GP/FP return registers still carry the compiled top-frame
+     * result, or the pending exception object if the deopt was taken on an exceptional edge. The
+     * Ristretto frame must snapshot that state before the stub tears down the compiled frame and
+     * tail-jumps into the typed interpreter entry point.
+     */
     @Override
     @Uninterruptible(reason = "Invoked from deoptimization stubs while transitioning to interpreter execution.")
     public UnsignedWord continueInterpreterDeoptimization(DeoptimizedFrame frame, Pointer originalStackPointer, UnsignedWord gpReturnValue, UnsignedWord fpReturnValue,
                     boolean hasException) {
         VMError.guarantee(frame instanceof RistrettoDeoptimizedInterpreterFrame, "Unexpected interpreter deoptimized frame implementation");
-        return ((RistrettoDeoptimizedInterpreterFrame) frame).continueInterpreterDeoptimization(originalStackPointer, gpReturnValue, hasException);
+        return ((RistrettoDeoptimizedInterpreterFrame) frame).continueInterpreterDeoptimization(originalStackPointer, gpReturnValue, fpReturnValue, hasException);
     }
 
     @Override
@@ -208,13 +219,47 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
         return readObject(sp, Word.signed(valueInfo.getData()), valueInfo.isCompressedReference());
     }
 
-    private int readBCI(FrameInfoQueryResult frameInfo, Pointer sp) {
+    private static int readBCISlot(FrameInfoQueryResult frameInfo, Pointer sp, int slot) {
         FrameInfoQueryResult.ValueInfo[] valueInfos = frameInfo.getValueInfos();
-        if (bciSlot >= valueInfos.length) {
+        if (slot >= valueInfos.length) {
             return BytecodeFrame.UNKNOWN_BCI;
         }
-        FrameInfoQueryResult.ValueInfo valueInfo = valueInfos[bciSlot];
+        FrameInfoQueryResult.ValueInfo valueInfo = valueInfos[slot];
         return readInt(sp, Word.signed(valueInfo.getData()));
+    }
+
+    /**
+     * Reads the bytecode index for an interpreter root frame during stack walking.
+     *
+     * <p>
+     * {@code Interpreter.Root.executeBodyFromBCI(...)} writes two BCI-like locals into the root
+     * frame:
+     *
+     * <pre>
+     * startBCI = entry bytecode where this root started
+     * curBCI   = bytecode currently being executed
+     * </pre>
+     *
+     * Normal execution should publish {@code curBCI}. A narrow reporting-only window exists after
+     * the root frame has been created but before that slot has been written. In that window
+     * {@code startBCI} still names the same bytecode entry point, so stack walking falls back to it
+     * instead of reporting {@link BytecodeFrame#UNKNOWN_BCI}. If neither slot is available, keep
+     * the source location unknown rather than inventing a synthetic {@code 0} BCI.
+     */
+    private int readBCI(FrameInfoQueryResult frameInfo, Pointer sp) {
+        int bci = readBCISlot(frameInfo, sp, bciSlot);
+        if (bci != BytecodeFrame.UNKNOWN_BCI) {
+            return bci;
+        }
+
+        /*
+         * Stack walking can observe executeBodyFromBCI after the root frame exists but before
+         * curBCI has been written into it, e.g. on a stack-overflow edge through the interpreter
+         * prologue. In that reporting-only window startBCI is still the exact bytecode entry point
+         * for the current root frame, so use it instead of propagating UNKNOWN_BCI. This is the
+         * narrow workaround that should be revisited in the context of GR-74439.
+         */
+        return readBCISlot(frameInfo, sp, startBCISlot);
     }
 
     private InterpreterFrame readInterpreterFrame(FrameInfoQueryResult frameInfo, Pointer sp) {
@@ -260,7 +305,7 @@ public final class InterpreterSupportImpl extends InterpreterSupport {
             LineNumberTable lineNumberTable = interpretedMethod.getLineNumberTable();
 
             int sourceLineNumber = -1; // unknown
-            if (lineNumberTable != null) {
+            if (lineNumberTable != null && bci >= 0) {
                 sourceLineNumber = lineNumberTable.getLineNumber(bci);
             }
             return new InterpreterFrameSourceInfo(interpretedClass, sourceMethodName, sourceLineNumber, bci, interpretedMethod, interpreterFrame);

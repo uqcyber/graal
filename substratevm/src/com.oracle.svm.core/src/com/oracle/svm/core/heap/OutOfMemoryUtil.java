@@ -78,10 +78,6 @@ public class OutOfMemoryUtil {
                         (!ImageLayerBuildingSupport.buildingImageLayer() || HeapDumpMetadata.isLayeredMetadataAvailable())) {
             HeapDumping.singleton().dumpHeapOnOutOfMemoryError();
         }
-        if (HasJfrSupport.get()) {
-            SubstrateJVM.get().vmOutOfMemoryErrorRotation();
-        }
-
         if (SubstrateGCOptions.ExitOnOutOfMemoryError.getValue()) {
             if (LibC.isSupported()) {
                 Log.log().string("Terminating due to java.lang.OutOfMemoryError: ").string(JDKUtils.getRawMessage(error)).newline();
@@ -92,7 +88,15 @@ public class OutOfMemoryUtil {
         }
 
         if (SubstrateGCOptions.ReportFatalErrorOnOutOfMemoryError.getValue()) {
+            dumpJfrOnOutOfMemoryError();
             throw VMError.shouldNotReachHere("reporting due to java.lang.OutOfMemoryError");
+        }
+    }
+
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Can't allocate while out of memory.")
+    private static void dumpJfrOnOutOfMemoryError() {
+        if (HasJfrSupport.get()) {
+            SubstrateJVM.get().dumpOnOutOfMemoryError();
         }
     }
 }

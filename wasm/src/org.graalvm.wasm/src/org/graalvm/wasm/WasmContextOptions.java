@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -61,6 +61,7 @@ public final class WasmContextOptions {
     @CompilationFinal private boolean simd;
     @CompilationFinal private boolean relaxedSimd;
     @CompilationFinal private boolean exceptions;
+    @CompilationFinal private boolean legacyExceptions;
     @CompilationFinal private boolean typedFunctionReferences;
     @CompilationFinal private boolean gc;
 
@@ -95,6 +96,7 @@ public final class WasmContextOptions {
         this.simd = readBooleanOption(WasmOptions.SIMD);
         this.relaxedSimd = readBooleanOption(WasmOptions.RelaxedSIMD);
         this.exceptions = readBooleanOption(WasmOptions.Exceptions);
+        this.legacyExceptions = readBooleanOption(WasmOptions.LegacyExceptions);
         this.typedFunctionReferences = readBooleanOption(WasmOptions.TypedFunctionReferences);
         this.gc = readBooleanOption(WasmOptions.GC);
         this.memoryOverheadMode = readBooleanOption(WasmOptions.MemoryOverheadMode);
@@ -172,6 +174,10 @@ public final class WasmContextOptions {
         return exceptions;
     }
 
+    public boolean supportLegacyExceptions() {
+        return legacyExceptions;
+    }
+
     public boolean supportTypedFunctionReferences() {
         return typedFunctionReferences;
     }
@@ -214,6 +220,7 @@ public final class WasmContextOptions {
         hash = 53 * hash + (this.simd ? 1 : 0);
         hash = 53 * hash + (this.relaxedSimd ? 1 : 0);
         hash = 53 * hash + (this.exceptions ? 1 : 0);
+        hash = 53 * hash + (this.legacyExceptions ? 1 : 0);
         hash = 53 * hash + (this.typedFunctionReferences ? 1 : 0);
         hash = 53 * hash + (this.gc ? 1 : 0);
         hash = 53 * hash + (this.memoryOverheadMode ? 1 : 0);
@@ -266,6 +273,9 @@ public final class WasmContextOptions {
             return false;
         }
         if (this.exceptions != other.exceptions) {
+            return false;
+        }
+        if (this.legacyExceptions != other.legacyExceptions) {
             return false;
         }
         if (this.typedFunctionReferences != other.typedFunctionReferences) {

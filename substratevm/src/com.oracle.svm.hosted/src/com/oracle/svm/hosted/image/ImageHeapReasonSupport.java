@@ -24,12 +24,13 @@
  */
 package com.oracle.svm.hosted.image;
 
-import com.oracle.svm.hosted.meta.HostedMetaAccess;
+import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
-import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.image.ImageHeapLayoutInfo;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
@@ -37,6 +38,7 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.meta.HostedConstantReflectionProvider;
 import com.oracle.svm.hosted.meta.HostedField;
+import com.oracle.svm.hosted.meta.HostedMetaAccess;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.code.CompilationResult;
@@ -180,7 +182,6 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * {@link org.graalvm.collections.Pair} instance and not via the cache array.
  *
  */
-@AutomaticallyRegisteredImageSingleton
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class ImageHeapReasonSupport {
 
@@ -416,5 +417,22 @@ public class ImageHeapReasonSupport {
 
     public void dumpMetadata(@SuppressWarnings("unused") ImageHeapLayoutInfo heapLayout, @SuppressWarnings("unused") Iterable<NativeImageHeap.ObjectInfo> objects) {
         // no metadata to dump
+    }
+}
+
+/**
+ * Lazily installs the default {@link ImageHeapReasonSupport} singleton unless a replacement is
+ * already registered.
+ */
+@AutomaticallyRegisteredFeature
+@SingletonTraits(access = BuiltinTraits.BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
+class ImageHeapReasonSupportFeature implements InternalFeature {
+    @Override
+    public void duringSetup(DuringSetupAccess access) {
+        if (!ImageSingletons.contains(ImageHeapReasonSupport.class)) {
+            ImageHeapReasonSupport singleton = new ImageHeapReasonSupport();
+            ImageSingletons.add(ImageHeapReasonSupport.class, singleton);
+        }
+
     }
 }

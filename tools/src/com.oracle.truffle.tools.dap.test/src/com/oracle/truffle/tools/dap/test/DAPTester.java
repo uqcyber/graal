@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -128,6 +128,10 @@ public final class DAPTester {
     }
 
     public Future<Value> eval(Source source) {
+        return eval(source, true);
+    }
+
+    public Future<Value> eval(Source source, boolean logException) {
         lastValue = CompletableFuture.supplyAsync(() -> {
             try {
                 return context.eval(source);
@@ -136,7 +140,9 @@ public final class DAPTester {
                 // We might never check the future
                 // if we're blocked by waiting for an expected output,
                 // which does not come due to the exception.
-                t.printStackTrace(System.err);
+                if (logException) {
+                    t.printStackTrace(System.err);
+                }
                 throw t;
             }
         }, executor);

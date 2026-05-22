@@ -33,7 +33,10 @@ import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodes.AbstractStateSplit;
+import jdk.graal.compiler.nodes.DeoptBarrier;
+import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.nodes.GraphState;
+import jdk.graal.compiler.nodes.StateSplit;
 import jdk.graal.compiler.nodes.spi.Canonicalizable;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.nodes.spi.LIRLowerable;
@@ -41,12 +44,17 @@ import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 
 /**
  * Truffle-specific marker that forces a precise frame state for the current bytecode position.
- *
+ * <p>
  * During Truffle runtime compilation this node is introduced by intrinsifying
  * {@code CompilerDirectives.preserveFrameStateHere()}.
+ * <p>
+ * The Truffle API is effectively used as a "checkpoint" to prevent deoptimization from happening
+ * earlier; consequently, this node is a {@link DeoptBarrier} to prevent deoptimization from
+ * floating past it.
  */
 @NodeInfo(cycles = CYCLES_0, size = SIZE_0)
-public final class TrufflePreserveFrameStateNode extends AbstractStateSplit implements IterableNodeType, LIRLowerable, Canonicalizable {
+public final class TrufflePreserveFrameStateNode extends AbstractStateSplit
+                implements IterableNodeType, LIRLowerable, Canonicalizable, DeoptBarrier {
     public static final NodeClass<TrufflePreserveFrameStateNode> TYPE = NodeClass.create(TrufflePreserveFrameStateNode.class);
 
     public TrufflePreserveFrameStateNode() {
@@ -62,6 +70,13 @@ public final class TrufflePreserveFrameStateNode extends AbstractStateSplit impl
     public Node canonical(CanonicalizerTool tool) {
         if (graph() != null && graph().isAfterStage(GraphState.StageFlag.FSA)) {
             return null;
+        }
+        if (predecessor() instanceof StateSplit predecessorStateSplit) {
+            FrameState predecessorState = predecessorStateSplit.stateAfter();
+            FrameState currentState = stateAfter();
+            if (predecessorState != null && currentState != null && currentState.dataFlowEquals(predecessorState)) {
+                return null;
+            }
         }
         return this;
     }

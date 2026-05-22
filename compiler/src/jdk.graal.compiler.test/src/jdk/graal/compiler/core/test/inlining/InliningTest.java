@@ -24,6 +24,7 @@
  */
 package jdk.graal.compiler.core.test.inlining;
 
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 import jdk.graal.compiler.core.common.GraalOptions;
@@ -31,6 +32,7 @@ import jdk.graal.compiler.core.test.GraalCompilerTest;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.DebugDumpScope;
 import jdk.graal.compiler.debug.TTY;
+import jdk.graal.compiler.java.BytecodeParserOptions;
 import jdk.graal.compiler.nodes.FullInfopointNode;
 import jdk.graal.compiler.nodes.Invoke;
 import jdk.graal.compiler.nodes.StructuredGraph;
@@ -41,6 +43,7 @@ import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.OptimisticOptimizations;
 import jdk.graal.compiler.phases.PhaseSuite;
 import jdk.graal.compiler.phases.common.DeadCodeEliminationPhase;
+import jdk.graal.compiler.phases.common.inlining.InliningPhase;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
 import org.junit.Assert;
 import org.junit.Ignore;
@@ -203,6 +206,32 @@ public class InliningTest extends GraalCompilerTest {
         callTrivial();
     }
 
+    @Test
+    public void testForceInlineIgnoresMethodInlineBailoutLimit() {
+        ResolvedJavaMethod checkIndex = getResolvedJavaMethod(Objects.class, "checkIndex", int.class, int.class);
+        Assert.assertTrue(checkIndex.shouldBeInlined());
+        OptionValues options = new OptionValues(getInitialOptions(),
+                        BytecodeParserOptions.InlineDuringParsing, false,
+                        InliningPhase.Options.MethodInlineBailoutLimit, 5);
+        StructuredGraph graph = getGraph("forceInlineBailoutSnippet", options, false, checkIndex, 10);
+        Assert.assertEquals("Force-inlined Objects.checkIndex invokes should be inlined despite the bailout limit.", 0, countInvokesTo(graph, checkIndex));
+    }
+
+    @SuppressWarnings("all")
+    public static int forceInlineBailoutSnippet(int value) {
+        int index = value & 7;
+        return Objects.checkIndex(index, 10) +
+                        Objects.checkIndex(index + 1, 10) +
+                        Objects.checkIndex(index + 2, 10) +
+                        Objects.checkIndex(index + 3, 10) +
+                        Objects.checkIndex(index + 4, 10) +
+                        Objects.checkIndex(index + 5, 10) +
+                        Objects.checkIndex(index + 6, 10) +
+                        Objects.checkIndex(index + 7, 10) +
+                        Objects.checkIndex(index + 8, 16) +
+                        Objects.checkIndex(index + 9, 16);
+    }
+
     private static void callTrivial() {
         callNonTrivial();
     }
@@ -272,6 +301,10 @@ public class InliningTest extends GraalCompilerTest {
     }
 
     private StructuredGraph getGraph(final String snippet, OptionValues options, final boolean eagerInfopointMode) {
+        return getGraph(snippet, options, eagerInfopointMode, null, 0);
+    }
+
+    private StructuredGraph getGraph(final String snippet, OptionValues options, final boolean eagerInfopointMode, ResolvedJavaMethod expectedInvokeTarget, int expectedInvokesBeforeInlining) {
         DebugContext debug = options == null ? getDebugContext() : getDebugContext(options, null, null);
         try (DebugContext.Scope _ = debug.scope("InliningTest", new DebugDumpScope(snippet, true))) {
             ResolvedJavaMethod method = getResolvedJavaMethod(snippet);
@@ -284,6 +317,9 @@ public class InliningTest extends GraalCompilerTest {
                 HighTierContext context = new HighTierContext(getProviders(), graphBuilderSuite, OptimisticOptimizations.ALL);
                 debug.dump(DebugContext.BASIC_LEVEL, graph, "Graph");
                 createCanonicalizerPhase().apply(graph, context);
+                if (expectedInvokeTarget != null) {
+                    Assert.assertEquals("Original invokes of method " + expectedInvokeTarget, expectedInvokesBeforeInlining, countInvokesTo(graph, expectedInvokeTarget));
+                }
                 createInliningPhase().apply(graph, context);
                 debug.dump(DebugContext.BASIC_LEVEL, graph, "Graph");
                 createCanonicalizerPhase().apply(graph, context);
@@ -293,6 +329,16 @@ public class InliningTest extends GraalCompilerTest {
         } catch (Throwable e) {
             throw debug.handle(e);
         }
+    }
+
+    private static int countInvokesTo(StructuredGraph graph, ResolvedJavaMethod target) {
+        int count = 0;
+        for (Invoke invoke : graph.getInvokes()) {
+            if (target.equals(invoke.getTargetMethod())) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static StructuredGraph assertInlined(StructuredGraph graph) {

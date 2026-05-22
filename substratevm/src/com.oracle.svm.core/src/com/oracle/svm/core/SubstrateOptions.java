@@ -865,6 +865,23 @@ public class SubstrateOptions {
     @Option(help = "Parse and consume standard options and system properties from the command line arguments when the VM is created.", stability = OptionStability.STABLE)//
     public static final HostedOptionKey<Boolean> ParseRuntimeOptions = new HostedOptionKey<>(true);
 
+    @Option(help = """
+                    Preserve legacy Java option handling at runtime.
+
+                    When true, only these Java options are consumed by the VM:
+                      - System properties with or without an explicit value (i.e. "-Dname=value" or "-Dname")
+                      - "-Xms", "-Xmx", "-Xmn" and "-Xss"
+                      - "-XX:"
+                    All other options are passed through to main or ignored for CreateJavaVM/graal_create_isolate.
+
+                    When false, the VM parses all options passed via CreateJavaVM/graal_create_isolate.
+                    A recognized but unimplemented option reports an error and exits the VM.
+                    If the VM entry point is main, unrecognized options are passed through to main.
+                    Otherwise, an unrecognized option reports an error and exits the VM unless
+                    JNIJavaVMInitArgs.ignoreUnrecognized or graal_create_isolate_params_t.ignore_unrecognized_args
+                    is true in which case the unrecognized option is silently ignored.""", type = OptionType.Expert)//
+    public static final HostedOptionKey<Boolean> LegacyJavaOptionMode = new HostedOptionKey<>(true);
+
     @Option(help = "Enable wildcard expansion in command line arguments on Windows.")//
     public static final HostedOptionKey<Boolean> EnableWildcardExpansion = new HostedOptionKey<>(true);
 
@@ -1234,7 +1251,7 @@ public class SubstrateOptions {
 
         @Option(help = "Avoid linker relocations for code and instead emit address computations.", type = OptionType.Expert) //
         @LayerVerifiedOption(severity = Severity.Error, kind = Kind.Changed, positional = false) //
-        public static final HostedOptionKey<Boolean> RelativeCodePointers = new HostedOptionKey<>(false, SubstrateOptions::validateRelativeCodePointers);
+        public static final HostedOptionKey<Boolean> RelativeCodePointers = new HostedOptionKey<>(true, SubstrateOptions::validateRelativeCodePointers);
 
         /** Use {@link SubstrateOptions#getTearDownWarningNanos()} instead. */
         @Option(help = "The number of seconds that the isolate teardown can take before warnings are printed. Disabled if less or equal to 0.")//
@@ -1637,18 +1654,23 @@ public class SubstrateOptions {
 
     @Fold
     public static boolean useRelativeCodePointers() {
-        return ConcealedOptions.RelativeCodePointers.getValue();
+        return ConcealedOptions.RelativeCodePointers.getValue() &&
+                        (Platform.includedIn(PLATFORM_JNI.class) || Platform.includedIn(NATIVE_ONLY.class)) &&
+                        !useLLVMBackend();
     }
 
+    /** @see #useRelativeCodePointers() */
     private static void validateRelativeCodePointers(HostedOptionKey<Boolean> optionKey) {
-        if (optionKey.getValue()) {
-            String enabledOption = SubstrateOptionsParser.commandArgument(optionKey, "+");
-
-            UserError.guarantee(Platform.includedIn(PLATFORM_JNI.class) || Platform.includedIn(NATIVE_ONLY.class), "%s is supported only with hardware target platforms.", enabledOption);
-
-            // The concept of a code base would need to be introduced in the LLVM backend first.
-            UserError.guarantee(!useLLVMBackend(), "%s is currently not supported with the LLVM backend.", enabledOption);
+        if (!optionKey.hasBeenSet() || !optionKey.getValue()) {
+            return;
         }
+
+        String enabledOption = SubstrateOptionsParser.commandArgument(optionKey, "+");
+
+        UserError.guarantee(Platform.includedIn(PLATFORM_JNI.class) || Platform.includedIn(NATIVE_ONLY.class), "%s is supported only with hardware target platforms.", enabledOption);
+
+        // The concept of a code base would need to be introduced in the LLVM backend first.
+        UserError.guarantee(!useLLVMBackend(), "%s is currently not supported with the LLVM backend.", enabledOption);
     }
 
     public static boolean hasDumpRuntimeCompiledMethodsSupport() {

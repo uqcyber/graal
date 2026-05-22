@@ -9,3 +9,12 @@ exceptions_with_params_catch_all
 exceptions_with_params_catch_ref
 multi_exception_types
 throw_ref
+legacy_delegate_no_throw
+legacy_delegate_throw
+legacy_delegate_1
+legacy_delegate_search_continuation
+legacy_rethrow_recatch
+legacy_simple_catch
+legacy_disabled
+legacy_catch_drop_cleanup
+mixed_eh_invalid

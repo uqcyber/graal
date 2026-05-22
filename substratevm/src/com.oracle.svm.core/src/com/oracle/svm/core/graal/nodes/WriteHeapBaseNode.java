@@ -27,8 +27,8 @@ package com.oracle.svm.core.graal.nodes;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.PointerBase;
 
-import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.ReservedRegisters;
+import com.oracle.svm.core.SubstrateTarget;
 
 import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.graph.NodeClass;
@@ -57,7 +57,7 @@ public class WriteHeapBaseNode extends FixedWithNextNode implements LIRLowerable
     @Override
     public void generate(NodeLIRBuilderTool gen) {
         LIRGeneratorTool tool = gen.getLIRGeneratorTool();
-        tool.emitWriteRegister(ReservedRegisters.singleton().getHeapBaseRegister(), gen.operand(value), tool.getLIRKind(FrameAccess.getWordStamp()));
+        tool.emitWriteRegister(ReservedRegisters.singleton().getHeapBaseRegister(), gen.operand(value), tool.getLIRKind(SubstrateTarget.getWordStamp()));
     }
 
     @NodeIntrinsic

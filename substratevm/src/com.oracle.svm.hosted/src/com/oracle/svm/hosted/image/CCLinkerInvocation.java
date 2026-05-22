@@ -287,6 +287,27 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                 additionalPreOptions.add("-Wl,--gc-sections");
             }
 
+            boolean pieDefault = imageKind.isExecutable &&
+                            imageKind != AbstractImage.NativeImageKind.STATIC_EXECUTABLE &&
+                            !customStaticLibs; // these might not be PIC
+            if (pieDefault) {
+                /*
+                 * Default to building position-independent executables (PIE). They have security
+                 * advantages and are enabled by default in the toolchains of many Linux OSes, but
+                 * not all. Even then, their software packages typically use PIE.
+                 *
+                 * Thanks to RelativeCodePointers, the number of extra relocations is typically low
+                 * at the cost of a register and additional address arithmetic.
+                 *
+                 * Adding the linker option here enables overriding it from a feature or option.
+                 *
+                 * Note: 1. *Static* PIE are a different type of binary (-static-pie) that is less
+                 * commonly used or supported and we don't bother with them; 2. PIE have long been
+                 * the default on macOS and Windows, so no need to change anything for them.
+                 */
+                additionalPreOptions.add("-pie");
+            }
+
             if (imageKind.isImageLayer) {
                 /*
                  * We do not want interposition to affect the resolution of symbols we define and

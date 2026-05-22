@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,13 +28,14 @@ import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.Platform.HOSTED_ONLY;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
-import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionValidationSupport;
 import com.oracle.svm.core.option.RuntimeOptionValidationSupport.RuntimeOptionValidation;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.pltgot.PLTGOTOptions;
+import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 
 import jdk.graal.compiler.options.Option;
@@ -43,7 +44,7 @@ import jdk.graal.compiler.options.OptionType;
 
 public class InterpreterOptions {
     @Option(help = "Adds support to divert execution from AOT compiled methods to the interpreter at run-time.", type = OptionType.Expert) //
-    public static final HostedOptionKey<Boolean> DebuggerWithInterpreter = new HostedOptionKey<>(false) {
+    public static final HostedOptionKey<Boolean> DebuggerWithInterpreter = new HostedOptionKey<>(false, InterpreterOptions::validateDebuggerWithInterpreter) {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Boolean oldValue, Boolean newValue) {
             super.onValueUpdate(values, oldValue, newValue);
@@ -71,6 +72,12 @@ public class InterpreterOptions {
 
     public static boolean interpreterEnabled() {
         return DebuggerWithInterpreter.getValue() || RuntimeClassLoading.isSupported();
+    }
+
+    private static void validateDebuggerWithInterpreter(HostedOptionKey<Boolean> optionKey) {
+        if (optionKey.getValue() && SubstrateOptions.useRistretto()) {
+            throw UserError.abort("Cannot enable DebuggerWithInterpreter or -H:+JDWP together with Ristretto compilation in the same image.");
+        }
     }
 
     @Platforms(HOSTED_ONLY.class)

@@ -49,6 +49,9 @@ public final class ExceptionHandlerType {
     public static final int CATCH_REF = 0x01;
     public static final int CATCH_ALL = 0x02;
     public static final int CATCH_ALL_REF = 0x03;
+    public static final int LEGACY_CATCH = 0x04;
+    public static final int LEGACY_CATCH_ALL = 0x05;
+    public static final int LEGACY_DELEGATE = 0x06;
 
     public static String toString(int type) {
         return switch (type) {
@@ -56,6 +59,9 @@ public final class ExceptionHandlerType {
             case ExceptionHandlerType.CATCH_REF -> "catch_ref";
             case ExceptionHandlerType.CATCH_ALL -> "catch_all";
             case ExceptionHandlerType.CATCH_ALL_REF -> "catch_all_ref";
+            case ExceptionHandlerType.LEGACY_CATCH -> "legacy_catch";
+            case ExceptionHandlerType.LEGACY_CATCH_ALL -> "legacy_catch_all";
+            case ExceptionHandlerType.LEGACY_DELEGATE -> "legacy_delegate";
             default -> throw Assert.fail(Failure.MALFORMED_CATCH, "Invalid catch clause type: 0x%02X", type);
         };
     }

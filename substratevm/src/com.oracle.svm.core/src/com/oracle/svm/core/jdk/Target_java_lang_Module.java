@@ -34,7 +34,6 @@ import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
-import com.oracle.svm.shared.util.SubstrateUtil;
 
 /**
  * Substitution class for {@link java.lang.Module}. We need to substitute native methods
@@ -59,15 +58,14 @@ public final class Target_java_lang_Module {
     // @Stable (no effect currently GR-60154)
     ModuleLayer layer;
 
-    /**
-     * Creating an {@link Alias} directly for {@code ALL_UNNAMED_MODULE} and {@code EVERYONE_MODULE}
-     * makes {@code java.util.regex.Pattern} reachable, which increases the size of the binary.
-     */
     // Checkstyle: stop
     @Alias //
-    private static Set<Module> ALL_UNNAMED_MODULE_SET;
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.None, isFinal = true) //
+    static Module ALL_UNNAMED_MODULE;
+
     @Alias //
-    private static Set<Module> EVERYONE_SET;
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.None, isFinal = true) //
+    static Module EVERYONE_MODULE;
     // Checkstyle: resume
 
     @Substitute
@@ -114,7 +112,7 @@ public final class Target_java_lang_Module {
     @SuppressWarnings("static-method")
     private boolean allows(Set<Module> targets, Module module) {
         if (targets != null) {
-            Module everyoneModule = EVERYONE_SET.stream().findFirst().get();
+            Module everyoneModule = EVERYONE_MODULE;
             if (targets.contains(everyoneModule)) {
                 return true;
             }
@@ -122,7 +120,7 @@ public final class Target_java_lang_Module {
                 if (targets.contains(module)) {
                     return true;
                 }
-                if (!module.isNamed() && targets.contains(ALL_UNNAMED_MODULE_SET.stream().findFirst().get())) {
+                if (!module.isNamed() && targets.contains(ALL_UNNAMED_MODULE)) {
                     return true;
                 }
                 if (ImageLayerBuildingSupport.buildingImageLayer()) {
@@ -140,13 +138,5 @@ public final class Target_java_lang_Module {
         }
         return false;
     }
-}
 
-final class ModuleSubstitutionsSupport {
-    private ModuleSubstitutionsSupport() {
-    }
-
-    static void patchLayer(Module module, ModuleLayer newLayer) {
-        SubstrateUtil.cast(module, Target_java_lang_Module.class).layer = newLayer;
-    }
 }

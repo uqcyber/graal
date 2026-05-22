@@ -138,6 +138,15 @@ public abstract class ConstantBlindingPhase extends BasePhase<LowTierContext> {
     }
 
     @Override
+    public boolean shouldApply(StructuredGraph graph) {
+        /*
+         * Some suites install this phase before the final BlindConstants value is known. Defer the
+         * enablement decision to graph compilation instead of suite construction.
+         */
+        return Options.BlindConstants.getValue(graph.getOptions());
+    }
+
+    @Override
     public Optional<NotApplicable> notApplicableTo(GraphState graphState) {
         // Make sure that no canonicalization follows constant blinding. The canonicalizer folds
         // encrypted constants, leading to incorrect results.

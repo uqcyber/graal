@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -120,6 +120,30 @@ public class BytecodeSuite {
     @Test
     public void testLabelI32ResultMix() {
         test(b -> b.addLabel(64, 0, WasmType.MIX_COMMON_TYPE), new byte[]{Bytecode.SKIP_LABEL_I32, Bytecode.LABEL_I32, 0x03, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+    }
+
+    @Test
+    public void testLegacyLabelU8Encoding() {
+        test(b -> b.addLabel(1, 20, WasmType.NUM_COMMON_TYPE, 3), new byte[]{
+                        (byte) Bytecode.MISC, (byte) Bytecode.LEGACY_SKIP_LABEL_U8, Bytecode.LABEL_U8, (byte) 0x94,
+                        (byte) Bytecode.MISC, (byte) Bytecode.LEGACY_CATCH_UNWIND,
+                        0x03, 0x00, 0x00, 0x00});
+    }
+
+    @Test
+    public void testLegacyLabelU16Encoding() {
+        test(b -> b.addLabel(2, 64, WasmType.NUM_COMMON_TYPE, 3), new byte[]{
+                        (byte) Bytecode.MISC, (byte) Bytecode.LEGACY_SKIP_LABEL_U16, Bytecode.LABEL_U16, 0x42, 0x40,
+                        (byte) Bytecode.MISC, (byte) Bytecode.LEGACY_CATCH_UNWIND,
+                        0x03, 0x00, 0x00, 0x00});
+    }
+
+    @Test
+    public void testLegacyLabelI32Encoding() {
+        test(b -> b.addLabel(64, 256, WasmType.NUM_COMMON_TYPE, 3), new byte[]{
+                        (byte) Bytecode.MISC, (byte) Bytecode.LEGACY_SKIP_LABEL_I32, Bytecode.LABEL_I32, 0x01, 0x40, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+                        (byte) Bytecode.MISC, (byte) Bytecode.LEGACY_CATCH_UNWIND,
+                        0x03, 0x00, 0x00, 0x00});
     }
 
     @Test

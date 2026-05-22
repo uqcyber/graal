@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,6 +42,7 @@ import jdk.graal.compiler.nodes.AbstractEndNode;
 import jdk.graal.compiler.nodes.AbstractMergeNode;
 import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.ControlSplitNode;
+import jdk.graal.compiler.nodes.DeoptBarrier;
 import jdk.graal.compiler.nodes.DeoptimizeNode;
 import jdk.graal.compiler.nodes.EndNode;
 import jdk.graal.compiler.nodes.FixedGuardNode;
@@ -308,6 +309,9 @@ public class ConvertDeoptimizeToGuardPhase extends PostRunCanonicalizationPhase<
                     moveAsDeoptAfter((AbstractBeginNode) current, deopt);
                     return;
                 }
+            } else if (current instanceof DeoptBarrier && current instanceof FixedWithNextNode fixedWithNextNode) {
+                moveAsDeoptAfter(fixedWithNextNode, deopt);
+                return;
             } else if (current instanceof OSRMonitorEnterNode monitorEnterNode) {
                 /*
                  * OSR locals (including locks) need to remain in the graph and be lowered to LIR

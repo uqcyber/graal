@@ -36,7 +36,6 @@ import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
@@ -482,7 +481,7 @@ public abstract class NonSnippetLowerings {
                              * Uses ANY_LOCATION because runtime-compiled code can be persisted and
                              * loaded in a process where image code is located elsewhere.
                              */
-                            ReadNode codeStart = graph.add(new ReadNode(codeStartField, LocationIdentity.ANY_LOCATION, FrameAccess.getWordStamp(), BarrierType.NONE, MemoryOrderMode.PLAIN));
+                            ReadNode codeStart = graph.add(new ReadNode(codeStartField, LocationIdentity.ANY_LOCATION, SubstrateTarget.getWordStamp(), BarrierType.NONE, MemoryOrderMode.PLAIN));
                             ValueNode offset = ConstantNode.forIntegerKind(wordKind, targetMethod.getImageCodeOffset(), graph);
                             AddressNode address = graph.unique(new OffsetAddressNode(codeStart, offset));
 

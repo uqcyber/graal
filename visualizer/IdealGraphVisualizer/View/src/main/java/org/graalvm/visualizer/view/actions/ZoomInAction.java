@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,8 +33,8 @@ import org.openide.util.actions.CallableSystemAction;
 
 import javax.swing.Action;
 import javax.swing.KeyStroke;
-import java.awt.Event;
 import java.awt.event.ActionEvent;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 
 @NbBundle.Messages({
@@ -44,12 +44,16 @@ import java.awt.event.KeyEvent;
 @ActionRegistration(displayName = "#ACTION_ZoomIn",
         iconBase = "org/graalvm/visualizer/view/images/zoom_in.png", lazy = true)
 @ActionReferences({
+        @ActionReference(path = "Shortcuts", name = "C-EQUALS"),
+        @ActionReference(path = "Shortcuts", name = "C-PLUS"),
         @ActionReference(path = "NodeGraphViewer/Actions", position = 3500, separatorBefore = 3400),
         @ActionReference(path = "NodeGraphViewer/ContextActions", position = 4000, separatorBefore = 3950),
         @ActionReference(path = "Menu/View", position = 2070),
 })
 public final class ZoomInAction extends CallableSystemAction {
     public static final String ID = "org.graalvm.visualizer.view.actions.ZoomInAction"; // NOI18N
+    public static final KeyStroke KEY_STROKE = KeyStroke.getKeyStroke(KeyEvent.VK_PLUS, InputEvent.CTRL_DOWN_MASK);
+    public static final KeyStroke SECONDARY_KEY_STROKE = KeyStroke.getKeyStroke(KeyEvent.VK_EQUALS, InputEvent.CTRL_DOWN_MASK);
 
     @Override
     public void actionPerformed(ActionEvent ev) {
@@ -75,7 +79,7 @@ public final class ZoomInAction extends CallableSystemAction {
         EditorTopComponent editor = EditorTopComponent.getActive();
         if (editor != null) {
             if (origSize) {
-                editor.zoomTo(1.0f);
+                editor.resetZoom();
             } else {
                 editor.zoomIn();
             }
@@ -93,7 +97,7 @@ public final class ZoomInAction extends CallableSystemAction {
     }
 
     public ZoomInAction() {
-        putValue(Action.ACCELERATOR_KEY, KeyStroke.getKeyStroke(KeyEvent.VK_EQUALS, Event.CTRL_MASK, false));
+        putValue(Action.ACCELERATOR_KEY, KEY_STROKE);
         putValue(Action.SHORT_DESCRIPTION, Bundle.ACTION_ZoomIn());
     }
 

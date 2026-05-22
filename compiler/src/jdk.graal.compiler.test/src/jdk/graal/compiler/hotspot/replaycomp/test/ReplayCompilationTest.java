@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -166,14 +166,17 @@ public class ReplayCompilationTest extends GraalCompilerTest {
             HotSpotCompilationRequestResult regularResult = runRegularCompilation(method, recordOptions);
             assertTrue(regularResult.getFailure() == null);
             Path replayFile = findReplayCompFile(temp.path);
+            Path resultsFile = temp.path.resolve("benchmark-results.json");
             String[][] argumentLists = new String[][]{
                             new String[]{"--compare-graphs=true", replayFile.toString()},
-                            new String[]{"--compare-graphs=false", temp.path.toString(), "--benchmark", "--iterations=1"}
+                            new String[]{"--compare-graphs=false", temp.path.toString(), "--benchmark", "--iterations=1", "--results-file=" + resultsFile}
             };
             for (String[] arguments : argumentLists) {
                 ReplayCompilationRunner.ExitStatus status = ReplayCompilationRunner.run(arguments, TTY.out().out(), new HardwarePerformanceCounters.JargraalPAPIBridge());
                 assertTrue(status == ReplayCompilationRunner.ExitStatus.Success);
             }
+            assertTrue(Files.isRegularFile(resultsFile));
+            assertTrue(Files.size(resultsFile) > 0);
         });
     }
 

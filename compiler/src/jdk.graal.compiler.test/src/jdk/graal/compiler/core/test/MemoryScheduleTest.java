@@ -50,6 +50,7 @@ import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.OptimisticOptimizations;
 import jdk.graal.compiler.phases.common.CanonicalizerPhase;
 import jdk.graal.compiler.phases.common.FloatingReadPhase;
+import jdk.graal.compiler.phases.common.FrameStateAssignmentPhase;
 import jdk.graal.compiler.phases.common.GuardLoweringPhase;
 import jdk.graal.compiler.phases.common.HighTierLoweringPhase;
 import jdk.graal.compiler.phases.common.LowTierLoweringPhase;
@@ -717,6 +718,8 @@ public class MemoryScheduleTest extends GraphScheduleTest {
                     // cached cfg needs to have its loop information invalidated.
                     graph.getLastCFG().resetLoopInformation();
                 }
+            } else {
+                new FrameStateAssignmentPhase().apply(graph);
             }
             debug.dump(DebugContext.BASIC_LEVEL, graph, "after removal of framestates");
 

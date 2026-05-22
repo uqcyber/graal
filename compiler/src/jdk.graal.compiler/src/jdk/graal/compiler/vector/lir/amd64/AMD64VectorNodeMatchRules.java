@@ -222,11 +222,14 @@ public class AMD64VectorNodeMatchRules extends AMD64NodeMatchRules {
             VexRVMOp op = switch (scalarKind(simdStamp)) {
                 case WORD -> VexRVMOp.VPMULLW;
                 case DWORD -> VexRVMOp.VPMULLD;
-                case QWORD -> VexRVMOp.EVPMULLQ;
+                case QWORD -> simdEncoding == AMD64SIMDInstructionEncoding.EVEX ? VexRVMOp.EVPMULLQ : null;
                 case SINGLE -> VexRVMOp.VMULPS;
                 case DOUBLE -> VexRVMOp.VMULPD;
                 default -> throw GraalError.shouldNotReachHereUnexpectedValue(scalarKind(simdStamp));
             };
+            if (op == null) {
+                return null;
+            }
             return binaryRead(op, size, value, access);
         } else if (stamp instanceof FloatStamp) {
             VexRVMOp op = ((FloatStamp) stamp).getBits() == 32 ? VMULSS : VMULSD;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
  */
 package jdk.graal.compiler.phases.common.util;
 
+import java.util.ArrayDeque;
 import java.util.EnumSet;
 
 import jdk.graal.compiler.core.common.NumUtil;
@@ -38,6 +39,7 @@ import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.nodes.AbstractBeginNode;
 import jdk.graal.compiler.nodes.FixedNode;
 import jdk.graal.compiler.nodes.GraphState.StageFlag;
+import jdk.graal.compiler.nodes.LoopBeginNode;
 import jdk.graal.compiler.nodes.LoopExitNode;
 import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.PiNode;
@@ -84,6 +86,67 @@ public class LoopUtility {
          * regardless.
          */
         return loop.loopBegin().isAnyStripMinedOuter() || loop.loopBegin().mayEmitThreadedCode();
+    }
+
+    /**
+     * Updates the ancestor-created clone factor of every descendant loop nested below
+     * {@code rootLoop} by multiplying it with {@code cloneFactor}.
+     *
+     * A descendant loop is a loop whose loop parent chain contains {@code rootLoop}. For example,
+     * if {@code rootLoop} is {@code L0}, both {@code L1} and {@code L2} are descendants below:
+     *
+     * <pre>
+     * {@code
+     * for (...) {          // L0, the ancestor being unrolled
+     *     for (...) {      // L1, descendant
+     *         for (...) {  // L2, descendant
+     *         }
+     *     }
+     * }
+     * }
+     * </pre>
+     *
+     * Parent full and partial unrolls can duplicate counted descendants. If later policy checks
+     * only look at one descendant loop body, they can miss that an ancestor transform already cloned
+     * the same descendant body many times and may fully unroll it again.
+     *
+     * Running this helper immediately before the parent-loop rewrite updates a separate clone
+     * factor on the existing descendant loop begins in place, so both the current descendants and
+     * any clones created by the rewrite inherit the same aggregated ancestor-created copy count.
+     * The helper updates all descendant loops, including loops that are not counted yet, because a
+     * later counted-loop detection pass can make them relevant to full-unroll policy.
+     *
+     * <pre>
+     * {@code
+     * pending = [rootLoop]
+     * while pending is not empty:
+     *     current = pending.remove()
+     *     for child in current.children:
+     *         child.countedDescendantCloneFactor *= cloneFactor
+     *         pending.add(child)
+     * }
+     * </pre>
+     */
+    public static void updateDescendantLoopCloneFactors(LoopsData loopsData, Loop rootLoop, int cloneFactor) {
+        ArrayDeque<Loop> pendingLoops = new ArrayDeque<>();
+        pendingLoops.addLast(rootLoop);
+        while (!pendingLoops.isEmpty()) {
+            Loop currentLoop = pendingLoops.removeLast();
+            for (CFGLoop<HIRBlock> childCfgLoop : currentLoop.getCFGLoop().getChildren()) {
+                Loop childLoop = loopsData.loop(childCfgLoop);
+                LoopBeginNode childLoopBegin = childLoop.loopBegin();
+                childLoopBegin.setCountedDescendantCloneFactor(multiplyUnrollFactors(childLoopBegin.getCountedDescendantCloneFactor(), cloneFactor));
+                pendingLoops.addLast(childLoop);
+            }
+        }
+    }
+
+    private static int multiplyUnrollFactors(int currentUnrollFactor, int additionalUnrollFactor) {
+        try {
+            return Math.multiplyExact(currentUnrollFactor, additionalUnrollFactor);
+        } catch (ArithmeticException e) {
+            return Integer.MAX_VALUE;
+        }
     }
 
     public static long tripCountSignedExact(CountedLoopInfo loop) {

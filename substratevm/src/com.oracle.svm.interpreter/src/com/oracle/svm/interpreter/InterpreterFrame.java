@@ -32,6 +32,18 @@ import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.monitor.MonitorSupport;
 import com.oracle.svm.shared.util.VMError;
 
+/// Stores JVM locals and operand stack slots for one interpreted frame.
+///
+/// Each logical JVM slot has parallel primitive and reference storage:
+///
+/// * [#primitives] stores primitive values as raw `long` bits.
+/// * [#references] stores object references.
+///
+/// The `Static` suffix on methods such as [#getObjectStatic(int)] and
+/// [#setIntStatic(int, int)] does **not** refer to Java static fields or static methods. It means
+/// the caller statically knows which storage kind is valid for the slot and wants direct typed
+/// access to the underlying arrays. Higher-level helpers in [InterpreterFrameUtil] provide the
+/// semantic local-variable and operand-stack operations built on top of these raw slot accessors.
 public final class InterpreterFrame {
     private final long[] primitives;
     private final Object[] references;

@@ -706,7 +706,8 @@ public class NativeImageGenerator {
             }
 
             var hConstantReflection = (HostedConstantReflectionProvider) runtimeConfiguration.getProviders().getConstantReflection();
-            heap = new NativeImageHeap(aUniverse, hUniverse, hMetaAccess, hConstantReflection, ImageSingletons.lookup(ImageHeapLayouter.class));
+            ImageHeapLayouter imageHeapLayouter = ImageSingletons.lookup(ImageHeapLayouter.class);
+            heap = new NativeImageHeap(aUniverse, hUniverse, hMetaAccess, hConstantReflection, imageHeapLayouter);
 
             if (ImageLayerBuildingSupport.buildingSharedLayer()) {
                 HostedImageLayerBuildingSupport.singleton().getWriter().setNativeImageHeap(heap);
@@ -764,13 +765,13 @@ public class NativeImageGenerator {
                         ImageHeapLayoutInfo heapLayout = buildNativeImageHeap(heap, codeCache);
                         BuildPhaseProvider.markHeapLayoutFinished();
 
-                        AfterHeapLayoutAccessImpl config = new AfterHeapLayoutAccessImpl(featureHandler, loader, heap, hMetaAccess, debug);
+                        AfterHeapLayoutAccessImpl config = new AfterHeapLayoutAccessImpl(featureHandler, loader, heap, heapLayout, hMetaAccess, debug);
                         featureHandler.forEachFeature(feature -> feature.afterHeapLayout(config));
 
                         createAbstractImage(k, hostedEntryPoints, heap, heapLayout, hMetaAccess, codeCache);
 
                         FeatureImpl.AfterAbstractImageCreationAccessImpl access = new FeatureImpl.AfterAbstractImageCreationAccessImpl(featureHandler, loader, hMetaAccess, debug, image,
-                                        runtimeConfiguration);
+                                        heapLayout, runtimeConfiguration);
                         featureHandler.forEachGraalFeature(feature -> feature.afterAbstractImageCreation(access));
 
                         image.build(imageName, debug);
@@ -858,6 +859,7 @@ public class NativeImageGenerator {
     }
 
     protected ImageHeapLayoutInfo buildNativeImageHeap(NativeImageHeap heap, NativeImageCodeCache codeCache) {
+        ImageSingletons.lookup(ImageHeapObjectSorter.class).beforeImageHeapTraversal();
         // Start building the model of the native image heap.
         heap.addInitialObjects();
         // Then build the model of the code cache, which can
@@ -873,7 +875,9 @@ public class NativeImageGenerator {
 
     protected ImageHeapLayoutInfo layoutNativeImageHeap(NativeImageHeap heap) {
         ImageHeapObjectSorter objectSorter = ImageSingletons.lookup(ImageHeapObjectSorter.class);
-        return heap.getLayouter().layout(heap, SubstrateOptions.getPageSize(), objectSorter, ImageHeapLayouter.ImageHeapLayouterCallback.NONE);
+        ImageHeapLayoutInfo heapLayout = heap.getLayouter().layout(heap, SubstrateOptions.getPageSize(), objectSorter, ImageHeapLayouter.ImageHeapLayouterCallback.NONE);
+        objectSorter.afterHeapLayout();
+        return heapLayout;
     }
 
     protected void createAbstractImage(NativeImageKind k, List<HostedMethod> hostedEntryPoints, NativeImageHeap heap, ImageHeapLayoutInfo heapLayout,

@@ -351,6 +351,11 @@ public class MethodHandleFeature implements InternalFeature {
             AnalysisType lambdaFormType = metaAccess.getUniverse().lookup(vmAccess.lookupBootClassLoaderType("java.lang.invoke.LambdaForm"));
             AnalysisMethod bmhCtor = (AnalysisMethod) JVMCIReflectionUtil.getDeclaredConstructor(boundMHType, methodTypeType, lambdaFormType);
             access.registerAsRoot(bmhCtor, true, "This can be accessed by generated code when crema is enabled");
+
+            // DirectMethodHandle$Holder helpers
+            for (Method method : ReflectionUtil.lookupClass("java.lang.invoke.DirectMethodHandle$Holder").getDeclaredMethods()) {
+                access.registerAsRoot(method, true, "This can be accessed by generated code when crema is enabled");
+            }
         }
     }
 

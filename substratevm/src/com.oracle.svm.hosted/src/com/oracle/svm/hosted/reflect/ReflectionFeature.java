@@ -61,7 +61,6 @@ import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.configure.ConfigurationFiles;
-import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
 import com.oracle.svm.core.hub.DynamicHub;
@@ -92,6 +91,7 @@ import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.reflect.proxy.DynamicProxyFeature;
 import com.oracle.svm.hosted.snippets.ReflectionPlugins;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
@@ -140,6 +140,7 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
     private ImageClassLoader loader;
     private AnalysisUniverse aUniverse;
     private UniverseMetaAccess metaAccess;
+    private Boolean relativeCodePointers;
 
     private record AccessorKey(Executable member, Class<?> targetClass) {
     }
@@ -159,8 +160,8 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
     FeatureImpl.BeforeAnalysisAccessImpl analysisAccess;
 
     public static final class Options {
-        @Option(help = "Emits a warning when the old programmatic registration API is used.", type = OptionType.User) public static final HostedOptionKey<Boolean> TrackDeprecatedRegistrationUsage = new HostedOptionKey<>(
-                        false);
+        @Option(help = "Emits a warning when the old programmatic registration API is used.", type = OptionType.User) //
+        public static final HostedOptionKey<Boolean> TrackDeprecatedRegistrationUsage = new HostedOptionKey<>(false);
     }
 
     @Override
@@ -295,7 +296,7 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
 
     private MethodRef asMethodRef(ResolvedJavaMethod method) {
         AnalysisMethod aMethod = (method instanceof AnalysisMethod) ? (AnalysisMethod) method : analysisAccess.getUniverse().lookup(method);
-        if (SubstrateOptions.useRelativeCodePointers()) {
+        if (relativeCodePointers) {
             return new MethodOffset(aMethod);
         } else {
             return new MethodPointer(aMethod);
@@ -352,6 +353,9 @@ public class ReflectionFeature implements InternalFeature, ReflectionSubstitutio
 
         loader = access.getImageClassLoader();
         annotationSubstitutions = ((Inflation) access.getBigBang()).getAnnotationSubstitutionProcessor();
+
+        assert relativeCodePointers == null;
+        relativeCodePointers = SubstrateOptions.useRelativeCodePointers();
 
         /* Primitive classes cannot be accessed through Class.forName() */
         for (Class<?> primitiveClass : PRIMITIVE_CLASSES) {

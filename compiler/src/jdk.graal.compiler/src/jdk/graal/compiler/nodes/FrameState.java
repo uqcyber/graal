@@ -990,14 +990,15 @@ public final class FrameState extends VirtualState implements IterableNodeType {
 
     @Override
     public void applyToVirtual(VirtualClosure closure) {
-        closure.apply(this);
-        if (virtualObjectMappings != null) {
-            for (EscapeObjectState state : virtualObjectMappings) {
-                state.applyToVirtual(closure);
+        FrameState current = this;
+        while (current != null) {
+            closure.apply(current);
+            if (current.virtualObjectMappings != null) {
+                for (EscapeObjectState state : current.virtualObjectMappings) {
+                    state.applyToVirtual(closure);
+                }
             }
-        }
-        if (outerFrameState() != null) {
-            outerFrameState().applyToVirtual(closure);
+            current = current.outerFrameState();
         }
     }
 

@@ -48,14 +48,24 @@ import com.oracle.svm.core.stack.JavaFrameAnchors;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
 
+import jdk.vm.ci.meta.JavaKind;
+
 /**
  * Deoptimized-frame implementation for transitions from Ristretto compiled code back to the Crema
  * interpreter.
  *
  * <p>
- * Normal returns are replayed through the reconstructed interpreter frame chain, so this frame only
- * needs to carry the source-frame metadata plus an optional pending exception payload across the
- * handoff into {@link InterpreterDeoptEntryPoints}.
+ * Normal returns and exception delivery are resumed by executing the reconstructed
+ * {@link RistrettoVirtualInterpreterFrame} chain in Java. This heap object only bridges the tiny
+ * gap where the deopt stub still owns the physical compiled frame but Java resume code has not
+ * started yet.
+ *
+ * <pre>
+ * deopt stub sees source stack frame + gp/fp return registers
+ *   -> snapshot pending exception or pending top-frame result into this object
+ *   -> tear down the compiled frame and jump to InterpreterDeoptEntryPoints
+ *   -> Java resume code consumes the one-shot payload and continues in the interpreter
+ * </pre>
  */
 public class RistrettoDeoptimizedInterpreterFrame extends DeoptimizedFrame {
     private final long frameSize;
@@ -65,6 +75,26 @@ public class RistrettoDeoptimizedInterpreterFrame extends DeoptimizedFrame {
 
     /* Carries the pending exception object across the deopt handoff. */
     private Object pendingExceptionObject;
+
+    /*
+     * Pending invoke-result handoff for the physical top frame:
+     *
+     * <pre> compiled frame: invoke already finished, but the caller slot is not written yet machine
+     * state: gp/fp return registers still hold the raw return bits deopt stub: snapshots those raw
+     * bits into this object Java resume: executeInterpreterFrames writes the result into the
+     * interpreter frame </pre>
+     *
+     * The raw register payload lives in one plain long field, not a Word object: - the relevant
+     * GP/FP return register is just a transient bit container here - this object lives on the Java
+     * heap, not in raw pointer arithmetic - object returns are converted eagerly into
+     * pendingObjectReturnValue because only object identity, not raw register bits, matters once
+     * the stub exits - one boxed Object carrier would require allocation while the deopt stub is
+     * still running in uninterruptible code, which is not allowed, and would lose the exact
+     * float/double bit-pattern too early
+     */
+    private JavaKind pendingReturnKind = JavaKind.Illegal;
+    private long pendingPrimitiveReturnValue;
+    private Object pendingObjectReturnValue;
 
     private CodePointer interpEntryPoint;
     private boolean hasPendingException = false;
@@ -101,6 +131,11 @@ public class RistrettoDeoptimizedInterpreterFrame extends DeoptimizedFrame {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     @Override
     public VirtualFrame getTopFrame() {
+        /*
+         * The linked frame chain is stored bottom-to-top. Stack walking, pending-result capture,
+         * and trace logging all need the innermost active frame first, so walk the callee chain to
+         * the end here.
+         */
         RistrettoVirtualInterpreterFrame top = bottomFrame;
         while (top.hasCallee()) {
             top = top.getCallee();
@@ -169,6 +204,70 @@ public class RistrettoDeoptimizedInterpreterFrame extends DeoptimizedFrame {
         return pendingExceptionObject;
     }
 
+    /**
+     * Snapshots the physical top-frame machine return registers. Called only from
+     * {@link #continueInterpreterDeoptimization(Pointer, UnsignedWord, UnsignedWord, boolean)}
+     * while the compiled frame is still the active machine frame. Once the deopt stub restores the
+     * caller-visible stack shape and tail-jumps into the typed Java entry point, those ABI return
+     * registers are no longer a stable source for the pending invoke result.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public void setPendingReturnValue(JavaKind returnKind, UnsignedWord gpResult, UnsignedWord fpResult) {
+        assert pendingReturnKind == JavaKind.Illegal;
+        VMError.guarantee(returnKind != JavaKind.Illegal && returnKind != JavaKind.Void, "Pending return value requires a non-void return kind");
+        pendingReturnKind = returnKind;
+        if (returnKind == JavaKind.Object) {
+            /*
+             * Object returns must be converted to a Java reference now. After the stub restores the
+             * caller frame, only the boxed object identity remains meaningful to the interpreter
+             * resume path.
+             */
+            pendingObjectReturnValue = Deoptimizer.isNonNullObjectValue(gpResult) ? ((Pointer) gpResult).toObject() : null;
+        } else {
+            switch (returnKind) {
+                case Float, Double:
+                    pendingPrimitiveReturnValue = fpResult.rawValue();
+                    break;
+                case Int, Boolean, Byte, Short, Char, Long:
+                    pendingPrimitiveReturnValue = gpResult.rawValue();
+                    break;
+                default:
+                    VMError.guarantee(false, "Unexpected primitive pending return kind");
+            }
+        }
+    }
+
+    public boolean hasPendingReturnValue() {
+        return pendingReturnKind != JavaKind.Illegal;
+    }
+
+    /**
+     * Reboxes the one-shot saved machine return value for
+     * {@link InterpreterDeoptEntryPoints#executeInterpreterFrames(RistrettoDeoptimizedInterpreterFrame, RistrettoVirtualInterpreterFrame, Object, boolean)}
+     * and then clears the handoff state. This boxing happens only after control has returned to
+     * normal Java code; the earlier uninterruptible deopt-stub path must not allocate.
+     */
+    public Object consumePendingReturnValue() {
+        VMError.guarantee(hasPendingReturnValue(), "Must have a pending return value");
+        Object result = switch (pendingReturnKind) {
+            case Int -> (int) pendingPrimitiveReturnValue;
+            case Boolean -> pendingPrimitiveReturnValue != 0;
+            case Byte -> (byte) pendingPrimitiveReturnValue;
+            case Short -> (short) pendingPrimitiveReturnValue;
+            case Char -> (char) pendingPrimitiveReturnValue;
+            case Long -> pendingPrimitiveReturnValue;
+            case Float -> Float.intBitsToFloat((int) pendingPrimitiveReturnValue);
+            case Double -> Double.longBitsToDouble(pendingPrimitiveReturnValue);
+            case Object -> pendingObjectReturnValue;
+            case Void, Illegal -> throw VMError.shouldNotReachHere("Unexpected pending return kind: " + pendingReturnKind);
+        };
+
+        pendingReturnKind = JavaKind.Illegal;
+        pendingPrimitiveReturnValue = 0;
+        pendingObjectReturnValue = null;
+        return result;
+    }
+
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     @Override
     protected char[] getCompletedMessage() {
@@ -178,12 +277,21 @@ public class RistrettoDeoptimizedInterpreterFrame extends DeoptimizedFrame {
     /**
      * Continues the active deoptimization by tail-jumping into the typed interpreter entry stub for
      * this reconstructed frame chain.
+     *
+     * <p>
+     * This is the last point where the original compiled frame is still the active machine stack
+     * frame, so it is also the last chance to harvest a pending exception or pending invoke result
+     * from the machine return registers before control transfers into normal Java code again. After
+     * the stub restores {@code revertSp} and jumps into
+     * {@link InterpreterDeoptEntryPoints#jumpToInterpreterEntryPoint(RistrettoDeoptimizedInterpreterFrame, Pointer, CodePointer, CodePointer, Pointer)},
+     * the resume path retains only this deoptimized frame object, not a reliable view of the old
+     * compiled-frame return registers.
      */
     @Uninterruptible(reason = "Custom deopt-stub epilogue rewrites the active stack frame.")
-    public UnsignedWord continueInterpreterDeoptimization(Pointer originalStackPointer, UnsignedWord gpResult, boolean hasException) {
+    public UnsignedWord continueInterpreterDeoptimization(Pointer originalStackPointer, UnsignedWord gpResult, UnsignedWord fpResult, boolean hasException) {
         IsolateThread targetThread = CurrentIsolate.getCurrentThread();
 
-        /* Stack pointer of deoptee's caller after the source frame is removed. */
+        /* Caller stack pointer after the compiled source frame has been removed from the stack. */
         Pointer revertSp = originalStackPointer.add(WordFactory.unsigned(getSourceTotalFrameSize()));
         JavaFrameAnchors.verifyTopFrameAnchor(revertSp);
         CodePointer returnAddressOfDeoptedMethod = FrameAccess.singleton().readReturnAddress(targetThread, revertSp);
@@ -195,16 +303,25 @@ public class RistrettoDeoptimizedInterpreterFrame extends DeoptimizedFrame {
         } else {
             assert !hasPendingException;
             /*
-             * Normal returns are replayed from the recorded invoke/return boundary in the
-             * interpreter frame chain, so the caller frame injects the value into its operand stack
-             * instead of reading raw compiled return registers from this object.
+             * Inlined callees produce their results by executing their reconstructed child frames
+             * in Java. For a call to a non-inlined callee on the physical top frame, deoptimization
+             * may happen after the callee already returned but before the caller wrote that result
+             * into its interpreter operand stack, so preserve the machine return registers in this
+             * frame object now. Once the stub dismantles the compiled frame and resumes through the
+             * Java entry point, normal execution may already reuse those registers before the
+             * interpreter asks to inject the result.
              */
+            RistrettoVirtualInterpreterFrame topFrame = (RistrettoVirtualInterpreterFrame) getTopFrame();
+            if (topFrame.hasPendingCallResult()) {
+                setPendingReturnValue(topFrame.getCompiledReturnKind(), gpResult, fpResult);
+            }
         }
         if (pin != null) {
             /*
-             * After this point the frame stays strongly reachable through the Java argument passed
-             * into the deopt-entry stub and the typed interpreter entry method that it tail-jumps
-             * to.
+             * The pin is only needed while the stub owns the frame purely through raw stack data.
+             * After the tail jump below, this frame is also reachable as a normal Java argument
+             * passed through jumpToInterpreterEntryPoint(...) into the typed interpreter entry
+             * method, so keeping the object pinned any longer would only over-constrain the GC.
              */
             pin.close();
         }

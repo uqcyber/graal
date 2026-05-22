@@ -13,7 +13,8 @@ with `-H:+RuntimeClassLoading`, and that option also configures the main prerequ
 * Enables open type world with `-H:-ClosedTypeWorld`. This handles subclasses and interfaces loaded after image build time.
 * Enables class-loader-aware lookup with `-H:+ClassForNameRespectsClassLoader`. This enables per-class-loader registries
   (see `ClassRegistries.java` and `Target_java_lang_ClassLoader.java`), so the runtime can preserve normal Java class-loader
-  delegation and namespace separation.
+  delegation and namespace separation. It also makes JDK class-loader state run-time initialized where needed, so app-loader
+  resource and class lookup can observe run-time class-path values.
 * Disables predefined-class support (see "Support For Predefined Classes" in `ExperimentalAgentsOptions.md`) with `-H:-SupportPredefinedClasses`.
 
 In addition to the above, `CremaFeature.java` builds on the existing Native Image bytecode interpreter and its metadata universe (`BuildTimeInterpreterUniverse.java`).
@@ -141,9 +142,9 @@ interpreter again into compiled code or falls through to
 `InterpreterStubSection.java`: `leaveInterpreter`, `leaveInterpreter0`, `call`).
 
 The frame model is heap-based. `InterpreterFrame` stores parallel primitive and reference slot arrays plus monitor
-state, and `EspressoFrame` overlays the JVM local-variable and operand-stack layout on top of that
+state, and `InterpreterFrameUtil` overlays the JVM local-variable and operand-stack layout on top of that
 storage (`InterpreterFrame.java`: constructor, `create`, slot accessors/mutators, and lock management,
-[EspressoFrame.java](../../espresso-shared/substratevm/src/com.oracle.svm.interpreter/src/com/oracle/svm/interpreter/EspressoFrame.java)).
+[InterpreterFrameUtil.java](../src/com.oracle.svm.interpreter/src/com/oracle/svm/interpreter/InterpreterFrameUtil.java)).
 `Interpreter.execute` initializes the frame from the Java arguments, acquires synchronized locks when needed, and runs
 the bytecode
 loop (`Interpreter.java`: `initArguments`, `initializeFrame`, `execute`, `execute0`).

@@ -105,12 +105,12 @@ import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.threadlocal.VMThreadLocalSupport;
 import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.guest.staging.SubstrateGuestOptions;
-import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.guest.staging.c.CGlobalData;
 import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.guest.staging.c.function.CEntryPointActions;
 import com.oracle.svm.guest.staging.c.function.CEntryPointCreateIsolateParameters;
 import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.util.VMError;
 
@@ -498,14 +498,16 @@ public final class CEntryPointSnippets extends SubstrateTemplates implements Sni
                         throw VMError.shouldNotReachHereAtRuntime();
                     }
                 } else if (!ignoreUnrecognized && remainingArgs.length != 0) {
-                    /*
-                     * GR-73367: we currently don't recognize many commonly passed VM options like
-                     * module options, -ea, or --enable-native-access at runtime, so failing here
-                     * would be disruptive to existing code
-                     *
-                     * (Note: such options are passed as args to a Java main method above)
-                     */
-                    // return CEntryPointErrors.ARGUMENT_PARSING_FAILED;
+                    if (!SubstrateOptions.LegacyJavaOptionMode.getValue()) {
+                        Log.logStream().println("Error: Unrecognized option: " + remainingArgs[0]);
+                        return CEntryPointErrors.ARGUMENT_PARSING_FAILED;
+                    } else {
+                        /*
+                         * GR-73367: Failing here would be disruptive to existing/legacy code.
+                         *
+                         * (Note: such options are passed as args to a Java main method above)
+                         */
+                    }
                 }
             } catch (IllegalArgumentException e) {
                 Log.logStream().println("Error: " + e.getMessage());
@@ -832,6 +834,9 @@ public final class CEntryPointSnippets extends SubstrateTemplates implements Sni
         }
 
         writeCurrentVMThread(thread);
+        if (runtimeAssertionsEnabled() || SubstrateOptions.CheckIsolateThreadAtEntry.getValue()) {
+            verifyIsolateThread(thread, true);
+        }
         return CEntryPointErrors.NO_ERROR;
     }
 

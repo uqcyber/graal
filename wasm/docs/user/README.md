@@ -204,6 +204,9 @@ Users can override the defaults to experiment with upcoming features or opt out 
 * `--wasm.Exceptions`: Enable support for the [exception handling feature](https://github.com/WebAssembly/exception-handling/blob/main/proposals/exception-handling/Exceptions.md), letting WebAssembly modules use new instructions for catching and throwing exceptions.
   Defaults to `true`.
 
+* `--wasm.LegacyExceptions`: Enable support for the [legacy exception handling feature](https://github.com/WebAssembly/exception-handling/tree/main/proposals/exception-handling/legacy), letting WebAssembly modules use the legacy exception instructions independently from `--wasm.Exceptions`.
+  Defaults to `false`.
+
 * `--wasm.TypedFunctionReferences`: Enable support for the [typed function references feature](https://github.com/WebAssembly/function-references/blob/master/proposals/function-references/Overview.md), letting WebAssembly produce and consume (call) function references.
   Defaults to `true`.
 

@@ -40,11 +40,7 @@
  */
 package com.oracle.truffle.espresso.polyglot.collections;
 
-import java.util.AbstractList;
-import java.util.ConcurrentModificationException;
-import java.util.Iterator;
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.Objects;
 
 import com.oracle.truffle.espresso.polyglot.Interop;
@@ -53,7 +49,7 @@ import com.oracle.truffle.espresso.polyglot.Polyglot;
 import com.oracle.truffle.espresso.polyglot.TypeLiteral;
 import com.oracle.truffle.espresso.polyglot.UnsupportedMessageException;
 
-public class EspressoForeignList<T> extends AbstractList<T> implements List<T> {
+public class EspressoForeignList<T> extends AbstractListWithoutField<T> implements List<T> {
 
     @Override
     public int size() {
@@ -155,61 +151,6 @@ public class EspressoForeignList<T> extends AbstractList<T> implements List<T> {
             return Interop.asString(Interop.toDisplayString(this));
         } catch (UnsupportedMessageException e) {
             return super.toString();
-        }
-    }
-
-    @Override
-    public Iterator<T> iterator() {
-        return new Itr();
-    }
-
-    // Copied from AbstractList
-    private final class Itr implements Iterator<T> {
-        /**
-         * Index of element to be returned by subsequent call to next.
-         */
-        int cursor = 0;
-
-        /**
-         * Index of element returned by most recent call to next or previous. Reset to -1 if this
-         * element is deleted by a call to remove.
-         */
-        int lastRet = -1;
-
-        @Override
-        public boolean hasNext() {
-            return cursor != size();
-        }
-
-        @Override
-        @SuppressWarnings("unchecked")
-        public T next() {
-            try {
-                int i = cursor;
-                T next = get(i);
-                lastRet = i;
-                cursor = i + 1;
-                return next;
-            } catch (IndexOutOfBoundsException e) {
-                throw new NoSuchElementException();
-            }
-        }
-
-        @Override
-        public void remove() {
-            if (lastRet < 0) {
-                throw new UnsupportedOperationException();
-            }
-
-            try {
-                EspressoForeignList.this.remove(lastRet);
-                if (lastRet < cursor) {
-                    cursor--;
-                }
-                lastRet = -1;
-            } catch (IndexOutOfBoundsException e) {
-                throw new ConcurrentModificationException();
-            }
         }
     }
 }

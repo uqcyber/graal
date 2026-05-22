@@ -85,17 +85,6 @@ public final class SamplerBuffersAccess {
         SubstrateJVM.getSamplerBufferPool().adjustBufferCount();
     }
 
-    @Uninterruptible(reason = "Prevent JFR recording and epoch change.")
-    public static void releaseFullBuffers(SamplerBufferPool samplerBufferPool) {
-        while (true) {
-            SamplerBuffer buffer = samplerBufferPool.popFullBuffer();
-            if (buffer.isNull()) {
-                break;
-            }
-            samplerBufferPool.releaseBuffer(buffer);
-        }
-    }
-
     @Uninterruptible(reason = "The callee explicitly does a safepoint check.", calleeMustBe = false)
     private static void safepointCheck() {
         safepointCheck0();

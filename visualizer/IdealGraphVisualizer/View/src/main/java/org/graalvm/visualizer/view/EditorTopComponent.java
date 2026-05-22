@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -565,6 +565,11 @@ public final class EditorTopComponent extends TopComponent implements PropertyCh
             if (item instanceof AbstractButton) {
                 AbstractButton button = (AbstractButton) item;
                 processButton(button);
+                if (button.getToolTipText() == null) {
+                    String desc = (String) a.getValue(Action.SHORT_DESCRIPTION);
+                    String name = (String) a.getValue(Action.NAME);
+                    button.setToolTipText(desc != null ? desc : name);
+                }
             }
             // end 
             String n = (String) a.getValue(Action.NAME);
@@ -708,6 +713,10 @@ public final class EditorTopComponent extends TopComponent implements PropertyCh
         scene.zoomTo(factor);
     }
 
+    public void resetZoom() {
+        zoomTo(1.0f);
+    }
+
     public void showPrevDiagram() {
         int fp = getModel().getDiagramPeers().getFirstPosition();
         int sp = getModel().getDiagramPeers().getSecondPosition();
@@ -813,6 +822,20 @@ public final class EditorTopComponent extends TopComponent implements PropertyCh
     public void setSelectedFigures(List<Figure> list) {
         scene.centerFigures(list);
         scene.setSelection(list);
+    }
+
+    public void centerSelectedNodes() {
+        if (!getModel().getSelectedNodes().isEmpty()) {
+            scene.centerSelectedFigures();
+        }
+    }
+
+    public void edgeWalkToPredecessor() {
+        scene.navigateControlFlow(false);
+    }
+
+    public void edgeWalkToSuccessor() {
+        scene.navigateControlFlow(true);
     }
 
     public void setSelectedNodes(Collection<InputNode> nodes) {

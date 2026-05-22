@@ -26,29 +26,30 @@ package com.oracle.svm.hosted.code.aarch64;
 
 import java.util.function.Consumer;
 
-import com.oracle.svm.core.graal.code.CGlobalDataDirectReference;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.objectfile.ObjectFile.RelocationKind;
-import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.graal.code.CGlobalDataDirectReference;
+import com.oracle.svm.core.graal.code.CGlobalDataIndirectReference;
 import com.oracle.svm.core.graal.code.PatchConsumerFactory;
 import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.meta.SubstrateMethodPointerConstant;
-import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.hosted.code.HostedPatcher;
 import com.oracle.svm.hosted.image.RelocatableBuffer;
 import com.oracle.svm.hosted.meta.HostedMethod;
+import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ClassUtil;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.asm.Assembler.CodeAnnotation;
+import jdk.graal.compiler.asm.aarch64.AArch64Assembler.PatcherUtil;
 import jdk.graal.compiler.asm.aarch64.AArch64Assembler.SingleInstructionAnnotation;
 import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler;
 import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler.MovSequenceAnnotation.MovAction;
@@ -60,7 +61,7 @@ import jdk.vm.ci.meta.VMConstant;
 
 @AutomaticallyRegisteredFeature
 @Platforms({Platform.AARCH64.class})
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class AArch64HostedPatcherFeature implements InternalFeature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
@@ -76,6 +77,13 @@ public class AArch64HostedPatcherFeature implements InternalFeature {
                 public void accept(CodeAnnotation annotation) {
                     if (annotation instanceof SingleInstructionAnnotation) {
                         compilationResult.addAnnotation(new SingleInstructionHostedPatcher((SingleInstructionAnnotation) annotation));
+                    } else if (annotation instanceof AArch64MacroAssembler.MovSequenceReferenceAnnotation refAnnotation) {
+                        if (refAnnotation.getReference() instanceof CGlobalDataIndirectReference reference) {
+                            compilationResult.recordDataPatch(refAnnotation.getInstructionPosition(), reference);
+                            compilationResult.addAnnotation(new AArch64HostedCGlobalDataIndirectReferencePatcher(refAnnotation, reference));
+                        } else {
+                            throw VMError.shouldNotReachHere("Unexpected reference annotation: " + refAnnotation.getReference());
+                        }
                     } else if (annotation instanceof AArch64MacroAssembler.MovSequenceAnnotation) {
                         compilationResult.addAnnotation(new MovSequenceHostedPatcher((AArch64MacroAssembler.MovSequenceAnnotation) annotation));
                     } else if (annotation instanceof AArch64MacroAssembler.AdrpLdrMacroInstruction) {
@@ -226,6 +234,58 @@ class AdrpAddMacroInstructionHostedPatcher extends CompilationResult.CodeAnnotat
     @Override
     public String toString() {
         return ClassUtil.getUnqualifiedName(getClass()) + "{macroInstruction=" + macroInstruction + '}';
+    }
+}
+
+class AArch64HostedCGlobalDataIndirectReferencePatcher extends CompilationResult.CodeAnnotation implements HostedPatcher {
+    private final AArch64MacroAssembler.MovSequenceReferenceAnnotation annotation;
+    private final CGlobalDataIndirectReference reference;
+
+    AArch64HostedCGlobalDataIndirectReferencePatcher(AArch64MacroAssembler.MovSequenceReferenceAnnotation annotation, CGlobalDataIndirectReference reference) {
+        super(annotation.getInstructionPosition());
+        this.annotation = annotation;
+        this.reference = reference;
+    }
+
+    @Override
+    public void relocate(Reference ref, RelocatableBuffer relocs, int compStart) {
+        throw VMError.shouldNotReachHere("Indirect CGlobalData access through image heap should be patched during image generation.");
+    }
+
+    @Override
+    public void patch(int compStart, int relative, byte[] code) {
+        assert compStart == -1 && relative == -1 : "We do not need compStart and relative arguments when patching CGlobalDataReference object";
+        int offset = reference.getDataInfo().getOffset();
+        int siteOffset = 0;
+        for (MovAction include : annotation.getIncludeSet()) {
+            int value = offset & 0xFFFF;
+            offset >>>= 16;
+            switch (include) {
+                case USED:
+                    int instOffset = annotation.getInstructionPosition() + siteOffset;
+                    int originalInst = PatcherUtil.readInstruction(code, instOffset);
+                    int newInst = PatcherUtil.patchMov(originalInst, value);
+                    PatcherUtil.writeInstruction(code, instOffset, newInst);
+                    siteOffset += 4;
+                    break;
+                case SKIPPED:
+                    VMError.guarantee(value == 0, "Unable to patch skipped MOV chunk with non-zero value %s.", value);
+                    break;
+                case NEGATED:
+                    throw VMError.shouldNotReachHere("Negated MOV chunks are not used for indirect CGlobalData offsets.");
+            }
+        }
+        VMError.guarantee(offset == 0, "CGlobalData offset does not fit in the annotated MOV sequence.");
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        return this == obj;
+    }
+
+    @Override
+    public String toString() {
+        return ClassUtil.getUnqualifiedName(getClass()) + "{annotation=" + annotation + ", reference=" + reference + '}';
     }
 }
 

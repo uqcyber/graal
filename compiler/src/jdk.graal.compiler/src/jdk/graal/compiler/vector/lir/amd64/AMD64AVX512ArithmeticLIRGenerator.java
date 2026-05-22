@@ -270,6 +270,7 @@ import jdk.graal.compiler.nodes.calc.AndNode;
 import jdk.graal.compiler.nodes.calc.FloatDivNode;
 import jdk.graal.compiler.nodes.calc.MulNode;
 import jdk.graal.compiler.nodes.calc.OrNode;
+import jdk.graal.compiler.nodes.calc.ReinterpretNode;
 import jdk.graal.compiler.nodes.calc.SqrtNode;
 import jdk.graal.compiler.nodes.calc.SubNode;
 import jdk.graal.compiler.nodes.calc.XorNode;
@@ -2109,6 +2110,16 @@ public class AMD64AVX512ArithmeticLIRGenerator extends AMD64VectorArithmeticLIRG
                 case QWORD -> EVPERMQ;
                 case SINGLE -> EVPERMPS;
                 case DOUBLE -> EVPERMPD;
+                default -> null;
+            };
+        } else if (op == ReinterpretNode.class) {
+            return switch (dstEKind) {
+                case BYTE -> EVMOVDQU8;
+                case WORD -> EVMOVDQU16;
+                case DWORD -> EVMOVDQU32;
+                case QWORD -> EVMOVDQU64;
+                case SINGLE -> EVMOVUPS;
+                case DOUBLE -> EVMOVUPD;
                 default -> null;
             };
         } else if (op == SimdPrimitiveCompareNode.class) {

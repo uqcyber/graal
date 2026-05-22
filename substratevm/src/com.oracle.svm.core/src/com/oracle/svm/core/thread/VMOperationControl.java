@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core.thread;
 
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
@@ -41,7 +43,6 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateOptions.ConcealedOptions;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
 import com.oracle.svm.core.collections.RingBuffer;
-import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.VMOperationInfos;
@@ -53,6 +54,7 @@ import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.thread.VMThreads.StatusSupport;
 import com.oracle.svm.core.util.TimeUtils;
 import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
@@ -95,17 +97,20 @@ import jdk.graal.compiler.api.replacements.Fold;
 @AutomaticallyRegisteredImageSingleton
 @SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Duplicable.class, other = PartiallyLayerAware.class)
 public final class VMOperationControl {
+    private static final VMMutex VM_OPERATION_MUTEX = new VMMutex("VMOperationControl");
+
     private final VMOperationThread dedicatedVMOperationThread;
     private final WorkQueues mainQueues;
     private final WorkQueues immediateQueues;
     private final OpInProgress inProgress;
     private final VMOpHistory history;
+    private final NativeStopVMOperationThread stopVMOperationThreadOperation = new NativeStopVMOperationThread();
 
     @Platforms(Platform.HOSTED_ONLY.class)
     VMOperationControl() {
         this.dedicatedVMOperationThread = new VMOperationThread();
-        this.mainQueues = new WorkQueues("main", true);
-        this.immediateQueues = new WorkQueues("immediate", false);
+        this.mainQueues = new WorkQueues("main", VM_OPERATION_MUTEX);
+        this.immediateQueues = new WorkQueues("immediate", null);
         this.inProgress = new OpInProgress();
         this.history = new VMOpHistory();
     }
@@ -120,7 +125,7 @@ public final class VMOperationControl {
         return SubstrateOptions.AllowVMInternalThreads.getValue() && ConcealedOptions.UseDedicatedVMOperationThread.getValue();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static VMOperationThread getDedicatedVMOperationThread() {
         VMOperationControl control = get();
         assert control.dedicatedVMOperationThread != null;
@@ -157,26 +162,18 @@ public final class VMOperationControl {
         assert VMThreads.firstThread().isNull() : "the VM operation thread must detach last";
     }
 
-    private final NativeStopVMOperationThread stopVMOperationThreadOperation = new NativeStopVMOperationThread();
-
-    private static class NativeStopVMOperationThread extends NativeVMOperation {
-        NativeStopVMOperationThread() {
-            super(VMOperationInfos.get(NativeStopVMOperationThread.class, "Stop VM operation thread", VMOperation.SystemEffect.NONE));
-        }
-
-        @Override
-        @Uninterruptible(reason = "Executed during teardown after VMThreads#exit")
-        protected void operate(NativeVMOperationData data) {
-            VMOperationControl.get().dedicatedVMOperationThread.stopped = true;
-        }
+    /** Returns {@code true} if the current thread owns {@link #VM_OPERATION_MUTEX}. */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static boolean ownsVMOperationMutex() {
+        return VM_OPERATION_MUTEX.isOwner();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static boolean isDedicatedVMOperationThread() {
         return isDedicatedVMOperationThread(CurrentIsolate.getCurrentThread());
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static boolean isDedicatedVMOperationThread(IsolateThread thread) {
         if (!useDedicatedVMOperationThread()) {
             return false;
@@ -184,12 +181,12 @@ public final class VMOperationControl {
         return thread == get().dedicatedVMOperationThread.getIsolateThread();
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static boolean mayExecuteVmOperations() {
         if (useDedicatedVMOperationThread()) {
             return isDedicatedVMOperationThread();
         } else {
-            return get().mainQueues.mutex.isOwner();
+            return ownsVMOperationMutex();
         }
     }
 
@@ -217,7 +214,7 @@ public final class VMOperationControl {
         get().history.print(log, allowJavaHeapAccess);
     }
 
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     OpInProgress getInProgress() {
         return inProgress;
     }
@@ -328,7 +325,7 @@ public final class VMOperationControl {
         OpInProgress opInProgress = control.getInProgress();
         if (VMOperation.isInProgress(opInProgress)) {
             Log.log().string(message).newline();
-            VMError.shouldNotReachHere("Should not reach here: Not okay to block.");
+            throw VMError.shouldNotReachHere("Should not reach here: Not okay to block.");
         }
     }
 
@@ -394,12 +391,12 @@ public final class VMOperationControl {
             }
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public IsolateThread getIsolateThread() {
             return isolateThread;
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public boolean isRunning() {
             return PlatformThreads.isAlive(thread);
         }
@@ -410,30 +407,22 @@ public final class VMOperationControl {
         private final NativeVMOperationQueue nativeSafepointOperations;
         private final JavaVMOperationQueue javaNonSafepointOperations;
         private final JavaVMOperationQueue javaSafepointOperations;
-
-        /**
-         * This mutex is used by the application threads and by the VM operation thread. Java
-         * threads may only use normal lock operations with a full transition here. This restriction
-         * is necessary to ensure that a VM operation that needs a safepoint can really bring all
-         * other threads to a halt, even if those other threads also want to queue VM operations in
-         * the meanwhile.
-         */
-        final VMMutex mutex;
+        private final VMMutex mutex;
         private final VMCondition operationQueued;
         private final VMCondition operationFinished;
 
         @Platforms(Platform.HOSTED_ONLY.class)
-        WorkQueues(String prefix, boolean needsLocking) {
+        WorkQueues(String prefix, VMMutex mutex) {
+            this.mutex = mutex;
             this.nativeNonSafepointOperations = new NativeVMOperationQueue(prefix + "NativeNonSafepointOperations");
             this.nativeSafepointOperations = new NativeVMOperationQueue(prefix + "NativeSafepointOperations");
             this.javaNonSafepointOperations = new JavaVMOperationQueue(prefix + "JavaNonSafepointOperations");
             this.javaSafepointOperations = new JavaVMOperationQueue(prefix + "JavaSafepointOperations");
-            this.mutex = createMutex(prefix + "VMOperationControlWorkQueue", needsLocking);
             this.operationQueued = createCondition("operationQueued");
             this.operationFinished = createCondition("operationFinished");
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         boolean isEmpty() {
             return nativeNonSafepointOperations.isEmpty() && nativeSafepointOperations.isEmpty() && javaNonSafepointOperations.isEmpty() && javaSafepointOperations.isEmpty();
         }
@@ -503,11 +492,11 @@ public final class VMOperationControl {
             } else if (operation instanceof NativeVMOperation) {
                 enqueue((NativeVMOperation) operation, data);
             } else {
-                VMError.shouldNotReachHereUnexpectedInput(operation); // ExcludeFromJacocoGeneratedReport
+                throw VMError.shouldNotReachHereUnexpectedInput(operation); // ExcludeFromJacocoGeneratedReport
             }
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         private void enqueue(NativeVMOperation operation, NativeVMOperationData data) {
             assert operation == data.getNativeVMOperation();
             operation.markAsQueued(data);
@@ -662,14 +651,6 @@ public final class VMOperationControl {
         }
 
         @Platforms(value = Platform.HOSTED_ONLY.class)
-        private static VMMutex createMutex(String mutexName, boolean needsLocking) {
-            if (needsLocking) {
-                return new VMMutex(mutexName);
-            }
-            return null;
-        }
-
-        @Platforms(value = Platform.HOSTED_ONLY.class)
         private VMCondition createCondition(String name) {
             if (mutex != null && useDedicatedVMOperationThread()) {
                 return new VMCondition(mutex, name);
@@ -678,6 +659,11 @@ public final class VMOperationControl {
         }
     }
 
+    /**
+     * A queue that does not allocate because each element has a next pointer. This queue is
+     * <em>not</em> thread-safe on its own, so it needs additional synchronization (see
+     * {@link WorkQueues#mutex}).
+     */
     protected abstract static class AllocationFreeQueue<T> {
         final String name;
 
@@ -685,7 +671,7 @@ public final class VMOperationControl {
             this.name = name;
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         abstract boolean isEmpty();
 
         abstract void push(T element);
@@ -697,26 +683,22 @@ public final class VMOperationControl {
         abstract void remove(T prev, T remove);
     }
 
-    /**
-     * A queue that does not allocate because each element has a next pointer. This queue is
-     * <em>not</em> multi-thread safe.
-     */
-    protected abstract static class JavaAllocationFreeQueue<T extends JavaAllocationFreeQueue.Element<T>> extends AllocationFreeQueue<T> {
-        private T head;
-        private T tail; // can point to an incorrect value if head is null
+    protected static class JavaVMOperationQueue extends AllocationFreeQueue<JavaVMOperation> {
+        private JavaVMOperation head;
+        private JavaVMOperation tail; // can point to an incorrect value if head is null
 
-        JavaAllocationFreeQueue(String name) {
+        JavaVMOperationQueue(String name) {
             super(name);
         }
 
         @Override
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public boolean isEmpty() {
             return head == null;
         }
 
         @Override
-        public void push(T element) {
+        public void push(JavaVMOperation element) {
             assert element.getNext() == null : "must not already be queued";
             if (head == null) {
                 head = element;
@@ -727,23 +709,23 @@ public final class VMOperationControl {
         }
 
         @Override
-        public T pop() {
+        public JavaVMOperation pop() {
             if (head == null) {
                 return null;
             }
-            T resultElement = head;
+            JavaVMOperation resultElement = head;
             head = resultElement.getNext();
             resultElement.setNext(null);
             return resultElement;
         }
 
         @Override
-        public T peek() {
+        public JavaVMOperation peek() {
             return head;
         }
 
         @Override
-        void remove(T prev, T remove) {
+        void remove(JavaVMOperation prev, JavaVMOperation remove) {
             if (prev == null) {
                 assert head == remove;
                 head = remove.getNext();
@@ -752,23 +734,10 @@ public final class VMOperationControl {
                 prev.setNext(remove.getNext());
             }
         }
-
-        /** An element for an allocation-free queue. An element can be in at most one queue. */
-        public interface Element<T extends Element<T>> {
-            T getNext();
-
-            void setNext(T newNext);
-        }
-    }
-
-    protected static class JavaVMOperationQueue extends JavaAllocationFreeQueue<JavaVMOperation> {
-        JavaVMOperationQueue(String name) {
-            super(name);
-        }
     }
 
     /**
-     * Same implementation as {@link JavaAllocationFreeQueue} but for elements of type
+     * Same implementation as {@link JavaVMOperationQueue} but for elements of type
      * {@link NativeVMOperationData}. We can't reuse the other implementation because we need to use
      * the semantics of {@link Word}.
      */
@@ -781,12 +750,12 @@ public final class VMOperationControl {
         }
 
         @Override
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public boolean isEmpty() {
             return head.isNull();
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         @Override
         public void push(NativeVMOperationData element) {
             assert element.getNext().isNull() : "must not already be queued";
@@ -838,7 +807,7 @@ public final class VMOperationControl {
         IsolateThread executingThread;
         int nestingLevel;
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public VMOperation getOperation() {
             return operation;
         }
@@ -847,7 +816,7 @@ public final class VMOperationControl {
             return queueingThread;
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public IsolateThread getExecutingThread() {
             return executingThread;
         }
@@ -870,7 +839,7 @@ public final class VMOperationControl {
             history = new RingBuffer<>(SubstrateOptions.DiagnosticBufferSize.getValue(), VMOpStatusChange::new);
         }
 
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public void add(VMOpStatus status, VMOperation operation, IsolateThread queueingThread, IsolateThread executingThread, int nestingLevel) {
             assert Heap.getHeap().isInImageHeap(status);
             VMOpStatusChange entry = history.next();
@@ -942,6 +911,18 @@ public final class VMOperationControl {
                                 .string(", safepointId: ").unsigned(safepointId)
                                 .string(")").newline();
             }
+        }
+    }
+
+    private static class NativeStopVMOperationThread extends NativeVMOperation {
+        NativeStopVMOperationThread() {
+            super(VMOperationInfos.get(NativeStopVMOperationThread.class, "Stop VM operation thread", VMOperation.SystemEffect.NONE));
+        }
+
+        @Override
+        @Uninterruptible(reason = "Executed during teardown after VMThreads#exit")
+        protected void operate(NativeVMOperationData data) {
+            VMOperationControl.get().dedicatedVMOperationThread.stopped = true;
         }
     }
 }

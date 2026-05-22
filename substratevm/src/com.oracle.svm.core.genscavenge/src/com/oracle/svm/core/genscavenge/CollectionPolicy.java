@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,83 +24,17 @@
  */
 package com.oracle.svm.core.genscavenge;
 
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.heap.GCCause;
 import com.oracle.svm.core.heap.OutOfMemoryUtil;
 import com.oracle.svm.core.heap.PhysicalMemory;
-import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.Uninterruptible;
 
 /** The interface for a garbage collection policy. All sizes are in bytes. */
 public interface CollectionPolicy {
     UnsignedWord UNDEFINED = Word.unsigned(-1L);
-
-    @Platforms(Platform.HOSTED_ONLY.class)
-    static String getInitialPolicyName() {
-        if (SubstrateOptions.useEpsilonGC()) {
-            return "NeverCollect";
-        } else if (!SerialGCOptions.useRememberedSet()) {
-            return "OnlyCompletely";
-        }
-        String name = SerialGCOptions.InitialCollectionPolicy.getValue();
-        String legacyPrefix = "com.oracle.svm.core.genscavenge.CollectionPolicy$";
-        if (name.startsWith(legacyPrefix)) {
-            return name.substring(legacyPrefix.length());
-        }
-        return name;
-    }
-
-    @Platforms(Platform.HOSTED_ONLY.class)
-    static CollectionPolicy getInitialPolicy() {
-        String name = getInitialPolicyName();
-        Class<? extends CollectionPolicy> clazz = getPolicyClass(name);
-        return ReflectionUtil.newInstance(clazz);
-    }
-
-    @Platforms(Platform.HOSTED_ONLY.class)
-    static Class<? extends CollectionPolicy> getPolicyClass(String name) {
-        switch (name) {
-            case "Adaptive2":
-                return AdaptiveCollectionPolicy2.class;
-            case "Adaptive":
-                return AdaptiveCollectionPolicy.class;
-            case "LibGraal":
-                return LibGraalCollectionPolicy.class;
-            case "Proportionate":
-                return ProportionateSpacesPolicy.class;
-            case "BySpaceAndTime":
-                return BasicCollectionPolicies.BySpaceAndTime.class;
-            case "OnlyCompletely":
-                return BasicCollectionPolicies.OnlyCompletely.class;
-            case "OnlyIncrementally":
-                return BasicCollectionPolicies.OnlyIncrementally.class;
-            case "NeverCollect":
-                return BasicCollectionPolicies.NeverCollect.class;
-            case "Dynamic":
-                return DynamicCollectionPolicy.class;
-        }
-        throw UserError.abort("Policy %s does not exist.", name);
-    }
-
-    @Platforms(Platform.HOSTED_ONLY.class)
-    static int getMaxSurvivorSpaces(Integer userValue) {
-        String name = getInitialPolicyName();
-        if (ReflectionUtil.isAssignableFrom(BasicCollectionPolicies.BasicPolicy.class, getPolicyClass(name))) {
-            return BasicCollectionPolicies.getMaxSurvivorSpaces(userValue);
-        }
-        return AbstractCollectionPolicy.getMaxSurvivorSpaces(userValue);
-    }
-
-    static boolean shouldCollectYoungGenSeparately(boolean defaultValue) {
-        Boolean optionValue = SerialGCOptions.CollectYoungGenerationSeparately.getValue();
-        return (optionValue != null) ? optionValue : defaultValue;
-    }
 
     String getName();
 

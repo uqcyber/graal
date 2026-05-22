@@ -84,7 +84,6 @@ final class AbstractBytecodeNodeElement extends AbstractElement {
     private final CodeExecutableElement continueAt;
     final CodeExecutableElement getCachedLocalTagInternal;
     final CodeExecutableElement setCachedLocalTagInternal;
-    final CodeExecutableElement checkStableTagsAssumption;
     final BranchBackwardReturnExceptionElement branchBackwardReturnException;
 
     final CodeExecutableElement transition;
@@ -188,15 +187,9 @@ final class AbstractBytecodeNodeElement extends AbstractElement {
              */
             getCachedLocalTagInternal = this.add(createGetCachedLocalTagInternal());
             setCachedLocalTagInternal = this.add(createSetCachedLocalTagInternal());
-            if (parent.model.hasYieldOperation()) {
-                checkStableTagsAssumption = this.add(createCheckStableTagsAssumption());
-            } else {
-                checkStableTagsAssumption = null;
-            }
         } else {
             getCachedLocalTagInternal = null;
             setCachedLocalTagInternal = null;
-            checkStableTagsAssumption = null;
         }
 
         // Define methods for introspecting the bytecode and source.
@@ -554,14 +547,6 @@ final class AbstractBytecodeNodeElement extends AbstractElement {
         ex.addParameter(new CodeVariableElement(arrayOf(type(byte.class)), "localTags"));
         ex.addParameter(new CodeVariableElement(type(int.class), "localIndex"));
         ex.addParameter(new CodeVariableElement(type(byte.class), "tag"));
-        return ex;
-    }
-
-    private CodeExecutableElement createCheckStableTagsAssumption() {
-        if (!parent.model.usesBoxingElimination()) {
-            throw new AssertionError("Not supported.");
-        }
-        CodeExecutableElement ex = new CodeExecutableElement(Set.of(ABSTRACT), type(boolean.class), "checkStableTagsAssumption");
         return ex;
     }
 

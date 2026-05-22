@@ -557,6 +557,30 @@ public abstract class BasicInterpreter extends DebugBytecodeRootNode implements 
 
     @SuppressWarnings("unused")
     @Operation(storeBytecodeIndex = true)
+    public static final class InvokeInlined {
+        @Specialization(guards = {"callTargetMatches(root.getCallTarget(), callNode.getCallTarget())"}, limit = "1")
+        public static Object doRootNode(BasicInterpreter root, @Variadic Object[] args, @Cached("createForcedInlineCall(root.getCallTarget())") DirectCallNode callNode) {
+            return callNode.call(args);
+        }
+
+        @Specialization(replaces = {"doRootNode"})
+        public static Object doRootNodeUncached(BasicInterpreter root, @Variadic Object[] args, @Shared @Cached IndirectCallNode callNode) {
+            return callNode.call(root.getCallTarget(), args);
+        }
+
+        static DirectCallNode createForcedInlineCall(CallTarget target) {
+            DirectCallNode callNode = DirectCallNode.create(target);
+            callNode.forceInlining();
+            return callNode;
+        }
+
+        static boolean callTargetMatches(CallTarget left, CallTarget right) {
+            return left == right;
+        }
+    }
+
+    @SuppressWarnings("unused")
+    @Operation(storeBytecodeIndex = true)
     public static final class Invoke {
         @Specialization(guards = {"callTargetMatches(root.getCallTarget(), callNode.getCallTarget())"}, limit = "1")
         public static Object doRootNode(BasicInterpreter root, @Variadic Object[] args, @Cached("create(root.getCallTarget())") DirectCallNode callNode) {
@@ -804,6 +828,40 @@ public abstract class BasicInterpreter extends DebugBytecodeRootNode implements 
         }
     }
 
+    @Operation
+    public static final class EnsureVirtualizedContinuationFrame {
+        @Specialization
+        public static ContinuationResult perform(ContinuationResult result) {
+            CompilerDirectives.ensureVirtualized(result.getFrame());
+            return result;
+        }
+    }
+
+    @Operation(storeBytecodeIndex = true)
+    public static final class ContinueInlined {
+        public static final int LIMIT = 3;
+
+        @SuppressWarnings("unused")
+        @Specialization(guards = {"result.getContinuationRootNode() == rootNode"}, limit = "LIMIT")
+        public static Object invokeDirect(ContinuationResult result, Object value,
+                        @Cached("result.getContinuationRootNode()") ContinuationRootNode rootNode,
+                        @Cached("createForcedInlineCall(rootNode.getCallTarget())") DirectCallNode callNode) {
+            return callNode.call(result.getFrame(), value);
+        }
+
+        @Specialization(replaces = "invokeDirect")
+        public static Object invokeIndirect(ContinuationResult result, Object value,
+                        @Cached IndirectCallNode callNode) {
+            return callNode.call(result.getContinuationCallTarget(), result.getFrame(), value);
+        }
+
+        static DirectCallNode createForcedInlineCall(CallTarget target) {
+            DirectCallNode callNode = DirectCallNode.create(target);
+            callNode.forceInlining();
+            return callNode;
+        }
+    }
+
     @Operation(storeBytecodeIndex = true)
     public static final class Continue {
         public static final int LIMIT = 3;
@@ -889,12 +947,31 @@ public abstract class BasicInterpreter extends DebugBytecodeRootNode implements 
         }
     }
 
+    /**
+     * Deoptimizes when the condition is true. Note that the deoptimization can float. Use
+     * {@link DeoptimizeHere} for precise deopt locations.
+     */
     @Operation
     public static final class Deoptimize {
         @Specialization
         public static void deoptimize(boolean condition) {
             if (condition) {
-                forceStateSplit(); // ensure deopt does not float
+                CompilerDirectives.transferToInterpreter();
+            }
+        }
+    }
+
+    /**
+     * Deoptimizes at the current location when the condition is true. Use {@link Deoptimize} for
+     * floatable deopts.
+     */
+    @Operation
+    public static final class DeoptimizeHere {
+        @Specialization
+        public static void deoptimize(boolean condition) {
+            if (condition) {
+                // Keep the deopt fixed at this operation for tests that need an exact location.
+                forceStateSplit();
                 CompilerDirectives.transferToInterpreter();
             }
         }

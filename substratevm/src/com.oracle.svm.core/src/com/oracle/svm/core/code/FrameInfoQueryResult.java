@@ -262,10 +262,12 @@ public class FrameInfoQueryResult extends FrameSourceInfo {
     }
 
     /**
-     * Returns the offset of the deoptimization target method. The offset is relative to the
-     * {@link CodeInfoAccess#getCodeStart code start} of {@link #deoptMethodImageCodeInfo}. Together
-     * with the BCI it is used to find the corresponding bytecode frame in the target method. Note
-     * that there is no inlining in target methods, so the method + BCI is unique.
+     * Returns the encoded relative IP of the deoptimization target method in
+     * {@link #deoptMethodImageCodeInfo}. For uncompressed code this is the same as the offset
+     * relative to {@link CodeInfoAccess#getCodeStart code start}; compressed code adds the
+     * {@link CodeInfoAccess#relativeIP relative IP} bias used by code-info encodings. Together with
+     * the BCI it is used to find the corresponding bytecode frame in the target method. Note that
+     * there is no inlining in target methods, so the method + BCI is unique.
      */
     public int getDeoptMethodOffset() {
         return deoptMethodOffset;

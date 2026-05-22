@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.core.thread;
 
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 
@@ -49,7 +51,7 @@ import org.graalvm.word.impl.Word;
  * executed before it is enqueued again. Otherwise, this could result in various race conditions,
  * especially if {@linkplain ConcealedOptions#UseDedicatedVMOperationThread} is enabled.
  */
-public abstract class JavaVMOperation extends VMOperation implements VMOperationControl.JavaAllocationFreeQueue.Element<JavaVMOperation> {
+public abstract class JavaVMOperation extends VMOperation {
     protected IsolateThread queuingThread;
     private long queuingThreadId;
     private JavaVMOperation next;
@@ -66,12 +68,10 @@ public abstract class JavaVMOperation extends VMOperation implements VMOperation
         VMError.guarantee(!SubstrateUtil.HOSTED, "must not be created at image build time");
     }
 
-    @Override
     public JavaVMOperation getNext() {
         return next;
     }
 
-    @Override
     public void setNext(JavaVMOperation value) {
         next = value;
     }
@@ -96,7 +96,7 @@ public abstract class JavaVMOperation extends VMOperation implements VMOperation
     }
 
     @Override
-    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     protected void markAsQueued(NativeVMOperationData data) {
         finished = false;
         queuingThread = CurrentIsolate.getCurrentThread();

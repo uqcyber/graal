@@ -27,8 +27,6 @@ package jdk.graal.compiler.replacements;
 import static jdk.graal.compiler.core.common.GraalOptions.EmitStringSubstitutions;
 import static jdk.graal.compiler.core.common.SpectrePHTMitigations.Options.SpectrePHTIndexMasking;
 import static jdk.graal.compiler.nodes.NamedLocationIdentity.ARRAY_LENGTH_LOCATION;
-import static jdk.graal.compiler.nodes.calc.BinaryArithmeticNode.branchlessMax;
-import static jdk.graal.compiler.nodes.calc.BinaryArithmeticNode.branchlessMin;
 import static jdk.graal.compiler.nodes.java.ArrayLengthNode.readArrayLength;
 import static jdk.graal.compiler.phases.common.LockEliminationPhase.removeMonitorAccess;
 import static jdk.vm.ci.meta.DeoptimizationAction.InvalidateReprofile;
@@ -88,6 +86,7 @@ import jdk.graal.compiler.nodes.calc.IntegerEqualsNode;
 import jdk.graal.compiler.nodes.calc.IsNullNode;
 import jdk.graal.compiler.nodes.calc.LeftShiftNode;
 import jdk.graal.compiler.nodes.calc.NarrowNode;
+import jdk.graal.compiler.nodes.calc.NotNode;
 import jdk.graal.compiler.nodes.calc.OrNode;
 import jdk.graal.compiler.nodes.calc.ReinterpretNode;
 import jdk.graal.compiler.nodes.calc.RightShiftNode;
@@ -142,6 +141,7 @@ import jdk.graal.compiler.nodes.java.StoreIndexedNode;
 import jdk.graal.compiler.nodes.java.UnsafeCompareAndExchangeNode;
 import jdk.graal.compiler.nodes.java.UnsafeCompareAndSwapNode;
 import jdk.graal.compiler.nodes.java.ValueCompareAndSwapNode;
+import jdk.graal.compiler.nodes.memory.MemoryAnchorNode;
 import jdk.graal.compiler.nodes.memory.ReadNode;
 import jdk.graal.compiler.nodes.memory.SideEffectFreeWriteNode;
 import jdk.graal.compiler.nodes.memory.WriteNode;
@@ -465,15 +465,15 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
      * <p>
      * The bounds check is still represented by {@code boundsCheck}. When
      * {@code SpectrePHTIndexMasking} is enabled, the index calculation goes through
-     * {@link #proxyIndex(AccessIndexedNode, ValueNode, ValueNode, LoweringTool)} so mis-speculated
-     * out-of-bounds indices are redirected to an in-bounds element before the address is
-     * materialized.
+     * {@link #protectIndexForSpeculativeExecution(AccessIndexedNode, ValueNode, ValueNode, LoweringTool)}
+     * so mis-speculated out-of-bounds indices are redirected to an in-bounds element before the
+     * address is materialized.
      */
     protected ValueNode createArrayAddressIndex(AccessIndexedNode indexed, ValueNode array, GuardingNode boundsCheck, LoweringTool tool) {
         StructuredGraph graph = indexed.graph();
         ValueNode addressIndex = indexed.index();
         if (SpectrePHTIndexMasking.getValue(graph.getOptions())) {
-            addressIndex = graph.addOrUniqueWithInputs(proxyIndex(indexed, addressIndex, array, tool));
+            addressIndex = graph.addOrUniqueWithInputs(protectIndexForSpeculativeExecution(indexed, addressIndex, array, tool));
         }
         return createPositiveIndex(graph, addressIndex, boundsCheck);
     }
@@ -1075,8 +1075,12 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
         }
     }
 
-    private static boolean isNestedLock(MonitorIdNode lock, CommitAllocationNode commit) {
-        for (MonitorIdNode otherLock : commit.getLocks()) {
+    /**
+     * Determines whether {@code lock} is a nested lock on the same materialized object as an
+     * earlier lock in the ordered {@code locks} list.
+     */
+    private static boolean isNestedLock(MonitorIdNode lock, CommitAllocationNode commit, List<MonitorIdNode> locks) {
+        for (MonitorIdNode otherLock : locks) {
             if (otherLock.getLockDepth() < lock.getLockDepth() && commit.getObjectIndex(lock) == commit.getObjectIndex(otherLock)) {
                 return true;
             }
@@ -1116,15 +1120,20 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
         FrameState stateBefore = GraphUtil.findLastFrameState(insertionPoint);
 
         List<MonitorIdNode> locks = commit.getLocks();
-        if (locks.size() > 1) {
+        if (!locks.isEmpty()) {
             // Ensure that the lock operations are performed in lock depth order
             ArrayList<MonitorIdNode> newList = new ArrayList<>(locks);
-            newList.sort((a, b) -> Integer.compare(a.getLockDepth(), b.getLockDepth()));
+            // Lock elimination can run after the CommitAllocationNode is created. Do not emit
+            // monitor enters for locks that have already been eliminated.
+            newList.removeIf(MonitorIdNode::isEliminated);
+            if (newList.size() > 1) {
+                newList.sort((a, b) -> Integer.compare(a.getLockDepth(), b.getLockDepth()));
+            }
             // Eliminate nested locks
-            newList.removeIf(lock -> isNestedLock(lock, commit));
+            newList.removeIf(lock -> isNestedLock(lock, commit, newList));
 
             for (MonitorIdNode lock : locks) {
-                if (!newList.contains(lock)) {
+                if (!lock.isEliminated() && !newList.contains(lock)) {
                     // lock is nested and eliminated
                     for (Node usage : lock.usages().snapshot()) {
                         if (usage.isAlive() && usage instanceof AccessMonitorNode access) {
@@ -1155,25 +1164,44 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
             enters.add(enter);
         }
 
-        for (Node usage : commit.usages().snapshot()) {
-            if (usage instanceof AllocatedObjectNode) {
-                AllocatedObjectNode addObject = (AllocatedObjectNode) usage;
-                int index = commit.getVirtualObjects().indexOf(addObject.getVirtualObject());
-                addObject.replaceAtUsagesAndDelete(allocations[index]);
-            } else {
-                assert enters != null;
+        for (AllocatedObjectNode addObject : commit.usages().filter(AllocatedObjectNode.class).snapshot()) {
+            int index = commit.getVirtualObjects().indexOf(addObject.getVirtualObject());
+            addObject.replaceAtUsagesAndDelete(allocations[index]);
+        }
+        if (commit.hasUsagesOfType(InputType.Memory)) {
+            if (enters != null) {
                 commit.replaceAtUsages(enters.get(enters.size() - 1), InputType.Memory);
+            } else {
+                /*
+                 * This anchor is created lazily only when the CommitAllocationNode still has a
+                 * memory usage. The commit remains a memory kill even when all locks were
+                 * eliminated, so preserve a fixed memory input for that usage.
+                 */
+                MemoryAnchorNode memoryAnchor = graph.add(new MemoryAnchorNode());
+                memoryAnchor.setNodeSourcePosition(commit.getNodeSourcePosition());
+                graph.addBeforeFixed(commit, memoryAnchor);
+                commit.replaceAtUsages(memoryAnchor, InputType.Memory);
             }
         }
+        GraalError.guarantee(commit.hasNoUsages(), "Unexpected non-memory usage of %s", commit);
         if (enters != null) {
             for (MonitorEnterNode enter : enters) {
                 enter.lower(tool);
             }
         }
-        assert commit.hasNoUsages();
 
-        // Insert the required ALLOCATION_INIT barrier after all objects are initialized.
-        graph.addAfterFixed(insertAfter, graph.add(MembarNode.forInitialization()));
+        /*
+         * Insert the required ALLOCATION_INIT barrier after all objects are initialized. This models
+         * the init-memory effects separately from the generated barrier kind. Materialized
+         * constructors with final fields also need constructor-freeze ordering. The init barrier can
+         * cover that only while its generated barrier bits are at least as strong as
+         * CONSTRUCTOR_FREEZE; otherwise, keep both fences explicit.
+         */
+        MembarNode initBarrier = graph.add(MembarNode.forInitialization());
+        graph.addAfterFixed(insertAfter, initBarrier);
+        if (!MembarNode.FenceKind.ALLOCATION_INIT.isAtLeastAsStrongAs(MembarNode.FenceKind.CONSTRUCTOR_FREEZE)) {
+            graph.addAfterFixed(initBarrier, graph.add(new MembarNode(MembarNode.FenceKind.CONSTRUCTOR_FREEZE)));
+        }
     }
 
     /**
@@ -1402,11 +1430,46 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
 
     protected abstract ValueNode createReadArrayComponentHub(StructuredGraph graph, ValueNode arrayHub, boolean isKnownObjectArray, FixedNode anchor, LoweringTool tool, FixedWithNextNode insertAfter);
 
-    protected ValueNode proxyIndex(AccessIndexedNode n, ValueNode index, ValueNode array, LoweringTool tool) {
+    /**
+     * Clamps {@code index} without branches so a speculatively executed indexed array access cannot
+     * use an out-of-bounds address while its bounds check is still unresolved. For non-empty arrays,
+     * the returned index is in {@code [0, arrayLength - 1]}. Empty arrays have no in-bounds element,
+     * so they clamp to {@code 0}.
+     */
+    protected ValueNode protectIndexForSpeculativeExecution(AccessIndexedNode n, ValueNode index, ValueNode array, LoweringTool tool) {
         StructuredGraph graph = index.graph();
         ValueNode arrayLength = readOrCreateArrayLength(n, array, tool, graph);
         ValueNode lengthMinusOne = SubNode.create(arrayLength, ConstantNode.forInt(1), NodeView.DEFAULT);
-        return branchlessMax(branchlessMin(index, lengthMinusOne, NodeView.DEFAULT), ConstantNode.forInt(0), NodeView.DEFAULT);
+        /*
+         * Clamp the index without branches while the bounds check may still be unresolved by
+         * speculative execution. Both operands to the final min are non-negative, so their
+         * subtraction cannot signed-overflow. For non-empty arrays this produces an index in the
+         * range [0, arrayLength - 1]. Empty arrays have no in-bounds element, so they clamp to 0.
+         */
+        ValueNode nonNegativeIndex = branchlessMaxZero(index, NodeView.DEFAULT);
+        ValueNode nonNegativeLengthMinusOne = branchlessMaxZero(lengthMinusOne, NodeView.DEFAULT);
+        return branchlessMinNonNegative(nonNegativeIndex, nonNegativeLengthMinusOne, NodeView.DEFAULT);
+    }
+
+    /**
+     * Returns the branchless max of {@code value} and zero using a sign mask, avoiding a
+     * subtraction-based min/max identity.
+     */
+    private static ValueNode branchlessMaxZero(ValueNode value, NodeView view) {
+        int bits = ((IntegerStamp) value.stamp(view)).getBits();
+        return AndNode.create(value, NotNode.create(RightShiftNode.create(value, bits - 1, view)), view);
+    }
+
+    /**
+     * Returns the branchless min of two non-negative integer values. The non-negative precondition
+     * ensures the internal subtraction cannot signed-overflow.
+     */
+    private static ValueNode branchlessMinNonNegative(ValueNode v1, ValueNode v2, NodeView view) {
+        int bits = ((IntegerStamp) v1.stamp(view)).getBits();
+        assert ((IntegerStamp) v2.stamp(view)).getBits() == bits : bits + " and v2 " + v2;
+        ValueNode delta = SubNode.create(v1, v2, view);
+        ValueNode mask = RightShiftNode.create(delta, bits - 1, view);
+        return AddNode.create(v2, AndNode.create(delta, mask, view), view);
     }
 
     protected GuardingNode getBoundsCheck(AccessIndexedNode n, ValueNode array, LoweringTool tool) {

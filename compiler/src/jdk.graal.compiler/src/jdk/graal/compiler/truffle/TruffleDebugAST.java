@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,20 +31,20 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import jdk.graal.compiler.debug.JavaMethodContext;
-import jdk.graal.compiler.graph.Node;
-import jdk.graal.compiler.graph.NodeSourcePosition;
-import jdk.graal.compiler.nodes.ConstantNode;
-import jdk.graal.compiler.nodes.StructuredGraph;
-import jdk.graal.compiler.truffle.phases.inlining.CallNode;
-import jdk.graal.compiler.truffle.phases.inlining.CallTree;
-import jdk.graal.compiler.graphio.GraphBlocks;
-import jdk.graal.compiler.graphio.GraphStructure;
-
 import com.oracle.truffle.compiler.TruffleCompilable;
 import com.oracle.truffle.compiler.TruffleCompilationTask;
 import com.oracle.truffle.compiler.TruffleSourceLanguagePosition;
 
+import jdk.graal.compiler.debug.JavaMethodContext;
+import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.graph.NodeSourcePosition;
+import jdk.graal.compiler.graphio.GraphBlocks;
+import jdk.graal.compiler.graphio.GraphStructure;
+import jdk.graal.compiler.graphio.parsing.model.KnownPropertyNames;
+import jdk.graal.compiler.nodes.ConstantNode;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.truffle.phases.inlining.CallNode;
+import jdk.graal.compiler.truffle.phases.inlining.CallTree;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaMethod;
@@ -258,8 +258,10 @@ final class TruffleDebugAST implements JavaMethodContext {
             this.nodeClass = new ASTNodeClass(this);
             this.nodeType = metaAccess().lookupJavaType(node);
             this.properties.put("label", dropNodeSuffix(nodeType.getUnqualifiedName()));
+            String nodeClassName = nodeType.toJavaName(true);
+            this.properties.put(KnownPropertyNames.PROPNAME_CLASS, nodeClassName);
+            this.properties.put("nodeClassName", nodeClassName);
             this.properties.put("cost", "NodeCost.MONOMORPHIC");
-            this.properties.put("nodeClassName", nodeType.toJavaName(true));
             if (callTree != null) {
                 StructuredGraph graph = callTree.getRoot().getIR();
                 ConstantNode constant = null;

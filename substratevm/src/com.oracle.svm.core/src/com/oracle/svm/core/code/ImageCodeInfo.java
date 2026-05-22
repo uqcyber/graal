@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.core.code;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.graalvm.nativeimage.Platform;
@@ -64,10 +65,12 @@ public class ImageCodeInfo {
     @UnknownPrimitiveField(availability = AfterCompilation.class) private UnsignedWord codeAndDataMemorySize;
     @UnknownPrimitiveField(availability = AfterCompilation.class) private UnsignedWord relativeIPOffset;
     @UnknownPrimitiveField(availability = AfterCompilation.class) private int methodTableFirstId;
+    @UnknownPrimitiveField(availability = AfterCompilation.class) private int codeInfoIndexEntriesPerBlock = 1;
 
     private final Object[] objectFields;
     @UnknownObjectField(availability = AfterCompilation.class) byte[] codeInfoIndex;
     @UnknownObjectField(availability = AfterCompilation.class) byte[] codeInfoEncodings;
+    @UnknownObjectField(availability = AfterCompilation.class, canBeNull = true) byte[] codeInfoDefaultFrameInfoIndexes;
     @UnknownObjectField(availability = AfterCompilation.class) byte[] referenceMapEncoding;
     @UnknownObjectField(availability = AfterCompilation.class) byte[] frameInfoEncodings;
     @UnknownObjectField(availability = AfterCompilation.class) Object[] objectConstants;
@@ -113,6 +116,8 @@ public class ImageCodeInfo {
         infoImpl.setRelativeIPOffset(imageCodeInfo.relativeIPOffset);
         infoImpl.setCodeInfoIndex(NonmovableArrays.fromImageHeap(imageCodeInfo.codeInfoIndex));
         infoImpl.setCodeInfoEncodings(NonmovableArrays.fromImageHeap(imageCodeInfo.codeInfoEncodings));
+        infoImpl.setCodeInfoIndexEntriesPerBlock(imageCodeInfo.codeInfoIndexEntriesPerBlock);
+        infoImpl.setCodeInfoDefaultFrameInfoIndexes(NonmovableArrays.fromImageHeap(imageCodeInfo.codeInfoDefaultFrameInfoIndexes));
         infoImpl.setStackReferenceMapEncoding(NonmovableArrays.fromImageHeap(imageCodeInfo.referenceMapEncoding));
         infoImpl.setFrameInfoEncodings(NonmovableArrays.fromImageHeap(imageCodeInfo.frameInfoEncodings));
         infoImpl.setObjectConstants(NonmovableArrays.fromImageHeap(imageCodeInfo.objectConstants));
@@ -130,6 +135,9 @@ public class ImageCodeInfo {
         config.registerAsImmutable(this);
         config.registerAsImmutable(codeInfoIndex);
         config.registerAsImmutable(codeInfoEncodings);
+        if (codeInfoDefaultFrameInfoIndexes != null) {
+            config.registerAsImmutable(codeInfoDefaultFrameInfoIndexes);
+        }
         config.registerAsImmutable(referenceMapEncoding);
         config.registerAsImmutable(frameInfoEncodings);
         config.registerAsImmutable(objectConstants);
@@ -154,7 +162,20 @@ public class ImageCodeInfo {
     }
 
     public List<Integer> getTotalByteArrayLengths() {
-        return List.of(codeInfoIndex.length, codeInfoEncodings.length, referenceMapEncoding.length, frameInfoEncodings.length, methodTable.length);
+        List<Integer> lengths = new ArrayList<>(6);
+        addByteArrayLength(lengths, codeInfoIndex);
+        addByteArrayLength(lengths, codeInfoEncodings);
+        addByteArrayLength(lengths, codeInfoDefaultFrameInfoIndexes);
+        addByteArrayLength(lengths, referenceMapEncoding);
+        addByteArrayLength(lengths, frameInfoEncodings);
+        addByteArrayLength(lengths, methodTable);
+        return lengths;
+    }
+
+    private static void addByteArrayLength(List<Integer> lengths, byte[] array) {
+        if (array != null) {
+            lengths.add(array.length);
+        }
     }
 
     /**
@@ -256,6 +277,26 @@ public class ImageCodeInfo {
         @Override
         public void setCodeInfoEncodings(NonmovableArray<Byte> array) {
             codeInfoEncodings = NonmovableArrays.getHostedArray(array);
+        }
+
+        @Override
+        public int getCodeInfoIndexEntriesPerBlock() {
+            return codeInfoIndexEntriesPerBlock;
+        }
+
+        @Override
+        public void setCodeInfoIndexEntriesPerBlock(int entriesPerBlock) {
+            codeInfoIndexEntriesPerBlock = entriesPerBlock;
+        }
+
+        @Override
+        public NonmovableArray<Byte> getCodeInfoDefaultFrameInfoIndexes() {
+            return NonmovableArrays.fromImageHeap(codeInfoDefaultFrameInfoIndexes);
+        }
+
+        @Override
+        public void setCodeInfoDefaultFrameInfoIndexes(NonmovableArray<Byte> array) {
+            codeInfoDefaultFrameInfoIndexes = NonmovableArrays.getHostedArray(array);
         }
 
         @Override

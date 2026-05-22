@@ -71,7 +71,7 @@ public class TestEmergencyDumpConstantPool extends JfrRecordingTest {
         emitClassEvent(EmergencyDumpHelper.class);
         emitClassEvent(utf8NamedClass);
 
-        SubstrateJVM.get().vmOutOfMemoryErrorRotation();
+        SubstrateJVM.get().dumpOnOutOfMemoryError();
         recording.stop();
         recording.close();
 

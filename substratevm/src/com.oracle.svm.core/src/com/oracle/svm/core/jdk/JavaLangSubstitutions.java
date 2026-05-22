@@ -706,11 +706,13 @@ final class Target_jdk_internal_loader_BootLoader {
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     public static URL findResource(String name) {
         return ResourcesHelper.nameToResourceURL(name);
     }
 
     @Substitute
+    @TargetElement(onlyWith = ClassRegistries.IgnoresClassLoader.class)
     public static Enumeration<URL> findResources(String name) {
         return ResourcesHelper.nameToResourceEnumerationURLs(name);
     }

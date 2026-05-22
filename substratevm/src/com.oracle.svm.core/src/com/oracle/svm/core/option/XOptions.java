@@ -24,15 +24,12 @@
  */
 package com.oracle.svm.core.option;
 
-import java.io.File;
-
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.SubstrateGCOptions;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.jdk.SystemPropertiesSupport;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 
 import jdk.graal.compiler.options.OptionKey;
@@ -57,12 +54,6 @@ public final class XOptions {
         if (xFlag != null) {
             long value = parse(xFlag, keyAndValue);
             xFlag.optionKey.update(values, value);
-            return true;
-        } else if (keyAndValue.startsWith("bootclasspath/a:")) {
-            // Set the property read by jdk.internal.loader.ClassLoaders.<clinit>
-            String value = keyAndValue.substring("bootclasspath/a:".length());
-            String currentValue = SystemPropertiesSupport.singleton().getInitialProperty("jdk.boot.class.path.append", false);
-            SystemPropertiesSupport.singleton().initializeProperty("jdk.boot.class.path.append", appendPath(currentValue, value));
             return true;
         }
         return false;
@@ -100,13 +91,6 @@ public final class XOptions {
         } catch (NumberFormatException nfe) {
             throw new IllegalArgumentException("Invalid option '" + RuntimeOptionParser.X_OPTION_PREFIX + keyAndValue + "' does not specify a valid number.");
         }
-    }
-
-    private static String appendPath(String paths, String toAppend) {
-        if (paths != null && !paths.isEmpty()) {
-            return toAppend != null && !toAppend.isEmpty() ? paths + File.pathSeparator + toAppend : paths;
-        }
-        return toAppend;
     }
 
     private static class XFlag {

@@ -40,7 +40,7 @@ import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.guest.staging.c.CGlobalDataImpl;
 import com.oracle.svm.hosted.imagelayer.CodeLocation;
 import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
-import com.oracle.svm.hosted.imagelayer.SharedLayerSnapshotCapnProtoSchemaHolder;
+import com.oracle.svm.hosted.snapshot.c.CGlobalDataInfoData;
 import com.oracle.svm.shared.util.VMError;
 
 /**
@@ -51,7 +51,7 @@ import com.oracle.svm.shared.util.VMError;
  */
 public class AppLayerCGlobalTracking {
     record PriorLayerCGlobal(CGlobalDataImpl<?> impl,
-                    SharedLayerSnapshotCapnProtoSchemaHolder.CGlobalDataInfo.Reader persistedInfo) {
+                    CGlobalDataInfoData.Loader persistedInfo) {
 
     }
 
@@ -226,10 +226,10 @@ public class AppLayerCGlobalTracking {
         EconomicSet<CGlobalDataImpl<?>> newCGlobalsWithPriorLayerReferences = EconomicSet.create();
         Map<CGlobalDataImpl<?>, PriorLayerCGlobal> newCGlobalToPriorLayerCGlobals = new HashMap<>();
         for (var persistedInfo : loader.getCGlobals()) {
-            String symbolName = persistedInfo.getLayeredSymbolName().toString();
+            String symbolName = persistedInfo.getLayeredSymbolName();
             CGlobalDataImpl<?> globalEntry = null;
             if (persistedInfo.getLinkingInfo().hasOriginalSymbolName()) {
-                String originalSymbolName = persistedInfo.getLinkingInfo().getOriginalSymbolName().toString();
+                String originalSymbolName = persistedInfo.getLinkingInfo().getOriginalSymbolName();
                 globalEntry = cGlobalsWithPriorLayerReferencesMap.get(originalSymbolName);
                 if (globalEntry != null) {
                     newCGlobalsWithPriorLayerReferences.add(globalEntry);
@@ -249,13 +249,13 @@ public class AppLayerCGlobalTracking {
              * create the CGlobalDataInfo upon the first reference to the CGlobalDataImpl.
              */
             if (persistedInfo.getLinkingInfo().hasOriginalSymbolName()) {
-                String originalSymbolName = persistedInfo.getLinkingInfo().getOriginalSymbolName().toString();
+                String originalSymbolName = persistedInfo.getLinkingInfo().getOriginalSymbolName();
                 var previous = newSymbolNameToPriorLayerCGlobals.put(originalSymbolName, priorInfo);
                 VMError.guarantee(previous == null);
             } else if (persistedInfo.getLinkingInfo().hasCodeLocation()) {
                 var callSiteInfo = persistedInfo.getLinkingInfo().getCodeLocation();
                 int bci = callSiteInfo.getBytecodeIndex();
-                String stacktrace = callSiteInfo.getStacktraceName().toString();
+                String stacktrace = callSiteInfo.getStacktraceName();
                 var previous = newCodeLocationToPriorLayerCGlobals.put(new CodeLocation(bci, stacktrace), priorInfo);
                 VMError.guarantee(previous == null);
             }

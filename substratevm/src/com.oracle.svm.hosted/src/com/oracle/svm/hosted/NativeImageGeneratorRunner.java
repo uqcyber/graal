@@ -27,6 +27,7 @@ package com.oracle.svm.hosted;
 import java.io.File;
 import java.io.IOException;
 import java.lang.module.ModuleFinder;
+import java.lang.module.ResolvedModule;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -256,30 +257,27 @@ public class NativeImageGeneratorRunner {
     /**
      * Returns what are considered native-image builder modules: those are the modules with prefix
      * {@value NativeImageGeneratorRunner#NATIVE_IMAGE_MODULE_PREFIX} and their reader modules.
+     * Readability is computed from the resolved boot configuration because image builds can add
+     * dynamic read edges that cannot be removed from a long-lived test process.
      */
     public static Set<Module> getNativeImageBuilderModules() {
-        final var allModules = ModuleLayer.boot().modules();
-        List<Module> builderModules = new ArrayList<>(allModules.size());
-        for (Module m : allModules) {
-            if (m.isNamed()) {
-                if (m.getName().startsWith(NATIVE_IMAGE_MODULE_PREFIX)) {
-                    builderModules.add(m);
-                }
-            }
-        }
-
+        ModuleLayer bootLayer = ModuleLayer.boot();
+        final var allResolvedModules = bootLayer.configuration().modules();
         Set<Module> transitiveBuilderModules = new LinkedHashSet<>();
-        for (Module svmModule : builderModules) {
-            transitiveReaders(svmModule, allModules, transitiveBuilderModules);
+        for (ResolvedModule module : allResolvedModules) {
+            if (module.name().startsWith(NATIVE_IMAGE_MODULE_PREFIX)) {
+                transitiveReaders(module, allResolvedModules, bootLayer, transitiveBuilderModules);
+            }
         }
         return transitiveBuilderModules;
     }
 
-    public static void transitiveReaders(Module readModule, Set<Module> potentialReaders, Set<Module> actualReaders) {
-        for (Module potentialReader : potentialReaders) {
-            if (potentialReader.canRead(readModule)) {
-                if (actualReaders.add(potentialReader)) {
-                    transitiveReaders(potentialReader, potentialReaders, actualReaders);
+    private static void transitiveReaders(ResolvedModule readModule, Set<ResolvedModule> potentialReaders, ModuleLayer bootLayer, Set<Module> actualReaders) {
+        for (ResolvedModule potentialReader : potentialReaders) {
+            if (potentialReader.equals(readModule) || potentialReader.reads().contains(readModule)) {
+                Module potentialReaderModule = bootLayer.findModule(potentialReader.name()).orElseThrow();
+                if (actualReaders.add(potentialReaderModule)) {
+                    transitiveReaders(potentialReader, potentialReaders, bootLayer, actualReaders);
                 }
             }
         }

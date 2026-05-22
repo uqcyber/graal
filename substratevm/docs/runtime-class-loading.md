@@ -1,6 +1,6 @@
 # Run-Time Class Loading
 
-Run-time class loading (a.k.a. "Crema") allows `ClassLoader.defineClass` to work at run time, creating new `DynamicHub`s.
+Run-time class loading, also called Crema, allows `ClassLoader.defineClass` to work at run time, creating new `DynamicHub`s.
 It is enabled at build time with the `-H:+RuntimeClassLoading` option.
 
 ## Extra Setup

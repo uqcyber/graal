@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -7498,8 +7498,8 @@ public final class TruffleString extends AbstractTruffleString {
     }
 
     /**
-     * Node to get a {@link AbstractTruffleString#isNative() native} string's pointer object. See
-     * {@link #execute(AbstractTruffleString, TruffleString.Encoding)} for details.
+     * Node to get a {@link AbstractTruffleString#isNative() native} string's pointer object or raw
+     * pointer. See {@link #execute(AbstractTruffleString, TruffleString.Encoding)} for details.
      *
      * @since 22.1
      */
@@ -7510,8 +7510,11 @@ public final class TruffleString extends AbstractTruffleString {
 
         /**
          * Get the given string's pointer object which was passed to {@link FromNativePointerNode}.
-         * If the string is not backed by a native pointer, this node will throw an
-         * {@link UnsupportedOperationException}. Use {@link AbstractTruffleString#isNative()} to
+         * If the string was created from a boxed {@link Long} raw native pointer, this node returns
+         * that raw pointer as a boxed {@link Long}. In that case, there is no associated object kept
+         * alive for lifetime tracking, so the caller remains responsible for ensuring that the native
+         * memory remains valid. If the string is not backed by a native pointer, this node will throw
+         * an {@link UnsupportedOperationException}. Use {@link AbstractTruffleString#isNative()} to
          * check whether the string is actually backed by a native pointer before calling this node.
          * Caution: If the given string is a {@link TruffleString}, the native pointer must not be
          * modified as long as the string is used.
@@ -7526,7 +7529,7 @@ public final class TruffleString extends AbstractTruffleString {
             if (!a.isNative()) {
                 throw InternalErrors.unsupportedOperation("string is not backed by a native pointer!");
             }
-            return ((NativePointer) a.data()).getPointerObject();
+            return ((NativePointer) a.data()).getPointerObjectOrRawPointer();
         }
 
         /**

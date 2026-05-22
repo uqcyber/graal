@@ -44,8 +44,6 @@ import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.core.common.type.Stamp;
-import jdk.graal.compiler.core.common.type.StampFactory;
 
 /**
  * This class can be used to access physical Java frames. It cannot be used to access virtual Java
@@ -139,10 +137,6 @@ public abstract class FrameAccess {
     @Fold
     public static int uncompressedReferenceSize() {
         return SubstrateTarget.getWordSize();
-    }
-
-    public static Stamp getWordStamp() {
-        return StampFactory.forKind(SubstrateTarget.getWordKind());
     }
 
     /**

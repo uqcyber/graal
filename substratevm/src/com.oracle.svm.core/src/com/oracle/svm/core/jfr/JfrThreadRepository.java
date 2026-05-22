@@ -177,6 +177,12 @@ public final class JfrThreadRepository implements JfrRepository {
         }
     }
 
+    /**
+     * Virtual threads only need to be registered once per epoch. This fast path lets repeated
+     * virtual-thread remounts avoid taking the global thread repository lock. The JFR epoch is
+     * bumped when recording starts so stale epoch ids from a previous recording do not suppress
+     * registration for a fresh recording.
+     */
     @Uninterruptible(reason = "Epoch must not change while in this method.", callerMustBe = true)
     private static boolean isVirtualThreadAlreadyRegistered(Thread thread) {
         assert JavaThreads.isVirtual(thread);

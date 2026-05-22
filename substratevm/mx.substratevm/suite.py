@@ -2,8 +2,8 @@
 suite = {
     "mxversion": "7.68.4",
     "name": "substratevm",
-    "version" : "25.1.0",
-    "release" : False,
+    "version_from" : "compiler",
+    "release_from" : "compiler",
     "url" : "https://github.com/oracle/graal/tree/master/substratevm",
 
     "groupId" : "org.graalvm.nativeimage",
@@ -1203,6 +1203,7 @@ suite = {
             "requires": [
                 "java.compiler",
                 "jdk.jfr",
+                "java.xml",
                 "java.management",
                 "jdk.management.jfr",
                 "java.instrument",
@@ -1787,6 +1788,7 @@ suite = {
                 "com.oracle.svm.interpreter.metadata",
                 "com.oracle.svm.core.graal.aarch64",
                 "com.oracle.svm.graal",
+                "compiler:GRAAL",
             ],
             "requires" : [
                 "java.base"
@@ -2308,7 +2310,6 @@ suite = {
                 "SVM",
                 "OBJECTFILE",
                 "POINTSTO",
-                "sdk:NATIVEBRIDGE",
                 "truffle:TRUFFLE_RUNTIME",
             ],
             "moduleInfo" : {
@@ -2332,6 +2333,7 @@ suite = {
                     # the module can still be used with the TruffleBaseFeature
                     "static org.graalvm.truffle.runtime",
                     "static org.graalvm.jniutils",
+                    "static org.graalvm.nativebridge",
                     "jdk.graal.compiler",
                     "org.graalvm.collections",
                     "org.graalvm.polyglot",

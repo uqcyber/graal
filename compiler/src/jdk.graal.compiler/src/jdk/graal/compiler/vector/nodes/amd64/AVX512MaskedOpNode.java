@@ -35,6 +35,7 @@ import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.calc.BinaryArithmeticNode;
 import jdk.graal.compiler.nodes.calc.FloatingNode;
+import jdk.graal.compiler.nodes.calc.ReinterpretNode;
 import jdk.graal.compiler.nodes.calc.UnaryArithmeticNode;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 import jdk.graal.compiler.vector.lir.VectorLIRGeneratorTool;
@@ -99,6 +100,11 @@ public class AVX512MaskedOpNode extends FloatingNode implements VectorLIRLowerab
     public static AVX512MaskedOpNode createUnaryArithmetic(UnaryArithmeticNode<?> op, ValueNode dst, ValueNode mask, ValueNode src) {
         SimdStamp srcStamp = (SimdStamp) src.stamp(NodeView.DEFAULT).unrestricted();
         return new AVX512MaskedOpNode(srcStamp, op, dst, mask, src, null);
+    }
+
+    public static AVX512MaskedOpNode createReinterpret(ReinterpretNode op, ValueNode dst, ValueNode mask) {
+        SimdStamp stamp = (SimdStamp) op.stamp(NodeView.DEFAULT).unrestricted();
+        return new AVX512MaskedOpNode(stamp, op, dst, mask, op, null);
     }
 
     public static AVX512MaskedOpNode createBinaryArithmetic(BinaryArithmeticNode<?> op, ValueNode dst, ValueNode mask, ValueNode src1, ValueNode src2) {

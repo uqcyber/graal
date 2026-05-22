@@ -24,8 +24,7 @@
  */
 package com.oracle.svm.core.graal.nodes;
 
-import com.oracle.svm.core.FrameAccess;
-
+import com.oracle.svm.core.SubstrateTarget;
 import jdk.graal.compiler.core.common.LIRKind;
 import jdk.graal.compiler.graph.NodeClass;
 import jdk.graal.compiler.nodeinfo.NodeCycles;
@@ -44,7 +43,7 @@ public final class ReadReservedRegisterFixedNode extends FixedWithNextNode imple
     private final Register register;
 
     public ReadReservedRegisterFixedNode(Register register) {
-        super(TYPE, FrameAccess.getWordStamp());
+        super(TYPE, SubstrateTarget.getWordStamp());
         this.register = register;
     }
 

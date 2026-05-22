@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -406,7 +406,8 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
                 options.add(WasmBinaryTools.WabtOption.MULTI_MEMORY);
             }
             String exceptionsOption = testCase.options().getProperty("wasm.Exceptions");
-            if ("true".equals(exceptionsOption)) {
+            String legacyExceptionsOption = testCase.options().getProperty("wasm.LegacyExceptions");
+            if ("true".equals(exceptionsOption) || "true".equals(legacyExceptionsOption)) {
                 options.add(WasmBinaryTools.WabtOption.EXCEPTIONS);
             }
             ArrayList<Source> sources = testCase.getSources(options);

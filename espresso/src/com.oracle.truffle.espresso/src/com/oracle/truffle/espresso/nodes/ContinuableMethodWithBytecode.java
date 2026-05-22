@@ -22,6 +22,8 @@
  */
 package com.oracle.truffle.espresso.nodes;
 
+import java.util.Set;
+
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateInline;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -78,6 +80,11 @@ public class ContinuableMethodWithBytecode extends EspressoInstrumentableRootNod
     @Override
     public boolean hasTag(Class<? extends Tag> tag) {
         return false;
+    }
+
+    @Override
+    public void prepareForInstrumentation(Set<Class<?>> tags) {
+        bytecodeNode.prepareForInstrumentation(tags);
     }
 
     @GenerateInline(false)

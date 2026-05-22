@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,6 +48,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
+import java.lang.reflect.Field;
 import java.util.List;
 
 import org.junit.Test;
@@ -135,6 +136,16 @@ public class IllegalLocalExceptionTest extends AbstractInstructionTest {
         } else {
             Instruction instruction = illegalLocalException.bytecodeNode.getInstruction(illegalLocalException.location.getBytecodeIndex());
             assertTrue(instruction.getName().startsWith(instructionName));
+        }
+    }
+
+    static int userLocalsStartIndex(BytecodeNode bytecodeNode) {
+        try {
+            Field field = bytecodeNode.getRootNode().getClass().getDeclaredField("USER_LOCALS_START_INDEX");
+            field.setAccessible(true);
+            return field.getInt(null);
+        } catch (ReflectiveOperationException ex) {
+            throw new AssertionError(ex);
         }
     }
 
@@ -337,6 +348,54 @@ public class IllegalLocalExceptionTest extends AbstractInstructionTest {
             b.endReturn();
             b.endRoot();
         };
+    }
+
+    @Test
+    public void testTailCallLoadLocalObjectSlowPathUpdatesStackPointer() {
+        assumeTrue(variant.getGeneratedClass() == IllegalLocalExceptionRootNodeBEUncachedTailCall.class);
+        IllegalLocalExceptionRootNode root = parse(b -> {
+            b.beginRoot();
+            BytecodeLocal x = b.createLocal("x", null);
+            BytecodeLocal y = b.createLocal("y", null);
+            b.beginStoreLocal(y);
+            b.emitLoadConstant("sentinel");
+            b.endStoreLocal();
+            b.beginIfThenElse();
+            b.emitLoadArgument(0);
+            b.beginStoreLocal(x);
+            b.emitLoadArgument(1);
+            b.endStoreLocal();
+            b.beginRawFrameSetInt(x.getLocalOffset());
+            b.emitLoadArgument(2);
+            b.endRawFrameSetInt();
+            b.endIfThenElse();
+
+            b.beginReturn();
+            b.beginFirstOfTwo();
+            b.emitLoadLocal(x);
+            b.emitLoadConstant("marker");
+            b.endFirstOfTwo();
+            b.endReturn();
+            b.endRoot();
+        });
+        root.getBytecodeNode().setUncachedThreshold(0);
+
+        assertEquals("hello", root.getCallTarget().call(true, "hello", 42));
+        assertInstructions(root,
+                        "load.constant",
+                        "store.local$generic",
+                        "load.argument",
+                        "branch.false",
+                        "load.argument",
+                        "store.local$generic",
+                        "branch",
+                        "load.argument",
+                        "c.RawFrameSetInt",
+                        "load.local$Object",
+                        "load.constant",
+                        "c.FirstOfTwo",
+                        "return");
+        assertEquals(42, root.getCallTarget().call(false, "hello", 42));
     }
 
     // Like the previous test, but uses an IntConsumer to return-type BE the load.
@@ -776,6 +835,12 @@ public class IllegalLocalExceptionTest extends AbstractInstructionTest {
                                 enableMaterializedLocalAccesses = true, //
                                 enableUncachedInterpreter = true, //
                                 boxingEliminationTypes = {int.class})),
+                @Variant(suffix = "BEUncachedTailCall", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                                illegalLocalException = MyIllegalLocalException.class, //
+                                enableMaterializedLocalAccesses = true, //
+                                enableUncachedInterpreter = true, //
+                                enableTailCallHandlers = true, //
+                                boxingEliminationTypes = {int.class})),
 })
 abstract class IllegalLocalExceptionRootNode extends DebugBytecodeRootNode {
     protected IllegalLocalExceptionRootNode(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
@@ -801,6 +866,18 @@ abstract class IllegalLocalExceptionRootNode extends DebugBytecodeRootNode {
                         LocalAccessor accessor,
                         @Bind BytecodeNode bytecodeNode) {
             return accessor.getObject(bytecodeNode, frame);
+        }
+    }
+
+    @Operation(storeBytecodeIndex = false)
+    @ConstantOperand(type = int.class)
+    static final class RawFrameSetInt {
+        @Specialization
+        static void perform(VirtualFrame frame,
+                        int localOffset,
+                        int value,
+                        @Bind BytecodeNode bytecodeNode) {
+            frame.setInt(IllegalLocalExceptionTest.userLocalsStartIndex(bytecodeNode) + localOffset, value);
         }
     }
 
@@ -864,6 +941,14 @@ abstract class IllegalLocalExceptionRootNode extends DebugBytecodeRootNode {
                         @Bind BytecodeNode bytecodeNode,
                         @Bind("$bytecodeIndex") int bci) {
             return bytecodeNode.getLocalValue(bci, frame, localOffset);
+        }
+    }
+
+    @Operation
+    static final class FirstOfTwo {
+        @Specialization
+        static Object perform(Object first, @SuppressWarnings("unused") Object second) {
+            return first;
         }
     }
 

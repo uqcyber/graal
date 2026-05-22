@@ -56,9 +56,11 @@ import jdk.vm.ci.meta.Assumptions.AssumptionResult;
 import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.JavaTypeProfile;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.Signature;
 
 @NodeInfo
 public class MethodCallTargetNode extends CallTargetNode implements IterableNodeType, Simplifiable {
@@ -112,7 +114,59 @@ public class MethodCallTargetNode extends CallTargetNode implements IterableNode
         } else {
             assertFalse(targetMethod().isStatic(), "static calls are only allowed for non-static methods (%s)", targetMethod());
         }
+        verifyAgainstSignature();
         return super.verifyNode();
+    }
+
+    private void verifyAgainstSignature() {
+        Signature signature = targetMethod().getSignature();
+        ResolvedJavaType receiverType = targetMethod().getDeclaringClass();
+        int expectedArgumentCount = signature.getParameterCount(!isStatic());
+        assertTrue(arguments().size() == expectedArgumentCount, "wrong number of arguments for call to %s: expected %s, got %s (%s)",
+                        targetMethod(), expectedArgumentCount, arguments().size(), arguments());
+
+        int argumentIndex = 0;
+        if (!isStatic()) {
+            verifyArgumentKind(argumentIndex, expectedStackKind(receiverType), receiverType);
+            argumentIndex++;
+        }
+        for (int parameterIndex = 0; parameterIndex < signature.getParameterCount(false); parameterIndex++) {
+            JavaType parameterType = signature.getParameterType(parameterIndex, receiverType);
+            verifyArgumentKind(argumentIndex, expectedStackKind(parameterType), parameterType);
+            argumentIndex++;
+        }
+        verifyReturnKind(signature.getReturnType(receiverType));
+    }
+
+    /**
+     * Gets the stack kind that a value with {@code expectedType} is expected to have in the graph.
+     * This differs from {@link JavaType#getJavaKind()} for word types.
+     */
+    protected JavaKind expectedStackKind(JavaType expectedType) {
+        return expectedType.getJavaKind().getStackKind();
+    }
+
+    private void verifyArgumentKind(int argumentIndex, JavaKind expectedKind, JavaType expectedType) {
+        ValueNode argument = arguments().get(argumentIndex);
+        JavaKind actualKind = argument.getStackKind();
+        /*
+         * Special case: a raw pointer with an Illegal kind may be passed to a Word parameter with an
+         * Object kind. We do not have WordTypes here for a precise type check on the parameter.
+         */
+        assertTrue(actualKind == expectedKind || (expectedKind == JavaKind.Object && actualKind == JavaKind.Illegal),
+                        "wrong kind for argument %s of call to %s: expected %s (%s), got %s from %s",
+                        argumentIndex, targetMethod(), expectedKind, expectedType, actualKind, argument);
+    }
+
+    private void verifyReturnKind(JavaType expectedType) {
+        JavaKind expectedKind = expectedStackKind(expectedType);
+        if (expectedKind == JavaKind.Void) {
+            return;
+        }
+        JavaKind actualKind = returnStamp().getTrustedStamp().getStackKind();
+        assertTrue(actualKind == expectedKind,
+                        "wrong kind for return value of call to %s: expected %s (%s), got %s from %s",
+                        targetMethod(), expectedKind, expectedType, actualKind, returnStamp());
     }
 
     @Override

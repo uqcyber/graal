@@ -49,6 +49,7 @@ import static jdk.vm.ci.amd64.AMD64.rsi;
 import static jdk.vm.ci.amd64.AMD64.xmm0;
 import static jdk.vm.ci.amd64.AMD64.xmm1;
 import static jdk.vm.ci.amd64.AMD64.xmm10;
+import static jdk.vm.ci.amd64.AMD64.xmm11;
 import static jdk.vm.ci.amd64.AMD64.xmm12;
 import static jdk.vm.ci.amd64.AMD64.xmm13;
 import static jdk.vm.ci.amd64.AMD64.xmm14;
@@ -132,12 +133,14 @@ public final class AMD64ElectronicCodeBookAESEncryptOp extends AMD64LIRInstructi
                         rbx.asValue(),
                         r12.asValue(),
                         r13.asValue(),
+                        // vzeroupper clears upper bits of xmm0-xmm15.
                         xmm0.asValue(), xmm1.asValue(), xmm2.asValue(), xmm3.asValue(),
                         xmm4.asValue(), xmm5.asValue(), xmm6.asValue(), xmm7.asValue(),
-                        xmm8.asValue(), xmm9.asValue(), xmm10.asValue(), xmm12.asValue(),
-                        xmm13.asValue(), xmm14.asValue(), xmm15.asValue(), xmm16.asValue(),
-                        xmm17.asValue(), xmm19.asValue(), xmm20.asValue(), xmm21.asValue(),
-                        xmm22.asValue(), xmm23.asValue(), xmm24.asValue(), xmm31.asValue(),
+                        xmm8.asValue(), xmm9.asValue(), xmm10.asValue(), xmm11.asValue(),
+                        xmm12.asValue(), xmm13.asValue(), xmm14.asValue(), xmm15.asValue(),
+                        xmm16.asValue(), xmm17.asValue(), xmm19.asValue(), xmm20.asValue(),
+                        xmm21.asValue(), xmm22.asValue(), xmm23.asValue(), xmm24.asValue(),
+                        xmm31.asValue(),
                         k1.asValue(),
         };
     }

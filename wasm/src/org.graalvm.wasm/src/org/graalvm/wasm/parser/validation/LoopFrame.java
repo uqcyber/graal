@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,8 +41,7 @@
 
 package org.graalvm.wasm.parser.validation;
 
-import org.graalvm.wasm.exception.Failure;
-import org.graalvm.wasm.exception.WasmException;
+import org.graalvm.wasm.parser.bytecode.BytecodeFixup;
 import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen;
 
 import java.util.BitSet;
@@ -54,7 +53,7 @@ class LoopFrame extends ControlFrame {
     private final int labelLocation;
 
     LoopFrame(int[] paramTypes, int[] resultTypes, int initialStackSize, ControlFrame parentFrame, int labelLocation) {
-        super(paramTypes, resultTypes, parentFrame.getSymbolTable(), initialStackSize, (BitSet) parentFrame.initializedLocals.clone());
+        super(paramTypes, resultTypes, parentFrame.getSymbolTable(), initialStackSize, (BitSet) parentFrame.initializedLocals.clone(), parentFrame.legacyCatchDepth());
         this.labelLocation = labelLocation;
     }
 
@@ -64,26 +63,11 @@ class LoopFrame extends ControlFrame {
     }
 
     @Override
-    void enterElse(ParserState state, RuntimeBytecodeGen bytecode) {
-        throw WasmException.create(Failure.TYPE_MISMATCH, "Expected then branch. Else branch requires preceding then branch.");
+    void exit(ParserState state, RuntimeBytecodeGen bytecode) {
     }
 
     @Override
-    void exit(RuntimeBytecodeGen bytecode) {
-    }
-
-    @Override
-    void addBranch(RuntimeBytecodeGen bytecode, RuntimeBytecodeGen.BranchOp branchOp) {
-        bytecode.addBranch(labelLocation, branchOp);
-    }
-
-    @Override
-    void addBranchTableItem(RuntimeBytecodeGen bytecode) {
-        bytecode.patchLocation(bytecode.addBranchTableItemLocation(), labelLocation);
-    }
-
-    @Override
-    void addExceptionHandler(ExceptionHandler handler) {
-        handler.setTarget(labelLocation);
+    void addLabelFixup(BytecodeFixup fixup) {
+        fixup.patch(labelLocation);
     }
 }

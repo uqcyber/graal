@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -53,14 +53,21 @@ public final class WasmCodeEntry {
     private final BranchProfile exceptionBranch = BranchProfile.create();
     private final BranchProfile subtypingBranch = BranchProfile.create();
     private final int numLocals;
+    private final int maxLegacyCatchDepth;
+    private final int stackBase;
     private final int resultCount;
     private final boolean usesMemoryZero;
 
-    public WasmCodeEntry(WasmFunction function, byte[] bytecode, int[] localTypes, int[] resultTypes, boolean usesMemoryZero) {
+    public WasmCodeEntry(WasmFunction function, byte[] bytecode, int[] localTypes, int[] resultTypes, int maxLegacyCatchDepth, boolean usesMemoryZero) {
         this.function = function;
         this.bytecode = bytecode;
         this.localTypes = localTypes;
         this.numLocals = localTypes.length;
+        this.maxLegacyCatchDepth = maxLegacyCatchDepth;
+        // Legacy catches keep the caught exception object in reserved frame slots between the
+        // locals and the operand stack. stackBase therefore stays constant for the whole function
+        // and already accounts for the maximum nesting of legacy catches in the body.
+        this.stackBase = numLocals + maxLegacyCatchDepth;
         this.resultTypes = resultTypes;
         this.resultCount = resultTypes.length;
         this.usesMemoryZero = usesMemoryZero;
@@ -80,6 +87,14 @@ public final class WasmCodeEntry {
 
     public int localCount() {
         return numLocals;
+    }
+
+    public int maxLegacyCatchDepth() {
+        return maxLegacyCatchDepth;
+    }
+
+    public int stackBase() {
+        return stackBase;
     }
 
     public int functionIndex() {

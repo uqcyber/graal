@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,40 +24,40 @@
  */
 package com.oracle.svm.interpreter;
 
-import static com.oracle.svm.interpreter.EspressoFrame.clear;
-import static com.oracle.svm.interpreter.EspressoFrame.dup1;
-import static com.oracle.svm.interpreter.EspressoFrame.dup2;
-import static com.oracle.svm.interpreter.EspressoFrame.dup2x1;
-import static com.oracle.svm.interpreter.EspressoFrame.dup2x2;
-import static com.oracle.svm.interpreter.EspressoFrame.dupx1;
-import static com.oracle.svm.interpreter.EspressoFrame.dupx2;
-import static com.oracle.svm.interpreter.EspressoFrame.getLocalDouble;
-import static com.oracle.svm.interpreter.EspressoFrame.getLocalFloat;
-import static com.oracle.svm.interpreter.EspressoFrame.getLocalInt;
-import static com.oracle.svm.interpreter.EspressoFrame.getLocalLong;
-import static com.oracle.svm.interpreter.EspressoFrame.getLocalObject;
-import static com.oracle.svm.interpreter.EspressoFrame.getLocalReturnAddress;
-import static com.oracle.svm.interpreter.EspressoFrame.peekObject;
-import static com.oracle.svm.interpreter.EspressoFrame.popDouble;
-import static com.oracle.svm.interpreter.EspressoFrame.popFloat;
-import static com.oracle.svm.interpreter.EspressoFrame.popInt;
-import static com.oracle.svm.interpreter.EspressoFrame.popLong;
-import static com.oracle.svm.interpreter.EspressoFrame.popObject;
-import static com.oracle.svm.interpreter.EspressoFrame.popReturnAddressOrObject;
-import static com.oracle.svm.interpreter.EspressoFrame.putDouble;
-import static com.oracle.svm.interpreter.EspressoFrame.putFloat;
-import static com.oracle.svm.interpreter.EspressoFrame.putInt;
-import static com.oracle.svm.interpreter.EspressoFrame.putLong;
-import static com.oracle.svm.interpreter.EspressoFrame.putObject;
-import static com.oracle.svm.interpreter.EspressoFrame.putReturnAddress;
-import static com.oracle.svm.interpreter.EspressoFrame.setLocalDouble;
-import static com.oracle.svm.interpreter.EspressoFrame.setLocalFloat;
-import static com.oracle.svm.interpreter.EspressoFrame.setLocalInt;
-import static com.oracle.svm.interpreter.EspressoFrame.setLocalLong;
-import static com.oracle.svm.interpreter.EspressoFrame.setLocalObject;
-import static com.oracle.svm.interpreter.EspressoFrame.setLocalObjectOrReturnAddress;
-import static com.oracle.svm.interpreter.EspressoFrame.startingStackOffset;
-import static com.oracle.svm.interpreter.EspressoFrame.swapSingle;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.clear;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.dup1;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.dup2;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.dup2x1;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.dup2x2;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.dupx1;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.dupx2;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.getLocalDouble;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.getLocalFloat;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.getLocalInt;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.getLocalLong;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.getLocalObject;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.getLocalReturnAddress;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.peekObject;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.popDouble;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.popFloat;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.popInt;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.popLong;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.popObject;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.popReturnAddressOrObject;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.putDouble;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.putFloat;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.putInt;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.putLong;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.putObject;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.putReturnAddress;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.setLocalDouble;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.setLocalFloat;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.setLocalInt;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.setLocalLong;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.setLocalObject;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.setLocalObjectOrReturnAddress;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.startingStackOffset;
+import static com.oracle.svm.interpreter.InterpreterFrameUtil.swapSingle;
 import static com.oracle.svm.interpreter.InterpreterOptions.InterpreterTraceSupport;
 import static com.oracle.svm.interpreter.InterpreterToVM.nullCheck;
 import static com.oracle.svm.interpreter.InterpreterUtil.traceInterpreter;
@@ -256,6 +256,10 @@ import static com.oracle.svm.interpreter.metadata.Bytecodes.POP;
 import static com.oracle.svm.interpreter.metadata.Bytecodes.POP2;
 import static com.oracle.svm.interpreter.metadata.Bytecodes.PUTFIELD;
 import static com.oracle.svm.interpreter.metadata.Bytecodes.PUTSTATIC;
+import static com.oracle.svm.interpreter.metadata.Bytecodes.QUICK_GETFIELD;
+import static com.oracle.svm.interpreter.metadata.Bytecodes.QUICK_GETSTATIC;
+import static com.oracle.svm.interpreter.metadata.Bytecodes.QUICK_PUTFIELD;
+import static com.oracle.svm.interpreter.metadata.Bytecodes.QUICK_PUTSTATIC;
 import static com.oracle.svm.interpreter.metadata.Bytecodes.RET;
 import static com.oracle.svm.interpreter.metadata.Bytecodes.RETURN;
 import static com.oracle.svm.interpreter.metadata.Bytecodes.SALOAD;
@@ -270,6 +274,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
 import java.util.Objects;
 
+import com.oracle.svm.core.ForeignSupport;
 import com.oracle.svm.core.NeverInline;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
 import com.oracle.svm.core.methodhandles.MethodHandleInterpreterUtils;
@@ -313,7 +318,20 @@ import jdk.vm.ci.meta.UnresolvedJavaMethod;
 import jdk.vm.ci.meta.UnresolvedJavaType;
 
 /**
- * Bytecode interpreter loop.
+ * Executes methods represented by Crema interpreter metadata.
+ *
+ * <p>
+ * This class is the Java entry point for interpreter execution. It creates or accepts an
+ * {@link InterpreterFrame}, initializes the local variables from Java-call arguments, checks that
+ * the target method has interpreter bytecodes, and then dispatches either to the ordinary bytecode
+ * loop in {@link Root} or to the intrinsic path used for signature-polymorphic method-handle
+ * operations.
+ *
+ * <p>
+ * Guest Java exceptions are kept distinct from interpreter implementation failures. Bytecodes that
+ * semantically throw a Java exception use {@link SemanticJavaException} while execution is inside
+ * the interpreter so exception handlers can be resolved against the interpreted method. Exceptions
+ * that escape back to compiled or reflective callers are rethrown as the original guest exception.
  */
 @InternalVMMethod
 public final class Interpreter {
@@ -371,51 +389,88 @@ public final class Interpreter {
     }
 
     public static Object execute(InterpreterResolvedJavaMethod method, InterpreterFrame frame) {
+        checkExecutable(method);
         return execute0(method, frame, false);
     }
 
     public static Object execute(InterpreterResolvedJavaMethod method, Object[] args, boolean forceStayInInterpreter) {
-        InterpreterFrame frame = EspressoFrame.allocate(method.getMaxLocals(), method.getMaxStackSize(), args);
-
-        InterpreterUtil.guarantee(!method.isNative() || method.getSignaturePolymorphicIntrinsic() != null, "trying to interpret native method %s", method);
-
+        InterpreterFrame frame = InterpreterFrameUtil.allocate(method.getMaxLocals(), method.getMaxStackSize(), args);
+        checkExecutable(method);
         initializeFrame(frame, method);
         return execute0(method, frame, forceStayInInterpreter);
     }
 
-    public static Object execute(InterpreterResolvedJavaMethod method, InterpreterFrame frame, int startBCI, int startTOP) {
-        return execute0(method, frame, startBCI, startTOP, false);
+    private static void checkExecutable(InterpreterResolvedJavaMethod method) {
+        if (method.hasBytecodes() || method.getSignaturePolymorphicIntrinsic() != null) {
+            return;
+        }
+        InterpreterResolvedObjectType declaringClass = method.getDeclaringClass();
+        if (!declaringClass.getHub().isRuntimeLoaded()) {
+            if (method.isNative()) {
+                if (!declaringClass.getHub().isPreserved()) {
+                    throw VMError.shouldNotReachHere(MetadataUtil.fmt("Trying to interpret AOT native method: %s.%nConsider using '-H:Preserve=package=%s'", method,
+                                    declaringClass.getHub().getPackageName()));
+                } else {
+                    throw VMError.shouldNotReachHere(MetadataUtil.fmt("Should not reach interpreter for AOT native method in preserved type: %s", method));
+                }
+            } else if (!method.isAbstract()) {
+                if (!declaringClass.getHub().isPreserved()) {
+                    throw VMError.shouldNotReachHere(MetadataUtil.fmt("Trying to interpret AOT method with no preserved bytecodes: %s.%nConsider using '-H:Preserve=package=%s'", method,
+                                    declaringClass.getHub().getPackageName()));
+                } else {
+                    throw VMError.shouldNotReachHere(MetadataUtil.fmt("Should not reach interpreter for AOT method in preserved type: %s", method));
+                }
+            } else {
+                throw VMError.shouldNotReachHere(MetadataUtil.fmt("Should not reach interpreter for AOT abstract method %s", method));
+            }
+        } else {
+            if (method.isNative()) {
+                // GR-73665
+                throw VMError.shouldNotReachHere(MetadataUtil.fmt("Runtime native method linkage is not implemented: %s", method));
+            } else if (!method.isAbstract()) {
+                throw VMError.shouldNotReachHere(MetadataUtil.fmt("Missing bytecode for run-time-loaded method %s", method));
+            } else {
+                throw VMError.shouldNotReachHere(MetadataUtil.fmt("Should not reach interpreter for run-time-loaded abstract method %s", method));
+            }
+        }
     }
 
-    private static Object execute0(InterpreterResolvedJavaMethod method, InterpreterFrame frame, int startBCI, int startTop, boolean stayInInterpreter) {
+    public static Object execute(InterpreterResolvedJavaMethod method, InterpreterFrame frame, int startBCI, int startTOP) {
+        checkExecutable(method);
+        return execute0(method, frame, startBCI, startTOP);
+    }
+
+    private static Object execute0(InterpreterResolvedJavaMethod method, InterpreterFrame frame, int startBCI, int startTop) {
+        Object synchronizedMethodLock = null;
         try {
             int executeBCI = startBCI;
             if (startBCI == jdk.vm.ci.code.BytecodeFrame.BEFORE_BCI) {
                 executeBCI = 0;
                 if (method.isSynchronized()) {
-                    Object lockTarget = method.isStatic()
+                    synchronizedMethodLock = method.isStatic()
                                     ? method.getDeclaringClass().getJavaClass()
                                     : frame.getObjectStatic(0);
-                    assert lockTarget != null;
-                    InterpreterToVM.monitorEnter(frame, nullCheck(lockTarget));
+                    assert synchronizedMethodLock != null;
+                    InterpreterToVM.monitorEnter(frame, synchronizedMethodLock);
                 }
             }
             assert method.getInterpretedCode() != null : "no bytecode stream for " + method;
-            return Root.executeBodyFromBCI(frame, method, executeBCI, startTop, stayInInterpreter);
+            return Root.executeBodyFromBCI(frame, method, executeBCI, startTop, false);
         } finally {
-            InterpreterToVM.releaseInterpreterFrameLocks(frame);
+            InterpreterToVM.releaseInterpreterFrameLocks(frame, synchronizedMethodLock);
         }
     }
 
     private static Object execute0(InterpreterResolvedJavaMethod method, InterpreterFrame frame, boolean stayInInterpreter) {
+        Object synchronizedMethodLock = null;
         try {
-            assert method.isStatic() || EspressoFrame.getThis(frame) != null;
+            assert method.isStatic() || InterpreterFrameUtil.getThis(frame) != null;
             if (method.isSynchronized()) {
-                Object lockTarget = method.isStatic()
+                synchronizedMethodLock = method.isStatic()
                                 ? method.getDeclaringClass().getJavaClass()
-                                : EspressoFrame.getThis(frame);
-                assert lockTarget != null;
-                InterpreterToVM.monitorEnter(frame, nullCheck(lockTarget));
+                                : InterpreterFrameUtil.getThis(frame);
+                assert synchronizedMethodLock != null;
+                InterpreterToVM.monitorEnter(frame, synchronizedMethodLock);
             }
             SignaturePolymorphicIntrinsic intrinsic = method.getSignaturePolymorphicIntrinsic();
             if (intrinsic != null) {
@@ -426,7 +481,7 @@ public final class Interpreter {
                 return Root.executeBodyFromBCI(frame, method, 0, startTop, stayInInterpreter);
             }
         } finally {
-            InterpreterToVM.releaseInterpreterFrameLocks(frame);
+            InterpreterToVM.releaseInterpreterFrameLocks(frame, synchronizedMethodLock);
         }
     }
 
@@ -550,8 +605,7 @@ public final class Interpreter {
         }
 
         traceInterpreter(" ".repeat(indent)) //
-                        .string(intrinsic.name())
-                        .string(" target=") //
+                        .string(intrinsic.name()).string(" target=") //
                         .string(target.getDeclaringClass().getName()) //
                         .string("::") //
                         .string(target.getName()) //
@@ -566,7 +620,7 @@ public final class Interpreter {
             traceIntrinsicEnter(method, indent, intrinsic);
             return switch (intrinsic) {
                 case InvokeBasic -> {
-                    MethodHandle mh = (MethodHandle) EspressoFrame.getThis(frame);
+                    MethodHandle mh = (MethodHandle) InterpreterFrameUtil.getThis(frame);
                     Target_java_lang_invoke_MemberName vmentry = MethodHandleInterpreterUtils.extractVMEntry(mh);
                     InterpreterResolvedJavaMethod target = InterpreterResolvedJavaMethod.fromMemberName(vmentry);
                     InterpreterUnresolvedSignature signature = method.getSignature();
@@ -594,6 +648,16 @@ public final class Interpreter {
                         yield rebasic(result, signature.getReturnKind());
                     } catch (SemanticJavaException e) {
                         throw uncheckedThrow(e.getCause());
+                    }
+                }
+                case LinkToNative -> {
+                    if (!ForeignSupport.isAvailable()) {
+                        throw VMError.unsupportedFeature("The foreign downcalls feature is not available. Please use -H:+ForeignAPISupport or leave this option default");
+                    }
+                    try {
+                        yield ForeignSupport.singleton().linkToNative(frame.getArguments());
+                    } catch (Throwable e) {
+                        throw uncheckedThrow(e);
                     }
                 }
                 default -> throw VMError.shouldNotReachHere(Objects.toString(intrinsic));
@@ -667,8 +731,27 @@ public final class Interpreter {
         };
     }
 
+    /**
+     * Entry point for executing the ordinary bytecode body of an interpreted method.
+     *
+     * <p>
+     * The loop keeps the current bytecode index and operand-stack top as local variables while the
+     * {@link InterpreterFrame} stores locals, arguments, and stack slots. Each iteration reads the
+     * current opcode, handles debugger events that must be reported at that bytecode index,
+     * executes the bytecode, and then advances the bytecode index and stack top using the bytecode
+     * metadata.
+     *
+     * <p>
+     * Exceptions thrown by the guest Java code are wrapped by {@link SemanticJavaException} so they
+     * can be routed to guest exception handlers. If such an exception needs to unwind the current
+     * interpreter frame and be thrown to the caller, the {@link SemanticJavaException} is unwrapped
+     * and {@link #executeBodyFromBCI} throws the unwrapped exception. Other throwables that reach
+     * this loop are treated as interpreter implementation bugs unless they are VM errors that can
+     * be thrown by normal Java execution, such as {@link OutOfMemoryError} or
+     * {@link StackOverflowError}.
+     */
     public static final class Root {
-        @NeverInline("needed far stack walking")
+        @NeverInline("needed for stack walking")
         private static Object executeBodyFromBCI(InterpreterFrame frame, InterpreterResolvedJavaMethod method, int startBCI, int startTop,
                         boolean forceStayInInterpreter) {
             final MethodProfile methodProfile = RistrettoProfileSupport.profileMethodEntry(method);
@@ -1072,9 +1155,25 @@ public final class Interpreter {
                         // @formatter:off
                         // Bytecodes order is shuffled.
                         case GETSTATIC : // fall through
-                        case GETFIELD  : top += getField(frame, top, resolveField(method, curOpcode, BytecodeStream.readCPI2(code, curBCI)), curOpcode); break;
+                        case GETFIELD  : top += getField(frame, top, resolveField(method, curOpcode, code, curBCI), curOpcode); break;
                         case PUTSTATIC : // fall through
-                        case PUTFIELD  : top += putField(frame, top, resolveField(method, curOpcode, BytecodeStream.readCPI2(code, curBCI)), curOpcode); break;
+                        case PUTFIELD  : top += putField(frame, top, resolveField(method, curOpcode, code, curBCI), curOpcode); break;
+                        case QUICK_GETSTATIC: {
+                            top += getField(frame, top, resolveQuickenedField(method, GETSTATIC, BytecodeStream.readCPI2(code, curBCI)), GETSTATIC);
+                            break;
+                        }
+                        case QUICK_GETFIELD: {
+                            top += getField(frame, top, resolveQuickenedField(method, GETFIELD, BytecodeStream.readCPI2(code, curBCI)), GETFIELD);
+                            break;
+                        }
+                        case QUICK_PUTSTATIC: {
+                            top += putField(frame, top, resolveQuickenedField(method, PUTSTATIC, BytecodeStream.readCPI2(code, curBCI)), PUTSTATIC);
+                            break;
+                        }
+                        case QUICK_PUTFIELD: {
+                            top += putField(frame, top, resolveQuickenedField(method, PUTFIELD, BytecodeStream.readCPI2(code, curBCI)), PUTFIELD);
+                            break;
+                        }
 
                         case INVOKEVIRTUAL   : // fall through
                         case INVOKESPECIAL   : // fall through
@@ -1499,21 +1598,11 @@ public final class Interpreter {
                     } catch (Throwable e) {
                         throw SemanticJavaException.raise(e);
                     }
-                    BytecodeStream.patchIndyExtraCPI(code, curBCI, extraCPI);
+                    method.patchInvokeDynamicExtraCPI(curBCI, extraCPI);
                     assert BytecodeStream.readIndyExtraCPIVolatile(code, curBCI) == extraCPI;
                     assert BytecodeStream.readCPI2(code, curBCI) == indyCPI;
                 }
-                CallSiteLink link = invokeDynamicConstant.getCallSiteLink(extraCPI);
-                while (!link.matchesCallSite(method, curBCI)) {
-                    /*
-                     * since the extra cpi read and write is not atomic, we might have read only 1
-                     * of the non-zero bytes. That is guaranteed to be <= the real extra CPI so it's
-                     * still safe to use in `getCallSiteLink`. `matchesCallSite` ensures we have the
-                     * full extraCPI.
-                     */
-                    extraCPI = BytecodeStream.readIndyExtraCPIVolatile(code, curBCI);
-                    link = invokeDynamicConstant.getCallSiteLink(extraCPI);
-                }
+                CallSiteLink link = invokeDynamicConstant.getCallSiteLink(method, code, curBCI, extraCPI);
                 if (link instanceof SuccessfulCallSiteLink successfulCallSiteLink) {
                     appendix = successfulCallSiteLink.getUnboxedAppendix();
                     seedMethod = successfulCallSiteLink.getInvoker();
@@ -1538,7 +1627,7 @@ public final class Interpreter {
             } else {
                 throw VMError.shouldNotReachHere("Unexpected INVOKEDYNAMIC constant: " + indyEntry);
             }
-            EspressoFrame.putObject(callerFrame, top, appendix);
+            InterpreterFrameUtil.putObject(callerFrame, top, appendix);
             invokeTop = top + 1;
             callKind = CallKind.DIRECT;
         } else {
@@ -1547,9 +1636,8 @@ public final class Interpreter {
             InterpreterResolvedJavaType symbolicHolder = Interpreter.resolveSymbolicHolder(method, opcode, cpi);
             if (symbolicHolder == null) {
                 if (InterpreterTraceSupport.getValue()) {
-                    traceInterpreter()
-                                    .string("Failed to resolve symbolic holder during call site resolution for seed ").string(symbolicResolution.toString()).string(" in caller method ")
-                                    .string(method.toString()).newline();
+                    traceInterpreter().string("Failed to resolve symbolic holder during call site resolution for seed ").string(symbolicResolution.toString()).string(" in caller method ").string(
+                                    method.toString()).newline();
                 }
                 // If unresolvable, provide symbolic resolution's holder as best-effort.
                 symbolicHolder = symbolicResolution.getDeclaringClass();
@@ -1570,15 +1658,14 @@ public final class Interpreter {
             if (seedMethod instanceof InterpreterResolvedInvokeGenericJavaMethod invokeGenericJavaMethod) {
                 Object appendix = invokeGenericJavaMethod.getAppendix();
                 if (appendix != null) {
-                    EspressoFrame.putObject(callerFrame, top, appendix);
+                    InterpreterFrameUtil.putObject(callerFrame, top, appendix);
                     invokeTop = top + 1;
                 }
                 seedMethod = invokeGenericJavaMethod.getInvoker();
                 callKind = CallKind.DIRECT;
             }
             if (InterpreterTraceSupport.getValue()) {
-                traceInterpreter().string("Linking for call site of ").string(Bytecodes.nameOf(opcode)).string(" with resolved cp entry ").string(symbolicResolution.toString()).string(":")
-                                .newline();
+                traceInterpreter().string("Linking for call site of ").string(Bytecodes.nameOf(opcode)).string(" with resolved cp entry ").string(symbolicResolution.toString()).string(":").newline();
                 traceInterpreter().string("  ").string(callKind.toString()).string(": ").string(seedMethod.toString()).newline();
             }
 
@@ -1590,7 +1677,7 @@ public final class Interpreter {
         // The stack effect is wrt. the original top-of-the-stack.
         int retStackEffect = resultAt - top;
 
-        Object[] calleeArgs = EspressoFrame.popArguments(callerFrame, invokeTop, hasReceiver, seedSignature);
+        Object[] calleeArgs = InterpreterFrameUtil.popArguments(callerFrame, invokeTop, hasReceiver, seedSignature);
         if (!seedMethod.isStatic()) {
             final Object receiver = calleeArgs[0];
             profileType(methodProfile, curBCI, receiver);
@@ -1599,7 +1686,7 @@ public final class Interpreter {
 
         Object retObj = InterpreterToVM.dispatchInvocation(seedMethod, calleeArgs, callKind, forceStayInInterpreter, preferStayInInterpreter, false);
 
-        retStackEffect += EspressoFrame.putKind(callerFrame, resultAt, retObj, seedSignature.getReturnKind());
+        retStackEffect += InterpreterFrameUtil.putKind(callerFrame, resultAt, retObj, seedSignature.getReturnKind());
 
         /* instructions have fixed stack effect encoded */
         return retStackEffect - Bytecodes.stackEffectOf(opcode);
@@ -1716,8 +1803,9 @@ public final class Interpreter {
         }
     }
 
-    private static InterpreterResolvedJavaField resolveField(InterpreterResolvedJavaMethod method, int opcode, char cpi) {
+    private static InterpreterResolvedJavaField resolveField(InterpreterResolvedJavaMethod method, int opcode, byte[] code, int bci) {
         assert opcode == GETFIELD || opcode == GETSTATIC || opcode == PUTFIELD || opcode == PUTSTATIC : Bytecodes.nameOf(opcode);
+        char cpi = BytecodeStream.readCPI2(code, bci);
         if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, cpi == 0)) {
             throw noSuchFieldError(opcode, null);
         }
@@ -1725,6 +1813,7 @@ public final class Interpreter {
             InterpreterResolvedJavaField field = getConstantPool(method).resolvedFieldAt(method.getDeclaringClass(), cpi);
             // Apply the opcode-specific field rules after symbolic resolution.
             CremaLinkResolver.checkFieldAccessOrThrow(CremaRuntimeAccess.getInstance(), field, opcode, method.getDeclaringClass(), method);
+            quickenFieldAccess(code, bci, opcode);
             return field;
         } catch (UnsupportedResolutionException e) {
             // CP does not support resolution, try to provide a hint of the non-resolvable entry.
@@ -1736,6 +1825,22 @@ public final class Interpreter {
         } catch (Throwable t) {
             throw SemanticJavaException.raise(t);
         }
+    }
+
+    private static InterpreterResolvedJavaField resolveQuickenedField(InterpreterResolvedJavaMethod method, int opcode, char cpi) {
+        assert opcode == GETFIELD || opcode == GETSTATIC || opcode == PUTFIELD || opcode == PUTSTATIC : Bytecodes.nameOf(opcode);
+        assert cpi != 0 : "Quickened field access requires a resolved constant pool index";
+        try {
+            // The first execution cached the resolved field after applying opcode-specific access checks.
+            return (InterpreterResolvedJavaField) getConstantPool(method).peekCachedEntry(cpi);
+        } catch (Throwable t) {
+            throw VMError.shouldNotReachHere("Quickened field access must use an already resolved field entry", t);
+        }
+    }
+
+    private static void quickenFieldAccess(byte[] code, int bci, int opcode) {
+        // Patch only the opcode: the CPI operand and BCI layout stay identical.
+        BytecodeStream.patchOpcodeOpaque(code, bci, Bytecodes.quickenedFieldAccess(opcode));
     }
 
     // endregion Class/Field/Method resolution

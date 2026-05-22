@@ -55,6 +55,8 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.hosted.RuntimeJNIAccess;
 
+import com.oracle.truffle.polyglot.isolate.PolyglotIsolateAccessor.PolyglotIsolateSupportImpl;
+
 /**
  * A feature enabling the host part of the Truffle isolate support. The Truffle isolate support
  * consists of the host and guest part. The host part contains polyglot API entry points and support
@@ -80,6 +82,9 @@ final class PolyglotIsolateHostFeature implements Feature {
 
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
+        if (!PolyglotIsolateSupportImpl.isIsolateSupported()) {
+            return false;
+        }
         // Do not enable polyglot isolate in web-image
         return Platform.includedIn(Platform.LINUX.class) || Platform.includedIn(Platform.DARWIN.class) || Platform.includedIn(Platform.WINDOWS.class);
     }

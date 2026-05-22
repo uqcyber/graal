@@ -168,6 +168,7 @@ public final class ClassfileParser {
     public static final char JAVA_MAX_SUPPORTED_MINOR_VERSION = 0;
     public static final char JAVA_PREVIEW_MINOR_VERSION = 65535;
 
+    /// Used to verify the `this_class` constant pool entry and for error messages.
     private final Symbol<Type> requestedClassType;
 
     private final ParsingContext parsingContext;
@@ -322,6 +323,10 @@ public final class ClassfileParser {
         throw unsupportedClassVersionError("Unsupported major.minor version " + major + "." + minor);
     }
 
+    private String classNameForError() {
+        return requestedClassType == null ? "<Unknown>" : requestedClassType.toString();
+    }
+
     /**
      * Hotspot comment (17): A legal major_version.minor_version must be one of the following:
      *
@@ -331,17 +336,30 @@ public final class ClassfileParser {
      * <li>Major_version = JVM_CLASSFILE_MAJOR_VERSION and minor_version = 65535 and
      * --enable-preview is present.
      */
-    private static void versionCheck12OrLater(int maxMajor, int major, int minor, boolean previewEnabled) {
-        if (major >= JAVA_12_VERSION && major <= maxMajor && minor == 0) {
+    private void versionCheck12OrLater(int maxMajor, int major, int minor, boolean previewEnabled) {
+        if (major < JAVA_MIN_SUPPORTED_VERSION) {
+            throw unsupportedClassVersionError(classNameForError() + " (class file version " + major + "." + minor + ") was compiled with an invalid major version");
+        }
+        if (major > maxMajor) {
+            throw unsupportedClassVersionError(classNameForError() + " has been compiled by a more recent version of the Java Runtime " +
+                            "(class file version " + major + "." + minor + "), " +
+                            "this version of the Java Runtime only recognizes class file versions up to " + maxMajor + ".0");
+        }
+        if (major < JAVA_12_VERSION || minor == 0) {
             return;
         }
-        if (major >= JAVA_MIN_SUPPORTED_VERSION && major < JAVA_12_VERSION) {
+        if (minor == JAVA_PREVIEW_MINOR_VERSION) {
+            if (major != maxMajor) {
+                throw unsupportedClassVersionError(classNameForError() + " (class file version " + major + "." + minor + ") was compiled with preview features that are unsupported. " +
+                                "This version of the Java Runtime only recognizes preview features for class file version " + maxMajor + "." + JAVA_PREVIEW_MINOR_VERSION);
+            }
+            if (!previewEnabled) {
+                throw unsupportedClassVersionError(
+                                "Preview features are not enabled for " + classNameForError() + " (class file version " + major + "." + minor + "). Try running with '--enable-preview'");
+            }
             return;
         }
-        if (major == maxMajor && minor == JAVA_PREVIEW_MINOR_VERSION && previewEnabled) {
-            return;
-        }
-        throw unsupportedClassVersionError("Unsupported major.minor version " + major + "." + minor);
+        throw unsupportedClassVersionError(classNameForError() + " (class file version " + major + "." + minor + ") was compiled with an invalid non-zero minor version");
     }
 
     private static ParserException unsupportedClassVersionError(String message) {

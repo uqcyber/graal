@@ -1,7 +1,7 @@
 # Web Image
 
 Web Image is an experimental backend for Native Image that produces a
-WebAssembly module from Java code.
+WebAssembly module from JVM bytecode.
 
 ## Prerequisites
 

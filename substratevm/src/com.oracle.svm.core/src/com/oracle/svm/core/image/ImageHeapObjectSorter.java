@@ -33,8 +33,8 @@ import java.util.List;
  * Sorter of {@link ImageHeapObject} instances after they have been assigned to heap partitions,
  * influencing the layout of the resulting image heap.
  * <p>
- * The {@link #sort(List)} method is invoked once for each partition, after all objects have been
- * assigned to that partition.
+ * The {@link #sort(ImageHeapPartition, List)} method is invoked once for each partition, after all
+ * objects have been assigned to that partition.
  * <p>
  * The ordering of objects is subject to the following constraints:
  * <ul>
@@ -67,22 +67,34 @@ public abstract class ImageHeapObjectSorter {
     }
 
     /**
+     * Hook invoked once before the first partition is sorted.
+     */
+    public void beforeImageHeapTraversal() {
+    }
+
+    /**
      * Sorts the provided list of {@link ImageHeapObject}s using the specified {@link Comparator} to
      * define the primary ordering of the elements. Any further tie-breaking or secondary sorting
      * within groups defined by the primary comparator should be handled by the implementation of
-     * {@link #doSort(List, Comparator)}.
+     * {@link #doSort(ImageHeapPartition, List, Comparator)}.
      */
-    public final void sort(List<ImageHeapObject> objects, Comparator<ImageHeapObject> primaryComparator) {
-        doSort(objects, primaryComparator);
+    public final void sort(ImageHeapPartition partition, List<ImageHeapObject> objects, Comparator<ImageHeapObject> primaryComparator) {
+        doSort(partition, objects, primaryComparator);
         assert isValidOrder(objects) : INVALID_ORDER_MESSAGE;
     }
 
-    public final void sort(List<ImageHeapObject> objects) {
-        doSort(objects, NO_OP_COMPARATOR);
+    public final void sort(ImageHeapPartition partition, List<ImageHeapObject> objects) {
+        doSort(partition, objects, NO_OP_COMPARATOR);
         assert isValidOrder(objects) : INVALID_ORDER_MESSAGE;
     }
 
-    protected abstract void doSort(List<ImageHeapObject> objects, Comparator<ImageHeapObject> primaryComparator);
+    protected abstract void doSort(ImageHeapPartition partition, List<ImageHeapObject> objects, Comparator<ImageHeapObject> primaryComparator);
+
+    /**
+     * Hook invoked once after heap layout and object sorting complete.
+     */
+    public void afterHeapLayout() {
+    }
 
     protected int compareGroup(ImageHeapObject a, ImageHeapObject b) {
         boolean aIsDynamicHub = a.getObjectClass() == Class.class;

@@ -1534,7 +1534,7 @@ public class SnippetTemplate {
                     Loop loop = providers.getLoopsDataProvider().getLoopsData(snippetCopy).loop(loopBegin);
                     Mark mark = snippetCopy.getMark();
                     try {
-                        LoopTransformations.fullUnroll(loop, providers, canonicalizer);
+                        LoopTransformations.fullUnroll(loop, providers, canonicalizer, false);
                     } catch (RetryableBailoutException e) {
                         // This is a hard error in this context
                         throw new GraalError(e, snippetCopy.toString());

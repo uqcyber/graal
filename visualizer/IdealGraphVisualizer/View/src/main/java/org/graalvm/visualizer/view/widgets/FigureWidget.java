@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -152,14 +152,11 @@ public final class FigureWidget extends Widget implements Properties.Provider, P
 
         Color borderColor = Color.BLACK;
         Color innerBorderColor = getFigure().getColor();
-        Color[] ret = new Color[]{innerBorderColor};
-        figure.getDiagram().render(() -> {
-            if (state.isHighlighted()) {
-                ret[0] = Color.BLUE;
-            }
-        });
-        if (ret[0] != innerBorderColor) {
-            innerBorderColor = borderColor = ret[0];
+        if (state.isSelected()) {
+            innerBorderColor = borderColor;
+        }
+        if (state.isHighlighted()) {
+            innerBorderColor = borderColor = Color.BLUE;
         }
 
         middleWidget.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(borderColor, 1), BorderFactory.createLineBorder(innerBorderColor, 1)));

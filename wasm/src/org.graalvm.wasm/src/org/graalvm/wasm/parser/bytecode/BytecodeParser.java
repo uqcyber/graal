@@ -57,7 +57,6 @@ import org.graalvm.wasm.WasmInstance;
 import org.graalvm.wasm.WasmModule;
 import org.graalvm.wasm.WasmStore;
 import org.graalvm.wasm.WasmType;
-import org.graalvm.wasm.collection.IntArrayList;
 import org.graalvm.wasm.constants.Bytecode;
 import org.graalvm.wasm.constants.BytecodeBitEncoding;
 import org.graalvm.wasm.constants.SegmentMode;
@@ -433,22 +432,23 @@ public abstract class BytecodeParser {
         }
         final int[] locals;
         if ((flags & BytecodeBitEncoding.CODE_ENTRY_LOCALS_FLAG) != 0) {
-            IntArrayList localsList = new IntArrayList();
-            for (; bytecode[effectiveOffset] != 0; effectiveOffset += 4) {
-                localsList.add(BinaryStreamParser.peek4(bytecode, effectiveOffset));
+            final int localCount = BinaryStreamParser.rawPeekI32(bytecode, effectiveOffset);
+            effectiveOffset += 4;
+            locals = new int[localCount];
+            for (int i = 0; i < localCount; i++, effectiveOffset += 4) {
+                locals[i] = BinaryStreamParser.peek4(bytecode, effectiveOffset);
             }
-            effectiveOffset++;
-            locals = localsList.toArray();
         } else {
             locals = WasmType.VOID_TYPE_ARRAY;
         }
         final int[] results;
         if ((flags & BytecodeBitEncoding.CODE_ENTRY_RESULT_FLAG) != 0) {
-            IntArrayList resultsList = new IntArrayList();
-            for (; bytecode[effectiveOffset] != 0; effectiveOffset += 4) {
-                resultsList.add(BinaryStreamParser.peek4(bytecode, effectiveOffset));
+            final int resultCount = BinaryStreamParser.rawPeekI32(bytecode, effectiveOffset);
+            effectiveOffset += 4;
+            results = new int[resultCount];
+            for (int i = 0; i < resultCount; i++, effectiveOffset += 4) {
+                results[i] = BinaryStreamParser.peek4(bytecode, effectiveOffset);
             }
-            results = resultsList.toArray();
         } else {
             results = WasmType.VOID_TYPE_ARRAY;
         }
@@ -460,18 +460,30 @@ public abstract class BytecodeParser {
             endOffset = exceptionTableOffset;
         }
         final int startOffset = endOffset - length;
-        List<CallNode> callNodes = readCallNodes(bytecode, startOffset, endOffset);
+        CodeEntryMetadata metadata = readCodeEntryMetadata(bytecode, startOffset, endOffset);
         boolean usesMemoryZero = module.memoryCount() != 0;
-        return new CodeEntry(functionIndex, maxStackSize, locals, results, callNodes, startOffset, endOffset, usesMemoryZero, exceptionTableOffset);
+        return new CodeEntry(functionIndex, maxStackSize, metadata.maxLegacyCatchDepth, locals, results, metadata.callNodes, startOffset, endOffset, usesMemoryZero,
+                        exceptionTableOffset);
     }
 
     /**
      * Rereads the code section entries for all functions based on the bytecode of the module and
      * adds the resulting call nodes to the entries.
      */
-    private static List<CallNode> readCallNodes(byte[] bytecode, int startOffset, int endOffset) {
+    private static final class CodeEntryMetadata {
+        private final List<CallNode> callNodes;
+        private final int maxLegacyCatchDepth;
+
+        private CodeEntryMetadata(List<CallNode> callNodes, int maxLegacyCatchDepth) {
+            this.callNodes = callNodes;
+            this.maxLegacyCatchDepth = maxLegacyCatchDepth;
+        }
+    }
+
+    private static CodeEntryMetadata readCodeEntryMetadata(byte[] bytecode, int startOffset, int endOffset) {
         int offset = startOffset;
         ArrayList<CallNode> callNodes = new ArrayList<>();
+        int maxLegacyCatchDepth = 0;
         while (offset < endOffset) {
             int opcode = BinaryStreamParser.rawPeekU8(bytecode, offset);
             final int originalOffset = offset;
@@ -658,7 +670,6 @@ public abstract class BytecodeParser {
                     offset += opcode;
                     break;
                 case Bytecode.LABEL_U8:
-                case Bytecode.BR_U8:
                 case Bytecode.LOCAL_GET_U8:
                 case Bytecode.LOCAL_GET_OBJ_U8:
                 case Bytecode.LOCAL_SET_U8:
@@ -695,6 +706,10 @@ public abstract class BytecodeParser {
                     offset++;
                     break;
                 }
+                case Bytecode.BR_U8: {
+                    offset += 1;
+                    break;
+                }
                 case Bytecode.LABEL_U16:
                     offset += 2;
                     break;
@@ -704,7 +719,6 @@ public abstract class BytecodeParser {
                 }
                 case Bytecode.MEMORY_SIZE:
                 case Bytecode.MEMORY_GROW:
-                case Bytecode.BR_I32:
                 case Bytecode.LOCAL_GET_I32:
                 case Bytecode.LOCAL_GET_OBJ_I32:
                 case Bytecode.LOCAL_SET_I32:
@@ -742,7 +756,14 @@ public abstract class BytecodeParser {
                     offset += 4;
                     break;
                 }
-                case Bytecode.IF:
+                case Bytecode.BR_I32: {
+                    offset += 4;
+                    break;
+                }
+                case Bytecode.IF: {
+                    offset += 6;
+                    break;
+                }
                 case Bytecode.BR_IF_I32: {
                     offset += 6;
                     break;
@@ -868,7 +889,34 @@ public abstract class BytecodeParser {
                         case Bytecode.I64_TRUNC_SAT_F64_S:
                         case Bytecode.I64_TRUNC_SAT_F64_U:
                         case Bytecode.THROW_REF:
-                        case Bytecode.REF_EQ: {
+                        case Bytecode.REF_EQ:
+                        case Bytecode.LEGACY_CATCH_DROP: {
+                            break;
+                        }
+                        case Bytecode.LEGACY_CATCH_UNWIND: {
+                            maxLegacyCatchDepth = Math.max(maxLegacyCatchDepth, rawPeekI32(bytecode, offset));
+                            offset += 4;
+                            break;
+                        }
+                        case Bytecode.RETHROW: {
+                            offset += 4;
+                            break;
+                        }
+                        case Bytecode.LEGACY_SKIP_LABEL_U8: {
+                            // Legacy skip labels embed the label-local unwind helper, so the
+                            // reread path has to recover the reserved legacy catch depth here.
+                            maxLegacyCatchDepth = Math.max(maxLegacyCatchDepth, rawPeekI32(bytecode, offset + 4));
+                            offset += 8;
+                            break;
+                        }
+                        case Bytecode.LEGACY_SKIP_LABEL_U16: {
+                            maxLegacyCatchDepth = Math.max(maxLegacyCatchDepth, rawPeekI32(bytecode, offset + 5));
+                            offset += 9;
+                            break;
+                        }
+                        case Bytecode.LEGACY_SKIP_LABEL_I32: {
+                            maxLegacyCatchDepth = Math.max(maxLegacyCatchDepth, rawPeekI32(bytecode, offset + 12));
+                            offset += 16;
                             break;
                         }
                         case Bytecode.BR_ON_NULL_U8:
@@ -1295,6 +1343,6 @@ public abstract class BytecodeParser {
                     throw CompilerDirectives.shouldNotReachHere();
             }
         }
-        return callNodes;
+        return new CodeEntryMetadata(callNodes, maxLegacyCatchDepth);
     }
 }

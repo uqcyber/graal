@@ -79,16 +79,17 @@ final class ModuleLayerSubstitutionsSupport {
     /// This is used when runtime boot-layer augmentation must preserve the original
     /// [ModuleLayer#boot] identity while replacing the underlying configuration, name-to-module
     /// map, and their lazy caches.
-    static void patchBootLayer(Configuration configuration, Map<String, Module> augmentedNameToModule, Set<Module> newModules) {
+    static void patchBootLayer(Configuration configuration, Map<String, Module> augmentedNameToModule) {
         Target_java_lang_ModuleLayer target = SubstrateUtil.cast(ModuleLayer.boot(), Target_java_lang_ModuleLayer.class);
         target.cf = configuration;
         target.nameToModule = augmentedNameToModule;
         target.modules = null;
-        if (target.servicesCatalog != null) {
-            for (Module module : newModules) {
-                target.servicesCatalog.register(module);
-            }
-        }
+        /*
+         * Rebuild the layer catalog lazily from the augmented module map so service binding sees
+         * runtime-added provider modules even if the boot-layer catalog was initialized before the
+         * augmentation ran.
+         */
+        target.servicesCatalog = null;
     }
 }
 

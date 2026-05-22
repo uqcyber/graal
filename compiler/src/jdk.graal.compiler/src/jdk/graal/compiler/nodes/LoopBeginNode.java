@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -45,10 +45,13 @@ import jdk.graal.compiler.nodeinfo.InputType;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodes.calc.AddNode;
 import jdk.graal.compiler.nodes.extended.GuardingNode;
+import jdk.graal.compiler.nodes.loop.Loop;
+import jdk.graal.compiler.nodes.loop.LoopsData;
 import jdk.graal.compiler.nodes.spi.LIRLowerable;
 import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 import jdk.graal.compiler.nodes.spi.SimplifierTool;
 import jdk.graal.compiler.nodes.util.GraphUtil;
+import jdk.graal.compiler.phases.common.util.LoopUtility;
 import jdk.graal.compiler.serviceprovider.SpeculationReasonGroup;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.SpeculationLog;
@@ -66,6 +69,7 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
     protected boolean compilerInverted;
     protected LoopType loopType;
     protected int unrollFactor;
+    protected int countedDescendantCloneFactor;
     protected boolean osrLoop;
     protected boolean mayEmitThreadedCode = false;
     protected boolean nonCountedStripMinedOuter;
@@ -216,6 +220,7 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
         guestLoopEndsSafepointState = SafepointState.ENABLED;
         loopType = LoopType.SIMPLE_LOOP;
         unrollFactor = 1;
+        countedDescendantCloneFactor = 1;
     }
 
     @SuppressWarnings("deprecation")
@@ -377,6 +382,26 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
 
     public void setUnrollFactor(int currentUnrollFactor) {
         unrollFactor = currentUnrollFactor;
+    }
+
+    /**
+     * Returns the number of copies of this counted loop that were already created by full or
+     * partial unrolling of ancestor loops.
+     *
+     * @see LoopUtility#updateDescendantLoopCloneFactors(LoopsData, Loop, int)
+     */
+    public int getCountedDescendantCloneFactor() {
+        return countedDescendantCloneFactor;
+    }
+
+    /**
+     * Records the ancestor-created copy count used by full-unroll policy when estimating the cost
+     * of unrolling this counted loop again.
+     *
+     * @see #getCountedDescendantCloneFactor()
+     */
+    public void setCountedDescendantCloneFactor(int countedDescendantCloneFactor) {
+        this.countedDescendantCloneFactor = countedDescendantCloneFactor;
     }
 
     public void setLoopEndSafepoint(SafepointState newState) {

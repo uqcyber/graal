@@ -35,7 +35,9 @@ import org.graalvm.nativeimage.Platforms;
 
 /**
  * Documents that the element is based on a JDK source path. This is mainly useful for non-Java
- * sources like C++ files. For Java classes, {@link BasedOnJDKClass} might be more appropriate.
+ * sources like C++ files. For Java classes, {@link BasedOnJDKClass} is more appropriate. One
+ * exception to this is a class whose source is generated during the JDK build. In that case,
+ * {@code BasedOnJDKFile} can point to the generator.
  */
 @Repeatable(BasedOnJDKFile.List.class)
 @Retention(RetentionPolicy.RUNTIME)

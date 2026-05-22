@@ -46,7 +46,6 @@ public final class CGlobalDataLoadPolicy {
     }
 
     public void markForAccessViaImageHeap(Set<? extends SharedMethod> methods) {
-        assert Platform.includedIn(Platform.AMD64.class) : "Indirect CGlobalData access via image heap is not currently supported on non-AMD64 platforms";
         accessViaImageHeap.addAll(methods);
     }
 

@@ -66,6 +66,7 @@ public final class EspressoMethodTableBuilder {
                             new PartialKlass(thisKlass, thisKlass.getSuperKlass(), transitiveInterfaces, declaredMethods),
                             false,
                             allowInterfaceResolutionToPrivate,
+                            true,
                             true);
             return new EspressoTables(
                             vtable(tables),
@@ -301,13 +302,21 @@ public final class EspressoMethodTableBuilder {
         }
 
         @Override
-        public PartialMethod<Klass, Method, Field> lookupOverrideWithPrivate(Symbol<Name> name, Symbol<Signature> signature) {
+        public PartialMethod<Klass, Method, Field> fallbackLookup(Symbol<Name> name, Symbol<Signature> signature, boolean includePrivate) {
             for (PartialMethod<Klass, Method, Field> m : declaredMethods) {
-                if (!m.isStatic() && m.getSymbolicName() == name && m.getSymbolicSignature() == signature) {
+                if ((!m.isPrivate() || includePrivate) && !m.isStatic() && m.getSymbolicName() == name && m.getSymbolicSignature() == signature) {
                     return m;
                 }
             }
-            return superKlass.lookupInstanceMethod(name, signature);
+            ObjectKlass current = superKlass;
+            while (current != null) {
+                Method m = current.lookupDeclaredMethod(name, signature);
+                if (m != null && !m.isStatic() && (!m.isPrivate() || includePrivate)) {
+                    return m;
+                }
+                current = current.getSuperKlass();
+            }
+            return null;
         }
     }
 

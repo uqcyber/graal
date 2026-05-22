@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -111,6 +111,14 @@ public final class MembarNode extends FixedWithNextNode implements LIRLowerable,
          */
         public boolean isInit() {
             return this == ALLOCATION_INIT;
+        }
+
+        /**
+         * Returns whether this fence emits all generated memory barrier bits required by
+         * {@code other}.
+         */
+        public boolean isAtLeastAsStrongAs(FenceKind other) {
+            return (barriers & other.barriers) == other.barriers;
         }
 
         FenceKind(int barriers) {

@@ -49,6 +49,15 @@ import jdk.vm.ci.meta.PrimitiveConstant;
 public class ConstantPreBlindingPhase extends BasePhase<LowTierContext> {
 
     @Override
+    public boolean shouldApply(StructuredGraph graph) {
+        /*
+         * Keep this in lockstep with ConstantBlindingPhase: cached runtime suites may contain the
+         * phase even when blinding is disabled for this graph.
+         */
+        return ConstantBlindingPhase.Options.BlindConstants.getValue(graph.getOptions());
+    }
+
+    @Override
     public Optional<NotApplicable> notApplicableTo(GraphState graphState) {
         return NotApplicable.unlessRunBefore(this, StageFlag.LOW_TIER_LOWERING, graphState);
     }

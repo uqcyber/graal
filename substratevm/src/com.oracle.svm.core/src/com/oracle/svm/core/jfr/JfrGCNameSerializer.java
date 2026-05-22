@@ -27,12 +27,15 @@ package com.oracle.svm.core.jfr;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.heap.RestrictHeapAccess;
+
 public class JfrGCNameSerializer implements JfrSerializer {
     @Platforms(Platform.HOSTED_ONLY.class)
     public JfrGCNameSerializer() {
     }
 
     @Override
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Used on OOME for emergency dumps")
     public void write(JfrChunkWriter writer) {
         JfrGCName[] gcNames = JfrGCNames.singleton().getNames();
         writer.writeCompressedLong(JfrType.GCName.getId());

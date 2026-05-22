@@ -82,7 +82,7 @@ public class WasmGCPartition implements ImageHeapPartition {
     }
 
     public void sortObjects(ImageHeapObjectSorter sorter) {
-        sorter.sort(objects);
+        sorter.sort(this, objects);
     }
 
     public List<ImageHeapObject> getObjects() {

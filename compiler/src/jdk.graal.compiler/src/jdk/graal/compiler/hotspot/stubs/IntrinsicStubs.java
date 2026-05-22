@@ -39,7 +39,9 @@ import jdk.graal.compiler.replacements.nodes.ArrayRegionEqualsWithMaskNode;
 import jdk.graal.compiler.replacements.nodes.Base64DecodeBlockNode;
 import jdk.graal.compiler.replacements.nodes.Base64EncodeBlockNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMulAddNode;
+import jdk.graal.compiler.replacements.nodes.BigIntegerLeftShiftWorkerNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerMultiplyToLenNode;
+import jdk.graal.compiler.replacements.nodes.BigIntegerRightShiftWorkerNode;
 import jdk.graal.compiler.replacements.nodes.BigIntegerSquareToLenNode;
 import jdk.graal.compiler.replacements.nodes.CalcStringAttributesNode;
 import jdk.graal.compiler.replacements.nodes.CipherBlockChainingAESNode;
@@ -75,6 +77,8 @@ import jdk.graal.compiler.replacements.nodes.VectorizedMismatchNode;
                 BigIntegerMulAddNode.class,
                 BigIntegerMultiplyToLenNode.class,
                 BigIntegerSquareToLenNode.class,
+                BigIntegerLeftShiftWorkerNode.class,
+                BigIntegerRightShiftWorkerNode.class,
                 CalcStringAttributesNode.class,
                 CipherBlockChainingAESNode.class,
                 CounterModeAESNode.class,

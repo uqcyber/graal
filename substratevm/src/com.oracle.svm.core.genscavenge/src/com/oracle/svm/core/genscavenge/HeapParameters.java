@@ -76,7 +76,13 @@ public final class HeapParameters {
 
     @Fold
     public static int getMaxSurvivorSpaces() {
-        return SerialGCOptions.MaxSurvivorSpaces.getValue();
+        if (SubstrateOptions.useEpsilonGC() || !SerialGCOptions.useRememberedSet()) {
+            return 0;
+        }
+
+        Integer value = SerialGCOptions.ConcealedOptions.MaxSurvivorSpaces.getValue();
+        UserError.guarantee(value == null || value >= 0, "%s value must be greater than or equal to 0", SerialGCOptions.ConcealedOptions.MaxSurvivorSpaces.getName());
+        return (value != null) ? value : AbstractCollectionPolicy.MAX_TENURING_THRESHOLD;
     }
 
     /*

@@ -176,8 +176,9 @@ final class BytecodeNodeElement extends AbstractElement {
             }
             this.add(createGetCachedLocalTagInternal());
             this.add(createSetCachedLocalTagInternal());
-            if (parent.model.hasYieldOperation()) {
+            if (parent.model.hasYieldOperation() && tier.isCached()) {
                 this.add(createCheckStableTagsAssumption());
+                this.add(createReconcileContinuationLocals());
             }
         } else {
             // generated in AbstractBytecodeNode
@@ -728,18 +729,104 @@ final class BytecodeNodeElement extends AbstractElement {
     }
 
     private CodeExecutableElement createCheckStableTagsAssumption() {
-        if (!parent.model.usesBoxingElimination() || !parent.model.hasYieldOperation()) {
+        if (!parent.model.usesBoxingElimination() || !parent.model.hasYieldOperation() || !tier.isCached()) {
             throw new AssertionError("Not supported.");
         }
 
-        CodeExecutableElement ex = GeneratorUtils.override(parent.abstractBytecodeNode.checkStableTagsAssumption);
+        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE), type(boolean.class), "checkStableTagsAssumption");
         CodeTreeBuilder b = ex.createBuilder();
 
-        if (tier.isCached()) {
-            b.startReturn().string("this.stableTagsAssumption_.isValid()").end();
-        } else {
-            b.startReturn().string("true").end();
+        b.startReturn().string("this.stableTagsAssumption_.isValid()").end();
+        return ex;
+    }
+
+    private CodeExecutableElement createReconcileContinuationLocals() {
+        if (!parent.model.usesBoxingElimination() || !parent.model.hasYieldOperation() || !tier.isCached()) {
+            throw new AssertionError("Not supported.");
         }
+
+        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE), type(void.class), "reconcileContinuationLocals");
+        BytecodeRootNodeElement.addJavadoc(ex, """
+                        A continuation frame can become stale when cached local tags change after
+                        the continuation was captured. Before resuming cached bytecode, reconcile
+                        the frame slot tags with the current cached local tags. Compatible tag
+                        mismatches are repaired in the frame; incompatible values generalize tags
+                        through the cached local tag update path.
+                        """);
+        ex.addAnnotationMirror(new CodeAnnotationMirror(types.ExplodeLoop));
+        ex.addParameter(new CodeVariableElement(type(int.class), "bci"));
+        ex.addParameter(new CodeVariableElement(types.FrameWithoutBoxing, "frame"));
+
+        CodeTreeBuilder b = ex.createBuilder();
+
+        b.startStatement().startStaticCall(types.CompilerAsserts, "partialEvaluationConstant").string("bci").end().end();
+        b.startDeclaration(type(int.class), "localCount").startCall("getLocalCount").string("bci").end(2);
+        b.startStatement().startStaticCall(types.CompilerAsserts, "partialEvaluationConstant").string("localCount").end().end();
+        b.startFor().string("int localOffset = 0; localOffset < localCount; localOffset++").end().startBlock();
+        b.declaration(type(int.class), "frameIndex", "USER_LOCALS_START_INDEX + localOffset");
+        b.startDeclaration(type(byte.class), "frameTag").startCall("FRAMES", "getTag").string("frame").string("frameIndex").end(2);
+
+        b.startIf().string("frameTag == ").staticReference(parent.frameTagsElement.getIllegal()).end().startBlock();
+        b.statement("continue");
+        b.end();
+
+        String localIndex;
+        if (parent.model.enableBlockScoping) {
+            b.declaration(type(int.class), "localIndex", "localOffsetToLocalIndex(bci, localOffset)");
+            localIndex = "localIndex";
+        } else {
+            localIndex = "localOffset";
+        }
+        b.startDeclaration(type(byte.class), "cachedTag");
+        b.startCall("getCachedLocalTagInternal");
+        b.string("this.localTags_");
+        b.string(localIndex);
+        b.end(2);
+
+        b.startIf().string("frameTag == cachedTag").end().startBlock();
+        b.statement("continue");
+        b.end();
+
+        b.startIf().string("cachedTag == ").staticReference(parent.frameTagsElement.getIllegal()).end().startBlock();
+        b.lineComment("Deopt eagerly to reduce compiled code size (setLocalValue will deopt when initializing the cached tag).");
+        b.tree(GeneratorUtils.createTransferToInterpreterAndInvalidate());
+        b.end();
+
+        b.declaration(type(Object.class), "value");
+        b.startSwitch().string("frameTag").end().startBlock();
+        for (TypeMirror boxingType : parent.model.boxingEliminatedTypes) {
+            b.startCase().staticReference(parent.frameTagsElement.get(boxingType)).end();
+            b.startCaseBlock();
+            b.startAssign("value");
+            BytecodeRootNodeElement.startGetFrame(b, "frame", boxingType, false).string("frameIndex").end();
+            b.end();
+            b.statement("break");
+            b.end();
+        }
+
+        b.startCase().staticReference(parent.frameTagsElement.getObject()).end();
+        b.startCaseBlock();
+        b.startAssign("value");
+        BytecodeRootNodeElement.startGetFrame(b, "frame", type(Object.class), false).string("frameIndex").end();
+        b.end();
+        b.statement("break");
+        b.end();
+
+        b.caseDefault().startCaseBlock();
+        b.tree(GeneratorUtils.createShouldNotReachHere("Unexpected frame tag."));
+        b.end();
+        b.end();
+
+        b.startStatement().startCall("setLocalValueImpl");
+        b.string("frame");
+        b.string("localOffset");
+        b.string("value");
+        if (parent.model.enableBlockScoping) {
+            b.string("bci");
+        }
+        b.end(2);
+        b.end();
+
         return ex;
     }
 

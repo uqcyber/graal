@@ -33,11 +33,9 @@ import java.util.Objects;
 import java.util.function.Function;
 
 import org.graalvm.nativeimage.ImageInfo;
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.impl.AnnotationExtractor;
-import org.graalvm.nativeimage.impl.ImageSingletonsSupport;
 
 import com.oracle.svm.shared.util.ModuleSupport;
 
@@ -54,8 +52,7 @@ import jdk.vm.ci.meta.annotation.Annotated;
 /**
  * This complements {@link org.graalvm.nativeimage.AnnotationAccess} for use by SVM internal
  * features and code. It avoids relying on JVMCI types (such as {@link ResolvedJavaType})
- * implementing {@link java.lang.reflect.AnnotatedElement}. This inheritance is planned for removal
- * (GR-69713) as part of reducing use of core reflection in Native Image.
+ * implementing {@link java.lang.reflect.AnnotatedElement}.
  */
 public final class AnnotationUtil {
 
@@ -80,15 +77,38 @@ public final class AnnotationUtil {
     @Platforms(Platform.HOSTED_ONLY.class) //
     private static Boolean instanceIsSingleton;
 
+    /**
+     * The hosted image builder creates the {@link AnnotationExtractor} before publishing it
+     * globally. Registering it here avoids transient fallback to {@link Lazy} in that startup
+     * window.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class) //
+    private static AnnotatedObjectAccess hostedAnnotationExtractor;
+
+    /*
+     * These accesses do not need synchronization: the hosted extractor is installed during the
+     * single-threaded image-builder bootstrap, and the fallback path only publishes immutable
+     * singletons while rejecting any attempt to mix the hosted and lazy variants in one VM.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static void installHostedAnnotationExtractor(AnnotatedObjectAccess extractor) {
+        Objects.requireNonNull(extractor);
+        if (instanceIsSingleton == null) {
+            instanceIsSingleton = true;
+        } else if (!instanceIsSingleton) {
+            throw new GraalError(Lazy.initLocation, "Cannot use image singleton AnnotatedObjectAccess after Lazy.instance initialized");
+        }
+        GraalError.guarantee(hostedAnnotationExtractor == null || hostedAnnotationExtractor == extractor,
+                        "Conflicting hosted AnnotatedObjectAccess instances");
+        hostedAnnotationExtractor = extractor;
+    }
+
     @Platforms(Platform.HOSTED_ONLY.class)
     private static AnnotatedObjectAccess instance() {
-        if (ImageSingletonsSupport.isInstalled() && ImageSingletons.contains(AnnotationExtractor.class)) {
-            if (instanceIsSingleton == null) {
-                instanceIsSingleton = true;
-            } else if (!instanceIsSingleton) {
-                throw new GraalError(Lazy.initLocation, "Cannot use image singleton AnnotatedObjectAccess after Lazy.instance initialized");
-            }
-            return (AnnotatedObjectAccess) ImageSingletons.lookup(AnnotationExtractor.class);
+        if (hostedAnnotationExtractor != null) {
+            GraalError.guarantee(instanceIsSingleton == null || instanceIsSingleton, "Cannot use image singleton AnnotatedObjectAccess and Lazy.instance in one process");
+            instanceIsSingleton = true;
+            return hostedAnnotationExtractor;
         }
         // Fall back to singleton when no AnnotationExtractor singleton is available (e.g.,
         // running `mx unittest com.oracle.graal.pointsto.standalone.test`).

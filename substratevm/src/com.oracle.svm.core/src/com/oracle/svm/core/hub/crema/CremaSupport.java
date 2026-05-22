@@ -40,6 +40,7 @@ import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
 import com.oracle.svm.espresso.classfile.ConstantPool;
 import com.oracle.svm.espresso.classfile.ParserKlass;
 import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
+import com.oracle.svm.espresso.classfile.descriptors.Name;
 import com.oracle.svm.espresso.classfile.descriptors.Signature;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
@@ -168,6 +169,23 @@ public interface CremaSupport {
 
     <T extends ConstantPool & jdk.vm.ci.meta.ConstantPool> T getConstantPool(DynamicHub hub);
 
-    void verifySuperAccesses(String externalName, ClassLoader loader, ByteSequence pkgName, Module module,
+    /**
+     * Verifies that a runtime-defined class can access and legally inherit from its direct
+     * supertypes.
+     *
+     * @param externalName the binary name of the runtime-defined class
+     * @param internalName the internal class-file name of the runtime-defined class
+     * @param classModifiers the parsed access flags of the runtime-defined class
+     * @param loader the defining class loader of the runtime-defined class
+     * @param pkgName the runtime package of the runtime-defined class
+     * @param module the runtime module of the runtime-defined class
+     * @param superClass the already-loaded direct superclass
+     * @param superInterfaces the already-loaded direct superinterfaces
+     * @throws IllegalAccessError if a direct supertype is not accessible to the runtime-defined
+     *             class
+     * @throws IncompatibleClassChangeError if a direct supertype cannot legally be extended or
+     *             implemented by the runtime-defined class
+     */
+    void verifySuperAccesses(String externalName, Symbol<Name> internalName, int classModifiers, ClassLoader loader, ByteSequence pkgName, Module module,
                     Class<?> superClass, Class<?>[] superInterfaces);
 }

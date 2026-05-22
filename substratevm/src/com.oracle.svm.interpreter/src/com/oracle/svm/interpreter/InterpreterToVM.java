@@ -282,20 +282,25 @@ public final class InterpreterToVM {
     }
 
     @SuppressFBWarnings(value = "IMSE_DONT_CATCH_IMSE", justification = "Intentional.")
-    public static void releaseInterpreterFrameLocks(@SuppressWarnings("unused") InterpreterFrame frame) throws SemanticJavaException {
+    public static void releaseInterpreterFrameLocks(InterpreterFrame frame, Object synchronizedMethodLock) {
         Object[] locks = frame.getLocks();
-        for (int i = 0; i < locks.length; ++i) {
+        boolean skippedSynchronizedMethodLock = synchronizedMethodLock == null;
+        for (int i = locks.length - 1; i >= 0; --i) {
             Object ref = locks[i];
             if (ref != null) {
-                try {
+                if (!skippedSynchronizedMethodLock && ref == synchronizedMethodLock) {
+                    // The synchronized method epilogue releases this lock explicitly below.
+                    locks[i] = null;
+                    skippedSynchronizedMethodLock = true;
+                } else {
                     MonitorSupport.singleton().monitorExit(ref, MonitorInflationCause.VM_INTERNAL);
                     // GR-55049: Ensure that SVM doesn't allow non-structured locking.
                     locks[i] = null;
-                } catch (IllegalMonitorStateException e) {
-                    // GR-55050: Hide intermediate frames on exception.
-                    throw SemanticJavaException.raise(e);
                 }
             }
+        }
+        if (synchronizedMethodLock != null) {
+            MonitorSupport.singleton().monitorExit(synchronizedMethodLock, MonitorInflationCause.VM_INTERNAL);
         }
     }
 
@@ -864,12 +869,13 @@ public final class InterpreterToVM {
             if (target instanceof CremaResolvedJavaMethodImpl) {
                 source = "runtime-loaded";
                 if (target.isNative()) {
+                    // GR-73665
                     reason = "Linking native methods not yet supported.";
                 }
             } else {
                 source = "AOT";
-                String dotPkg = target.getDeclaringClass().getSymbolicRuntimePackage().toString().replace('/', '.');
-                if (!DynamicHub.fromClass(target.getDeclaringClass().getJavaClass()).isPreserved()) {
+                String dotPkg = target.getDeclaringClass().getHub().getPackageName();
+                if (!target.getDeclaringClass().getHub().isPreserved()) {
                     reason = MetadataUtil.fmt("Class %s was not preserved during image build.%nConsider using '-H:Preserve=package=%s'.", target.getDeclaringClass().toClassName(), dotPkg);
                 }
                 if (target.getNativeEntryPoint().equal(InterpreterNotCompiledMethodPointerHolder.getMethodNotCompiledHandler())) {

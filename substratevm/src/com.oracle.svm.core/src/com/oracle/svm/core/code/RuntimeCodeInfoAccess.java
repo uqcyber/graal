@@ -79,6 +79,7 @@ public final class RuntimeCodeInfoAccess {
         impl.setCodeAndDataMemorySize(Word.unsigned(codeAndDataMemorySize));
         impl.setTier(tier);
         impl.setCodeObserverHandles(observerHandles);
+        impl.setCodeInfoIndexEntriesPerBlock(1);
         impl.setAllObjectsAreInImageHeap(allObjectsAreInImageHeap);
     }
 
@@ -311,6 +312,7 @@ public final class RuntimeCodeInfoAccess {
         CodeInfoImpl impl = cast(info);
         action.apply(impl.getCodeInfoIndex());
         action.apply(impl.getCodeInfoEncodings());
+        action.apply(impl.getCodeInfoDefaultFrameInfoIndexes());
         action.apply(impl.getStackReferenceMapEncoding());
         action.apply(impl.getFrameInfoEncodings());
         action.apply(impl.getDeoptimizationStartOffsets());

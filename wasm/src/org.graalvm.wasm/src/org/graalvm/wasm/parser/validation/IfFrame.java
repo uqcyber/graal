@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,9 +44,9 @@ package org.graalvm.wasm.parser.validation;
 import java.util.ArrayList;
 import java.util.BitSet;
 
-import org.graalvm.wasm.collection.IntArrayList;
 import org.graalvm.wasm.exception.Failure;
 import org.graalvm.wasm.exception.WasmException;
+import org.graalvm.wasm.parser.bytecode.BytecodeFixup;
 import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen;
 
 /**
@@ -54,16 +54,14 @@ import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen;
  */
 class IfFrame extends ControlFrame {
 
-    private final IntArrayList branchTargets;
-    private final ArrayList<ExceptionHandler> exceptionHandlers;
+    private final ArrayList<BytecodeFixup> labelFixups;
     private final ControlFrame parentFrame;
     private int falseJumpLocation;
     private boolean elseBranch;
 
     IfFrame(int[] paramTypes, int[] resultTypes, int initialStackSize, ControlFrame parentFrame, int falseJumpLocation) {
-        super(paramTypes, resultTypes, parentFrame.getSymbolTable(), initialStackSize, (BitSet) parentFrame.initializedLocals.clone());
-        this.branchTargets = new IntArrayList();
-        this.exceptionHandlers = new ArrayList<>();
+        super(paramTypes, resultTypes, parentFrame.getSymbolTable(), initialStackSize, (BitSet) parentFrame.initializedLocals.clone(), parentFrame.legacyCatchDepth());
+        this.labelFixups = new ArrayList<>();
         this.parentFrame = parentFrame;
         this.falseJumpLocation = falseJumpLocation;
         this.elseBranch = false;
@@ -74,20 +72,19 @@ class IfFrame extends ControlFrame {
         return resultTypes();
     }
 
-    @Override
     void enterElse(ParserState state, RuntimeBytecodeGen bytecode) {
         initializedLocals = (BitSet) parentFrame.initializedLocals.clone();
         final int location = bytecode.addBranchLocation(RuntimeBytecodeGen.BranchOp.BR);
         bytecode.patchLocation(falseJumpLocation, bytecode.location());
         falseJumpLocation = location;
         elseBranch = true;
-        state.checkStackAfterFrameExit(this, resultTypes());
+        state.checkStackAfterFrameExit(this);
         // Since else is a separate block the unreachable state has to be reset.
         resetUnreachable();
     }
 
     @Override
-    void exit(RuntimeBytecodeGen bytecode) {
+    void exit(ParserState state, RuntimeBytecodeGen bytecode) {
         if (!elseBranch) {
             if (resultTypes().length != paramTypes().length) {
                 throw WasmException.create(Failure.TYPE_MISMATCH, "Expected else branch. If with incompatible param and result types requires else branch.");
@@ -100,32 +97,19 @@ class IfFrame extends ControlFrame {
                 }
             }
         }
-        if (branchTargets.size() == 0 && exceptionHandlers.isEmpty()) {
+        if (labelFixups.isEmpty()) {
             bytecode.patchLocation(falseJumpLocation, bytecode.location());
         } else {
-            final int location = bytecode.addLabel(resultTypeLength(), initialStackSize(), commonResultType());
+            final int location = bytecode.addLabel(resultTypeLength(), initialStackSize(), commonResultType(), legacyCatchDepth());
             bytecode.patchLocation(falseJumpLocation, location);
-            for (int branchLocation : branchTargets.toArray()) {
-                bytecode.patchLocation(branchLocation, location);
-            }
-            for (ExceptionHandler catchEntry : exceptionHandlers) {
-                catchEntry.setTarget(location);
+            for (BytecodeFixup labelFixup : labelFixups) {
+                labelFixup.patch(location);
             }
         }
     }
 
     @Override
-    void addBranch(RuntimeBytecodeGen bytecode, RuntimeBytecodeGen.BranchOp branchOp) {
-        branchTargets.add(bytecode.addBranchLocation(branchOp));
-    }
-
-    @Override
-    void addBranchTableItem(RuntimeBytecodeGen bytecode) {
-        branchTargets.add(bytecode.addBranchTableItemLocation());
-    }
-
-    @Override
-    void addExceptionHandler(ExceptionHandler handler) {
-        exceptionHandlers.add(handler);
+    void addLabelFixup(BytecodeFixup fixup) {
+        labelFixups.add(fixup);
     }
 }

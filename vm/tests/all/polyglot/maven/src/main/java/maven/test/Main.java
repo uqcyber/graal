@@ -35,7 +35,7 @@ public class Main {
 
                         switch (id) {
                             case "python":
-                                ctx.eval("python", "import sqlite3");
+                                ctx.eval("python", "import typing");
                                 break;
                             case "js":
                                 ctx.eval("js",

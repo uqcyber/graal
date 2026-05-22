@@ -49,8 +49,8 @@ public final class MethodRefHolder {
     @Platforms(Platform.HOSTED_ONLY.class)
     public MethodRefHolder(MethodRef methodRef) {
         this.methodRef = Objects.requireNonNull(methodRef);
-        assert SubstrateOptions.useRelativeCodePointers() ? methodRef instanceof MethodOffset : methodRef instanceof MethodPointer : "MethodRefHolder's input must be of type " +
-                        (SubstrateOptions.useRelativeCodePointers() ? MethodOffset.class.getSimpleName() : MethodPointer.class.getSimpleName());
+        assert (SubstrateOptions.useRelativeCodePointers() ? methodRef instanceof MethodOffset : methodRef instanceof MethodPointer) : //
+                        "MethodRefHolder's input must be of type " + (SubstrateOptions.useRelativeCodePointers() ? MethodOffset.class.getSimpleName() : MethodPointer.class.getSimpleName());
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)

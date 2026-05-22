@@ -29,6 +29,15 @@ import com.oracle.svm.guest.staging.jdk.InternalVMMethod;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
+/**
+ * Base support for Crema reflection accessors that invoke runtime-loaded methods and constructors
+ * through the Crema interpreter.
+ * <p>
+ * The accessor keeps the Java reflection view of the member separate from the optional JVMCI
+ * method used for execution. Ordinary accessors have both, while serialization constructor
+ * accessors can validate the reflected argument types before resolving the constructor body that
+ * must run on the allocated instance.
+ */
 @InternalVMMethod
 abstract class AbstractCremaAccessor {
     static final Object[] NO_ARGS = new Object[0];
@@ -43,10 +52,24 @@ abstract class AbstractCremaAccessor {
         this.parameterTypes = parameterTypes;
     }
 
+    /**
+     * Ensures that the declaring class visible through reflection is initialized before executing
+     * the member body.
+     */
     protected void ensureDeclaringClassInitialized() {
         EnsureClassInitializedNode.ensureClassInitialized(declaringClass);
     }
 
+    /**
+     * Returns the class that declares the reflected member represented by this accessor.
+     */
+    protected Class<?> getDeclaringClass() {
+        return declaringClass;
+    }
+
+    /**
+     * Checks the receiver object before invoking an instance method through Crema.
+     */
     protected void verifyReceiver(Object receiver) {
         assert !targetMethod.isStatic();
         if (receiver == null) {
@@ -59,9 +82,12 @@ abstract class AbstractCremaAccessor {
         }
     }
 
+    /**
+     * Checks and converts invocation arguments according to the reflected member signature.
+     */
     protected void verifyArguments(Object[] args) {
         if (args.length != parameterTypes.length) {
-            String msg = "wrong number of arguments: " + args.length + " expected: " + targetMethod.getSignature().getParameterCount(false);
+            String msg = "wrong number of arguments: " + args.length + " expected: " + parameterTypes.length;
             throw new IllegalArgumentException(msg);
         }
         for (int i = 0; i < args.length; i++) {

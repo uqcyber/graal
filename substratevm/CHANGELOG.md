@@ -3,6 +3,7 @@
 This changelog summarizes major changes to GraalVM Native Image.
 
 ## GraalVM 25.1 (Internal Version 25.1.0)
+* (GR-53498) Added experimental support for Native Image layered images on AArch64.
 * (GR-73717) Added support for collecting conditional reachability metadata from a native image at run time using `-XX:TraceMetadataConditionPackages`.
 * (GR-73875) Added `--print-options` flag to `native-image` for printing available build options in table, markdown, or JSON format. Automated generation of option documentation from `@Option` annotations, eliminating manual maintenance of option tables.
 * (GR-70601) (GR-70592) (GR-70593) (GR-70598) (GR-71096): Add experimental support for just-in-time compilation of Java bytecodes loaded at run-time.
@@ -27,13 +28,17 @@ This changelog summarizes major changes to GraalVM Native Image.
 * (GR-71698) Introduced `--future-defaults=class-for-name-respects-class-loader` that changes 'Class.forName' and 'ClassLoader#loadClass' to respect the class loader arguments. 
 * (GR-72689) The context class loader seen during build-time context initialization is now part of the native image module layer. This means that by default, service loaders will now see some extra service providers definition coming from the native image module path.
 * (GR-74050) JFR now uses the safepoint-based execution sampler by default on all platforms. To use the signal-handler-based execution sampler instead, enable `-H:+SignalHandlerBasedExecutionSampler`.
+* (GR-75242) JFR stack trace support is no longer disabled entirely if runtime compilation is enabled. Instead, individual stack traces are skipped when they contain JIT-compiled code.
 * (GR-63737) Deprecated API function `Threading.registerRecurringCallback(...)` without replacement. This method should not be used as it is inherently unsafe.
 * (GR-63737) Removed deprecated API function `ProcessPropertiesSupport.setLocale(...)`.
 * (GR-52538) (GR-69523) (GR-73129) Introduce new SerialGC policy `Adaptive2` and default to mark-compact collection in the old generation. On average, this reduces memory usage and often improves throughput and latency. Restore the old behavior with: `-H:-CompactingOldGen -H:InitialCollectionPolicy=Adaptive`.
+* (GR-75348) Allow selecting the Serial GC collection policy at run time with `-XX:InitialCollectionPolicy`.
 * (GR-71974) Introduced `-H:+CompatibilityMode` that disables all Native Image features that allow users to diverge from original program semantics: build-time initialization for classpath classes, native-image-specific system properties, substitutions on the classpath, and user features, while enabling all future defaults. This mode does not modify key Native Image restrictions related to dynamic access (reachability metadata) and run-time class loading as those are accepted limitations of native image.
 * (GR-74008) On macOS, the build process now uses `memory_pressure` for a more accurate detection of free memory.
 * (GR-73792) Added randomized runtime code entry points. Enable with `-H:+MaxRuntimeCodeOffset`.
 * (GR-73792) Added AMD64 memory masking and fencing mitigation for untrusted code. Enable with `-H:+MemoryMaskingAndFencing`.
+* (GR-74988) Build position-independent executables (PIE) on Linux by default, increasing security by participating in address space layout randomization (ASLR). To disable PIE (even if the system toolchain would otherwise produce PIE), use `-H:NativeLinkerOption=-no-pie`. Note that on many Linux distributions, macOS, and Windows, the system toolchains used by Native Image have already been producing PIE.
+* (GR-74988) Turn on relative code pointers by default to reduce startup time, memory usage, and size for PIE and shared library images. Instead of dynamic linker relocations, they use a dedicated code base register to compute code addresses. To disable, use `-H:-RelativeCodePointers`.
 
 ## GraalVM 25
 * (GR-52276) (GR-61959) Add support for Arena.ofShared().

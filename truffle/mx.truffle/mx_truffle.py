@@ -1542,11 +1542,7 @@ def tck(args):
         with mx_util.SafeFileCreation(os.path.join(tempfile.gettempdir(), "debugalot")) as sfc:
             _execute_debugger_test(tests, sfc.tmpPath, False, unitTestOptions, jvmOptions)
     elif tckConfiguration == "compile":
-        if "--use-graalvm" in unitTestOptions:
-            jdk = mx.get_jdk(tag="graalvm")
-        else:
-            jdk = mx.get_jdk()
-        if not mx_sdk.GraalVMJDKConfig.is_graalvm(jdk.home):
+        if not mx_sdk.GraalVMJDKConfig.is_graalvm(mx.get_jdk().home):
             mx.abort(
                 "The 'compile' TCK configuration requires graalvm execution, "
                 "run with --java-home=<path_to_graalvm> or run with --use-graalvm."
@@ -2048,7 +2044,7 @@ def register_polyglot_isolate_distributions(
             deps=resources_dist_dependencies,
             mainClass=None,
             excludedLibs=[],
-            distDependencies=["truffle:TRUFFLE_API"],
+            distDependencies=["sdk:NATIVEBRIDGE","truffle:TRUFFLE_API"],
             javaCompliance=str(build_internal_resource.javaCompliance) + "+",
             platformDependent=True,
             theLicense=licenses,
@@ -2138,7 +2134,10 @@ class PolyglotIsolateProject(mx_sdk_vm_ng.NativeImageLibraryProject):
         super().__init__(
             language_suite,
             f"{language_id}.isolate",
-            isolate_deps,
+            [
+                'sdk:NATIVEBRIDGE',
+                *isolate_deps
+            ],
             ["Truffle"],
             None,
             f"{language_id}vm",

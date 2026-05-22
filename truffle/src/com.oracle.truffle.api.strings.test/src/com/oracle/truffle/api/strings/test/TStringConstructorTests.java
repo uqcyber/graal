@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,6 +48,7 @@ import static com.oracle.truffle.api.strings.TruffleString.fromIntArrayUTF32Unca
 import static com.oracle.truffle.api.strings.TruffleString.fromLongUncached;
 import static com.oracle.truffle.api.strings.TruffleString.fromNativePointerUncached;
 
+import java.lang.ref.Reference;
 import java.nio.ByteOrder;
 
 import org.graalvm.shadowed.org.jcodings.Encoding;
@@ -144,6 +145,25 @@ public class TStringConstructorTests extends TStringTestBase {
             return -1;
         }
         return hash;
+    }
+
+    @Test
+    public void testGetInternalNativePointer() {
+        byte[] array = {'a', 'b', 'c'};
+        PointerObject pointerObject = PointerObject.create(array);
+        long rawPointer = pointerObject.asPointer();
+        try {
+            TruffleString nativeString = fromNativePointerUncached(pointerObject, 0, array.length, TruffleString.Encoding.UTF_8, false);
+            Assert.assertSame(pointerObject, nativeString.getInternalNativePointerUncached(TruffleString.Encoding.UTF_8));
+
+            TruffleString rawNativeString = fromNativePointerUncached(rawPointer, 0, array.length, TruffleString.Encoding.UTF_8, false);
+            Assert.assertEquals(Long.valueOf(rawPointer), rawNativeString.getInternalNativePointerUncached(TruffleString.Encoding.UTF_8));
+
+            MutableTruffleString rawMutableNativeString = MutableTruffleString.fromNativePointerUncached(rawPointer, 0, array.length, TruffleString.Encoding.UTF_8, false);
+            Assert.assertEquals(Long.valueOf(rawPointer), rawMutableNativeString.getInternalNativePointerUncached(TruffleString.Encoding.UTF_8));
+        } finally {
+            Reference.reachabilityFence(pointerObject);
+        }
     }
 
     @Test

@@ -95,7 +95,9 @@ import jdk.graal.compiler.lir.amd64.AMD64ArrayRegionCompareToOp;
 import jdk.graal.compiler.lir.amd64.AMD64Base64DecodeOp;
 import jdk.graal.compiler.lir.amd64.AMD64Base64EncodeOp;
 import jdk.graal.compiler.lir.amd64.AMD64BigIntegerMulAddOp;
+import jdk.graal.compiler.lir.amd64.AMD64BigIntegerLeftShiftOp;
 import jdk.graal.compiler.lir.amd64.AMD64BigIntegerMultiplyToLenOp;
+import jdk.graal.compiler.lir.amd64.AMD64BigIntegerRightShiftOp;
 import jdk.graal.compiler.lir.amd64.AMD64BigIntegerSquareToLenOp;
 import jdk.graal.compiler.lir.amd64.AMD64BinaryConsumer;
 import jdk.graal.compiler.lir.amd64.AMD64ByteSwapOp;
@@ -1164,6 +1166,40 @@ public abstract class AMD64LIRGenerator extends LIRGenerator {
         emitMove(rZlen, zlen);
 
         append(new AMD64BigIntegerSquareToLenOp(this, rX, rLen, rZ, rZlen));
+    }
+
+    @Override
+    public void emitBigIntegerLeftShiftWorker(Value newArr, Value oldArr, Value newIdx, Value shiftCount, Value numIter) {
+        RegisterValue rNewArr = AMD64.rdi.asValue(newArr.getValueKind());
+        RegisterValue rOldArr = AMD64.rsi.asValue(oldArr.getValueKind());
+        RegisterValue rNewIdx = AMD64.rdx.asValue(newIdx.getValueKind());
+        RegisterValue rShiftCount = AMD64.rcx.asValue(shiftCount.getValueKind());
+        RegisterValue rNumIter = AMD64.r8.asValue(numIter.getValueKind());
+
+        emitMove(rNewArr, newArr);
+        emitMove(rOldArr, oldArr);
+        emitMove(rNewIdx, newIdx);
+        emitMove(rShiftCount, shiftCount);
+        emitMove(rNumIter, numIter);
+
+        append(new AMD64BigIntegerLeftShiftOp(rNewArr, rOldArr, rNewIdx, rShiftCount, rNumIter, getAVX3Threshold()));
+    }
+
+    @Override
+    public void emitBigIntegerRightShiftWorker(Value newArr, Value oldArr, Value newIdx, Value shiftCount, Value numIter) {
+        RegisterValue rNewArr = AMD64.rdi.asValue(newArr.getValueKind());
+        RegisterValue rOldArr = AMD64.rsi.asValue(oldArr.getValueKind());
+        RegisterValue rNewIdx = AMD64.rdx.asValue(newIdx.getValueKind());
+        RegisterValue rShiftCount = AMD64.rcx.asValue(shiftCount.getValueKind());
+        RegisterValue rNumIter = AMD64.r8.asValue(numIter.getValueKind());
+
+        emitMove(rNewArr, newArr);
+        emitMove(rOldArr, oldArr);
+        emitMove(rNewIdx, newIdx);
+        emitMove(rShiftCount, shiftCount);
+        emitMove(rNumIter, numIter);
+
+        append(new AMD64BigIntegerRightShiftOp(rNewArr, rOldArr, rNewIdx, rShiftCount, rNumIter, getAVX3Threshold()));
     }
 
     @SuppressWarnings("unchecked")

@@ -97,14 +97,6 @@ public interface CremaResolvedJavaType extends ResolvedJavaType {
     JavaType[] getDeclaredClasses();
 
     /**
-     * Returns the permitted subclasses for a sealed class. Note that this method must only be
-     * called on a known sealed resolved type.
-     *
-     * @return array of permitted subclasses as a JavaType array
-     */
-    JavaType[] getPermittedSubClasses();
-
-    /**
      * Returns the resolved nest members of this resolved java type.
      *
      * @return a ResolvedJavaType representing the nest host

@@ -353,7 +353,7 @@ public final class AMD64CodepointIndexToByteIndexOp extends AMD64ComplexVectorOp
             emitMaskTailBinarySearch(crb, asm, tmp, idx, ret, mask, lengthTail, null, tailMask16, tailMaskAscii, 32, false);
         }
         // determine whether the target index is in the mask's lower or upper 8 bits
-        emitMaskTailBinarySearch(crb, asm, tmp, idx, ret, mask, lengthTail, tailMask16, tailMask8, tailMaskAscii, 16, inputEncoding.isUTF16());
+        emitMaskTailBinarySearch(crb, asm, tmp, idx, ret, mask, lengthTail, tailMask16, tailMask8, tailMaskAscii, 16, false);
         // determine whether the target index is in the mask's lower or upper 4 bits
         emitMaskTailBinarySearch(crb, asm, tmp, idx, ret, mask, lengthTail, tailMask8, tailMask4, tailMaskAscii, 8, true);
         switch (inputEncoding) {

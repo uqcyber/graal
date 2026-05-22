@@ -136,10 +136,10 @@ public class HostedMethodNameFactory implements InternalFeature {
                      * reserved.
                      */
                     EconomicSet<String> reservedNames = EconomicSet.create();
-                    var methods = ((SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl) loader).getSnapshotReader().getHostedMethods();
+                    var methods = ((SVMImageLayerSingletonLoader.ImageSingletonLoaderImpl) loader).getSnapshotLoader().getHostedMethods();
                     for (var methodData : methods) {
                         if (methodData.getMethodId() != LayeredDispatchTableFeature.PriorDispatchMethod.UNPERSISTED_METHOD_ID) {
-                            reservedNames.add(methodData.getHostedMethodUniqueName().toString());
+                            reservedNames.add(methodData.getHostedMethodUniqueName());
                         }
                     }
                     singleton.reservedUniqueShortNames = reservedNames;
