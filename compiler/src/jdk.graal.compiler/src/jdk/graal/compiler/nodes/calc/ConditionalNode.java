@@ -163,13 +163,15 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                 if (lessThan.getX() == trueValue && lessThan.getY() == falseValue) {
                     // return "x" for "x < y ? x : y" in case that we know "x <= y"
                     if (trueValueStamp.upperBound() <= falseValueStamp.lowerBound()) {
-                        // @formatter:off veriopt: ConditionalEliminateKnownLess: (x < y ? x : y) |-> x when (x.stamp.upper <= y.stamp.lower)
+                        // @formatter:off veriopt: ConditionalEliminateKnownLess: (x < y ? x : y) |-> x
+                        //                                                        when (x.stamp.upper <= y.stamp.lower)
                         return trueValue;
                     }
                 } else if (lessThan.getX() == falseValue && lessThan.getY() == trueValue) {
                     // return "y" for "x < y ? y : x" in case that we know "x <= y"
                     if (falseValueStamp.upperBound() <= trueValueStamp.lowerBound()) {
-                        // @formatter:off veriopt: ConditionalEliminateKnownLess_2: (x < y ? y : x) |-> y when (x.stamp.upper <= y.stamp.lower)
+                        // @formatter:off veriopt: ConditionalEliminateKnownLess_2: (x < y ? y : x) |-> y
+                        //                                                          when (x.stamp.upper <= y.stamp.lower)
                         return trueValue;
                     }
                 }
@@ -192,24 +194,30 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                                 if (constTrueValue == 0 && constFalseValue == 1) {
                                     // return x when: x == 0 ? 0 : 1;
 
-                                    // veriopt: normalizeX: x == 0 ? 0 : 1 |-> x (when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1) // todo unsure about encoding
+                                    // veriopt: normalizeX: x == 0 ? 0 : 1 |-> x
+                                    //                      when (stamp_expr x = IntegerStamp xBits lo hi) &&
+                                    //                            x.upMask == 1 // todo unsure about encoding
                                     return IntegerConvertNode.convertUnsigned(equals.getX(), stamp, view);
                                 } else if (constTrueValue == 1 && constFalseValue == 0) {
                                     // negate a boolean value via xor
 
-                                    // veriopt: flipX: x == 0 ? 1 : 0 |-> (x ^ 1) (when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1) // todo unsure about encoding
+                                    // veriopt: flipX: x == 0 ? 1 : 0 |-> (x ^ 1)
+                                    //                 when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1 // todo unsure about encoding
                                     return IntegerConvertNode.convertUnsigned(XorNode.create(equals.getX(), ConstantNode.forIntegerStamp(equals.getX().stamp(view), 1), view), stamp, view);
                                 }
                             } else if (equalsY == 1) {
                                 if (constTrueValue == 1 && constFalseValue == 0) {
                                     // return x when: x == 1 ? 1 : 0;
 
-                                    // veriopt: normalizeX2: x == 1 ? 1 : 0 |-> x (when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1) // todo unsure about encoding
+                                    // veriopt: normalizeX2: x == 1 ? 1 : 0 |-> x
+                                    //                       when (stamp_expr x = IntegerStamp xBits lo hi) &&
+                                    //                             x.upMask == 1 // todo unsure about encoding
                                     return IntegerConvertNode.convertUnsigned(equals.getX(), stamp, view);
                                 } else if (constTrueValue == 0 && constFalseValue == 1) {
                                     // negate a boolean value via xor
 
-                                    // veriopt: flipX2: x == 1 ? 0 : 1 |-> (x ^ 1) (when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1) // todo unsure about encoding
+                                    // veriopt: flipX2: x == 1 ? 0 : 1 |-> (x ^ 1)
+                                    //                  when (stamp_expr x = IntegerStamp xBits lo hi) && x.upMask == 1 // todo unsure about encoding
                                     return IntegerConvertNode.convertUnsigned(XorNode.create(equals.getX(), ConstantNode.forIntegerStamp(equals.getX().stamp(view), 1), view), stamp, view);
                                 }
                             }
