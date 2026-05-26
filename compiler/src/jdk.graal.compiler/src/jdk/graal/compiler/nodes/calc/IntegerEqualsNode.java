@@ -151,7 +151,7 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                     v2 = addY.getY();
                 } else if (addX.getX() == addY.getY()) {
                     // (x op y) == (z op x) => y == z for op == + || op == ^
-                    // veriopt: AdditionEquality2: (x + y) == (z + x)] |-> y == z
+                    // veriopt: AdditionEquality2: (x + y) == (z + x) |-> y == z
                     // veriopt: XorEquality2: (x ^ y) == (z ^ x) |-> y == z
                     v1 = addX.getY();
                     v2 = addY.getX();
