@@ -105,18 +105,18 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             // masked result - check must be set against masked maybe set bits
             if (!stampY.isUnrestricted() && (stampY.mayBeSet() & usingAndOtherStamp.mayBeSet()) == 0) {
                 // veriopt: RedundantLhsYOr: (x | y) & z |-> x & z
-                //      when (!is_unrestricted (stamp(y)) && (up(y) & up(z) == 0))
+                //                           when (!is_unrestricted (stamp(y)) && (up(y) & up(z) == 0))
 
                 // veriopt: RedundantRhsYOr: z & (x | y) |-> z & x
-                //      when (!is_unrestricted (stamp(y)) && (up(y) & up(z) == 0))
+                //                           when (!is_unrestricted (stamp(y)) && (up(y) & up(z) == 0))
                 return opX;
             }
             if (!stampX.isUnrestricted() && (stampX.mayBeSet() & usingAndOtherStamp.mayBeSet()) == 0) {
                 // veriopt: RedundantLhsXOr: (x | y) & z |-> y & z
-                //      when (!is_unrestricted (stamp(x)) && (up(x) & up(z) == 0))
+                //                           when (!is_unrestricted (stamp(x)) && (up(x) & up(z) == 0))
 
                 // veriopt: RedundantRhsXOr: z & (x | y) |-> z & y
-                //      when (!is_unrestricted (stamp(x)) && (up(x) & up(z) == 0))
+                //                           when (!is_unrestricted (stamp(x)) && (up(x) & up(z) == 0))
                 return opY;
             }
         } else if (usingAndInput instanceof AddNode) {
@@ -160,7 +160,8 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
             return forX;
         }
         if (forX.isConstant() && !forY.isConstant()) {
-            // @formatter:off veriopt: AndShiftConstantRight: ((ConstantExpr x) & y) |-> y & (ConstantExpr x) when ~(is_ConstantExpr y)
+            // @formatter:off veriopt: AndShiftConstantRight: ((ConstantExpr x) & y) |-> y & (ConstantExpr x)
+            //                                                when ~(is_ConstantExpr y)
             return new AndNode(forY, forX);
         }
 
@@ -180,10 +181,12 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
                  *     1     &     0    = 0  # rhs can't be one
                  *     1     &     1    = ?  # cannot infer
                  */
-                // @formatter:off veriopt: AndRightFallthrough: x & y |-> y when (canBeZero x.stamp & canBeOne y.stamp) = 0
+                // @formatter:off veriopt: AndRightFallthrough: x & y |-> y
+                //                                              when (canBeZero x.stamp & canBeOne y.stamp) = 0
                 return forY;
             } else if (((~yStamp.mustBeSet()) & xStamp.mayBeSet()) == 0) {
-                // @formatter:off veriopt: AndLeftFallthrough: x & y |-> x when (canBeZero y.stamp & canBeOne x.stamp) = 0
+                // @formatter:off veriopt: AndLeftFallthrough: x & y |-> x
+                //                                             when (canBeZero y.stamp & canBeOne x.stamp) = 0
                 return forX;
             }
             ValueNode newLHS = eliminateRedundantBinaryArithmeticOp(forX, yStamp);
@@ -227,7 +230,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
         if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX && rawXStamp instanceof IntegerStamp) {
             // x & ~x |-> 0
             // veriopt: AndEqualNot: x & (~x) |-> const 0
-            //                  when wf_stamp x & stamp_expr x = IntegerStamp b lo hi
+            //                       when wf_stamp x && stamp_expr x = IntegerStamp b lo hi
             return ConstantNode.forIntegerStamp(rawXStamp, 0L);
         }
         return self != null ? self : new AndNode(forX, forY).maybeCommuteInputs();
