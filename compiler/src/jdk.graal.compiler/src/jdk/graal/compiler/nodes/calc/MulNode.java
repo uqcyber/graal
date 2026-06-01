@@ -167,6 +167,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                 // veriopt: MulPower2Sub1: x * const((2^j) - 1) |-> x << const(j) - x
                 return SubNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i + 1))), forX, view);
             } else {
+                // veriopt-definition: constant_condition: (is_ConstantExpr c && c > 0 && c != 1 && ~is_Power2(c) &&
+                //                                          ~is_Power2(c + 1) && ~is_Power2(c - 1))
                 int bitCount = Long.bitCount(i);
                 long highestBitValue = Long.highestOneBit(i);
                 if (bitCount == 2) {
@@ -176,8 +178,14 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                                     lowerBitValue);
                     ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(highestBitValue)));
                     ValueNode right = lowerBitValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(lowerBitValue)));
-                    // veriopt: MulPower2AddPower2: x * const(2^j + 2^k) |-> x << const(j) + x << const(k) // false branch
-                    // veriopt: MulPower2Add1:      x * const(2^j + 1)   |-> x << const(j) + x             // true branch todo duplicate?
+                    // veriopt-definition: highestBitValue: highestOneBit c
+                    // veriopt-definition: lowerBitValue: c - highestOneBit c
+
+                    // veriopt: MulPower2AddPower2: x * c |-> x << const(log2 (highestBitValue)) + x << const(log2 (lowerBitValue))
+                    //          when (constant_condition && bitCount c = 2 && lowerBitValue != 1)
+
+                    // veriopt: MulPower2Add1:      x * c |-> x << const(log2 (highestBitValue)) + x
+                    //          when (constant_condition && bitCount c = 2 && lowerBitValue == 1)
                     return AddNode.create(left, right, view);
                 } else {
                     // e.g., 0b1111_1100
