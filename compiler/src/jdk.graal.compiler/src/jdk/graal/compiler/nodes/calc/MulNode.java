@@ -169,6 +169,8 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
             } else {
                 // veriopt-definition: constant_condition: (is_ConstantExpr c && c > 0 && c != 1 && ~is_Power2(c) &&
                 //                                          ~is_Power2(c + 1) && ~is_Power2(c - 1))
+
+                // veriopt-definition: highestBitValue: highestOneBit_Long c
                 int bitCount = Long.bitCount(i);
                 long highestBitValue = Long.highestOneBit(i);
                 if (bitCount == 2) {
@@ -178,13 +180,12 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                                     lowerBitValue);
                     ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(highestBitValue)));
                     ValueNode right = lowerBitValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(lowerBitValue)));
-                    // veriopt-definition: highestBitValue: highestOneBit c
-                    // veriopt-definition: lowerBitValue: c - highestOneBit c
+                    // veriopt-definition: lowerBitValue: c - highestBitValue c
 
-                    // veriopt: MulPower2AddPower2: x * c |-> x << const(log2 (highestBitValue)) + x << const(log2 (lowerBitValue))
+                    // veriopt: MulPower2AddPower2: x * c |-> (x << const(log2 (highestBitValue))) + (x << const(log2 (lowerBitValue)))
                     //          when (constant_condition && bitCount c = 2 && lowerBitValue != 1)
 
-                    // veriopt: MulPower2Add1:      x * c |-> x << const(log2 (highestBitValue)) + x
+                    // veriopt: MulPower2Add1:      x * c |-> (x << const(log2 (highestBitValue))) + x
                     //          when (constant_condition && bitCount c = 2 && lowerBitValue == 1)
                     return AddNode.create(left, right, view);
                 } else {
@@ -194,7 +195,16 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                     if (CodeUtil.isPowerOf2(subValue) && shiftToRoundUpToPowerOf2 < ((IntegerStamp) stamp).getBits()) {
                         ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(shiftToRoundUpToPowerOf2));
                         ValueNode right = subValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(subValue)));
-                        // @formatter:off veriopt: MulUnnamed: x * const(2^j - 2^k) |-> x << const(j) - x << const(k)
+                        // veriopt-definition: shiftPow2: (log2 (highestBitValue)) + 1
+                        // veriopt-definition: subVal: (1 << shiftPow2) - c
+
+                        // veriopt: MulPower2SubPower2: x * c |-> (x << const(shiftPow2)) - (x << const(log2 (subVal)))
+                        //          when (constant_condition && bitCount c != 2 && is_Power2(subVal) && subVal != 1 &&
+                        //                stamp_expr (x * c) = IntegerStamp b lo hi && shiftPow2 < b)
+
+                        // veriopt: MulPower2Sub1:      x * c |-> (x << const(shiftPow2)) - x
+                        //          when (constant_condition && bitCount c != 2 && is_Power2(subVal) && subVal == 1 &&
+                        //                stamp_expr (x * c) = IntegerStamp b lo hi && shiftPow2 < b)
                         return SubNode.create(left, right, view);
                     }
                 }
