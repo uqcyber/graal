@@ -378,6 +378,8 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                     if (xorNode.getY().isJavaConstant() && xorNode.getY().asJavaConstant().asLong() == 1 && ((IntegerStamp) xorNode.getX().stamp(view)).mayBeSet() == 1) {
                         // x ^ 1 == 0 is the same as x == 1 if x in [0, 1]
                         // x ^ 1 == 1 is the same as x == 0 if x in [0, 1]
+                        // veriopt: EqualXorOneShift: ((x ^ 1) == c) |-> (x == (c ^ 1))
+                        //          when (stamp_expr x = IntegerStamp b lo hi and up(x) = 1)
                         return new IntegerEqualsNode(xorNode.getX(), ConstantNode.forIntegerStamp(xorNode.getX().stamp(view), primitiveConstant.asLong() ^ 1));
                     }
                 }
