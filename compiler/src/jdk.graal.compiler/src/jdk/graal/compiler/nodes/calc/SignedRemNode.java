@@ -140,6 +140,7 @@ public class SignedRemNode extends IntegerDivRemNode implements LIRLowerable {
         IntegerStamp xStamp = (IntegerStamp) forX.stamp(view);
         IntegerStamp yStamp = (IntegerStamp) forY.stamp(view);
         if (constY == 1) {
+            // veriopt: RemainderOneAlwaysZero: x % 1 |-> 0 when (stamp_expr x = IntegerStamp b lo hi)
             return ConstantNode.forIntegerStamp(stamp, 0);
         } else if (CodeUtil.isPowerOf2(constY) && tool != null && tool.allUsagesAvailable()) {
             if (allUsagesCompareAgainstZero(self)) {
