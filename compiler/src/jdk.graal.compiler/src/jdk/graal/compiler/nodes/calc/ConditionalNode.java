@@ -231,19 +231,7 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                     if (integerTestNode.getY().isConstant() && integerTestNode.getX().stamp(view) instanceof IntegerStamp) {
                         long testY = integerTestNode.getY().asJavaConstant().asLong();
                         if (testY == 1 && constTrueValue == 0 && constFalseValue == 1) {
-
                             // veriopt: OptimiseIntegerTest: (x & 1) == 0 ? 0 : 1 |-> (x & 1)
-
-                            // todo if x is between 0-1, then this can be optimised to just return x.
-                            //  Optimisation might not be worth the extra checks though
-                            /*
-                               if x = 0:                      |  if x = 1:
-                                                              |
-                               - (x & 1) == 0 ? 0 : 1         |  - (x & 1) == 0 ? 0 : 1
-                               - (0 & 1) == 0 ? 0 : 1         |  - (1 & 1) == 0 ? 0 : 1
-                               - true ? 0 : 1                 |  - false ? 0 : 1
-                               - 0                            |  - 1
-                            */
                             return IntegerConvertNode.convertUnsigned(AndNode.create(integerTestNode.getX(), integerTestNode.getY(), view), stamp, view);
                         }
                     }
@@ -325,20 +313,17 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
     private static ValueNode findSynonym(ValueNode condition, ValueNode trueValue, ValueNode falseValue, NodeView view) {
         if (condition instanceof LogicNegationNode) {
             LogicNegationNode negated = (LogicNegationNode) condition;
-
             // veriopt: NegateConditionFlipBranches: (~c) ? c_1 : c_2 |-> c ? c_2 : c_1
             return ConditionalNode.create(negated.getValue(), falseValue, trueValue, view);
         }
         if (condition instanceof LogicConstantNode) {
             LogicConstantNode c = (LogicConstantNode) condition;
             if (c.getValue()) {
-
                 // veriopt: DefaultTrueBranch: true ? c_1 : c_2 |-> c_1
                 return trueValue;
             } else {
-                return falseValue;
-
                 // veriopt: DefaultFalseBranch: false ? c_1 : c_2 |-> c_2
+                return falseValue;
             }
         }
         return null;
