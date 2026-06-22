@@ -666,8 +666,9 @@ public final class Deoptimizer {
      * Invalidates the {@link InstalledCode} of the method of the given frame. The method must be a
      * runtime compiled method, since there is no {@link InstalledCode} for AOT-compiled methods.
      */
-    public static void invalidateMethodOfFrame(IsolateThread thread, Pointer sp, SpeculationReason speculation, boolean reprofile) {
+    public static void invalidateMethodOfFrame(IsolateThread thread, Pointer sp, SpeculationReason speculation, DeoptimizationReason reason, boolean reprofile) {
         VMError.guarantee(thread == CurrentIsolate.getCurrentThread());
+        DeoptimizationReason nonNullReason = reason != null ? reason : DeoptimizationReason.None;
 
         CodePointer ip = FrameAccess.singleton().readReturnAddress(thread, sp);
         if (checkLazyDeoptimized(ip)) {
@@ -700,6 +701,7 @@ public final class Deoptimizer {
         }
         registerSpeculationFailure(installedCode, speculation);
         VMOperation.guaranteeNotInProgress("invalidateMethodOfFrame: running user code that can block");
+        installedCode.recordDeoptimization(nonNullReason);
         if (reprofile) {
             installedCode.reprofile();
         }
@@ -784,12 +786,17 @@ public final class Deoptimizer {
         InterpreterLeaveStub,
 
         /**
+         * Like {@link #InterpreterLeaveStub}, but calls a JNI native entry point.
+         */
+        InterpreterLeaveJNIStub,
+
+        /**
          * Custom prologue: move gp return register to first argument register.
          */
         InterpreterDeoptEntryPointStub;
 
         public boolean isInterpreterStub() {
-            return equals(InterpreterEnterStub) || equals(InterpreterLeaveStub);
+            return equals(InterpreterEnterStub) || equals(InterpreterLeaveStub) || equals(InterpreterLeaveJNIStub);
         }
     }
 

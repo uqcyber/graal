@@ -66,11 +66,11 @@ public final class AMD64BigIntegerMultiplyToLenOp extends AMD64LIRInstruction {
 
     public static final LIRInstructionClass<AMD64BigIntegerMultiplyToLenOp> TYPE = LIRInstructionClass.create(AMD64BigIntegerMultiplyToLenOp.class);
 
-    @Alive({OperandFlag.REG}) private Value xValue;
+    @UseKill({OperandFlag.REG}) private Value xValue;
     @UseKill({OperandFlag.REG}) private Value xlenValue;
     @Alive({OperandFlag.REG}) private Value yValue;
-    @Alive({OperandFlag.REG}) private Value ylenValue;
-    @Alive({OperandFlag.REG}) private Value zValue;
+    @UseKill({OperandFlag.REG}) private Value ylenValue;
+    @UseKill({OperandFlag.REG}) private Value zValue;
     @UseKill({OperandFlag.REG}) private Value zlenValue;
 
     @Temp({OperandFlag.REG}) private Value tmp1Value;
@@ -88,8 +88,8 @@ public final class AMD64BigIntegerMultiplyToLenOp extends AMD64LIRInstruction {
                     Value zlenValue) {
         super(TYPE);
 
-        // This stub uses fixed registers. xlen/zlen are killed and reused as temporaries while the
-        // remaining fixed inputs are preserved across the instruction.
+        // This stub uses fixed registers. xlen/zlen are killed and reused as temporaries. z is
+        // temporarily advanced and explicitly restored in the body.
         GraalError.guarantee(asRegister(xValue).equals(rdi), "expect xValue at rdi, but was %s", xValue);
         GraalError.guarantee(asRegister(xlenValue).equals(rax), "expect xlenValue at rax, but was %s", xlenValue);
         GraalError.guarantee(asRegister(yValue).equals(rsi), "expect yValue at rsi, but was %s", yValue);

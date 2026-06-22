@@ -73,6 +73,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 import javax.crypto.Cipher;
+import javax.crypto.KEM;
 import javax.crypto.KeyAgreement;
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
@@ -111,10 +112,6 @@ import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
 import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.shared.option.HostedOptionKey;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
-import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ModuleSupport;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
@@ -160,7 +157,6 @@ import sun.security.x509.OIDMap;
  */
 
 @AutomaticallyRegisteredFeature
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 public class SecurityServicesFeature extends JNIRegistrationUtil implements InternalFeature {
 
     public static class Options {
@@ -210,7 +206,7 @@ public class SecurityServicesFeature extends JNIRegistrationUtil implements Inte
         List<Class<?>> classList = new ArrayList<>(List.of(
                         AlgorithmParameterGenerator.class, AlgorithmParameters.class,
                         CertPathBuilder.class, CertPathValidator.class, CertStore.class, CertificateFactory.class,
-                        Cipher.class, Configuration.class, KeyAgreement.class, KeyFactory.class,
+                        Cipher.class, Configuration.class, KEM.class, KeyAgreement.class, KeyFactory.class,
                         KeyGenerator.class, KeyManagerFactory.class, KeyPairGenerator.class,
                         KeyStore.class, Mac.class, MessageDigest.class, SSLContext.class,
                         SecretKeyFactory.class, SecureRandom.class, Signature.class, TrustManagerFactory.class));

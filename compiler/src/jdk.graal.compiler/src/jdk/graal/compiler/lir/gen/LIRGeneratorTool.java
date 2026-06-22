@@ -640,6 +640,12 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
+    default Variable emitGaloisCounterModeAESCrypt(EnumSet<?> runtimeCheckedCPUFeatures, Value inAddr, Value len, Value ctAddr, Value outAddr, Value kAddr, Value stateAddr, Value subkeyHtblAddr,
+                    Value counterAddr) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
     default Variable emitCBCAESEncrypt(Value inAddr, Value outAddr, Value kAddr, Value rAddr, Value len) {
         throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
     }
@@ -665,6 +671,16 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
+    default void emitPoly1305ProcessBlocks(EnumSet<?> runtimeCheckedCPUFeatures, Value input, Value length, Value accumulator, Value r) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitChaCha20Block(Value state, Value result) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
     default void emitBigIntegerMultiplyToLen(Value x, Value xlen, Value y, Value ylen, Value z, Value zlen) {
         throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
     }
@@ -676,6 +692,16 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
 
     @SuppressWarnings("unused")
     default void emitBigIntegerSquareToLen(Value x, Value len, Value z, Value zlen) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default void emitBigIntegerMontgomeryMultiply(Value a, Value b, Value n, Value len, Value inv, Value product) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default void emitBigIntegerMontgomerySquare(Value a, Value n, Value len, Value inv, Value product) {
         throw GraalError.unimplemented("No specialized implementation available");
     }
 
@@ -720,7 +746,72 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
+    default Variable emitAdler32UpdateBytes(EnumSet<?> runtimeCheckedCPUFeatures, Value adler, Value bufferAddress, Value length) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitDilithiumAlmostNtt(Value coeffs, Value zetas) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
     default Variable emitCRC32CUpdateBytes(EnumSet<?> runtimeCheckedCPUFeatures, Value crc, Value bufferAddress, Value length) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitDilithiumAlmostInverseNtt(Value coeffs, Value zetas) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitDilithiumNttMult(Value product, Value coeffs1, Value coeffs2) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitDilithiumMontMulByConstant(Value coeffs, Value constant) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitDilithiumDecomposePoly(Value input, Value lowPart, Value highPart, Value twoGamma2, Value multiplier) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitKyberNtt(Value poly, Value zetas) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitKyberInverseNtt(Value poly, Value zetas) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitKyberNttMult(Value result, Value ntta, Value nttb, Value zetas) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitKyberAddPoly2(Value result, Value a, Value b) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitKyberAddPoly3(Value result, Value a, Value b, Value c) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitKyber12To16(Value condensed, Value index, Value parsed, Value parsedLength) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitKyberBarrettReduce(Value coeffs) {
         throw GraalError.unimplemented("No specialized implementation available");
     }
 

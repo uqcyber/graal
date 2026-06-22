@@ -56,7 +56,7 @@ public class JNILibraryInitializer implements NativeLibrarySupport.LibraryInitia
 
     private final EconomicMap<String, CGlobalData<PointerBase>> onLoadCGlobalDataMap = ImageHeapMap.create(Equivalence.IDENTITY, "onLoadCGlobalDataMap");
 
-    private static String getOnLoadName(String libName, boolean isBuiltIn) {
+    public static String getOnLoadName(String libName, boolean isBuiltIn) {
         String name = "JNI_OnLoad";
         if (isBuiltIn) {
             return name + "_" + libName;
@@ -66,8 +66,8 @@ public class JNILibraryInitializer implements NativeLibrarySupport.LibraryInitia
 
     public boolean fillCGlobalDataMap(Collection<String> staticLibNames) {
         List<String> libsWithOnLoad = Arrays.asList("net", "java", "nio", "zip", "sunec", "jaas", "sctp", "extnet",
-                        "j2gss", "j2pkcs11", "j2pcsc", "prefs", "verify", "awt", "awt_xawt", "awt_headless", "lcms",
-                        "fontmanager", "javajpeg", "mlib_image", "attach");
+                        "j2gss", "j2pkcs11", "j2pcsc", "prefs", "verify", "awt", "awt_xawt", "awt_headless", "awt_lwawt",
+                        "lcms", "fontmanager", "javajpeg", "mlib_image", "osxapp", "attach");
         // TODO: This check should be removed when all static libs will have JNI_OnLoad function
         ArrayList<String> localStaticLibNames = new ArrayList<>(staticLibNames);
         localStaticLibNames.retainAll(libsWithOnLoad);
@@ -97,7 +97,7 @@ public class JNILibraryInitializer implements NativeLibrarySupport.LibraryInitia
     }
 
     @Override
-    public void initialize(PlatformNativeLibrarySupport.NativeLibrary lib) {
+    public int initialize(PlatformNativeLibrarySupport.NativeLibrary lib) {
         String libName = lib.getCanonicalIdentifier();
         PointerBase onLoadFunction;
         if (lib.isBuiltin()) {
@@ -119,7 +119,9 @@ public class JNILibraryInitializer implements NativeLibrarySupport.LibraryInitia
             if (!JNIVersion.isSupported(expected, lib.isBuiltin())) {
                 throw new UnsatisfiedLinkError("Unsupported JNI version 0x" + Integer.toHexString(expected) + ", required by " + libName);
             }
+            return expected;
         }
+        return JNIVersion.JNI_VERSION_1_1();
     }
 
     private PointerBase getOnLoadSymbolAddress(String libName) {

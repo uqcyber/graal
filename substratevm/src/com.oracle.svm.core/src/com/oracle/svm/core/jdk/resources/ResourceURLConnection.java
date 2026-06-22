@@ -25,6 +25,8 @@
 
 package com.oracle.svm.core.jdk.resources;
 
+import static com.oracle.svm.core.jdk.resources.NativeImageResourceFileSystemProvider.RESOURCE_PROTOCOL;
+
 import java.io.ByteArrayInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -37,7 +39,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
 
-import com.oracle.svm.core.jdk.JavaNetSubstitutions;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.jdk.Resources;
 
 import sun.net.www.MessageHeader;
@@ -66,15 +68,25 @@ public final class ResourceURLConnection extends URLConnection {
         connected = true;
 
         String urlHost = url.getHost();
-        String hostNameOrNull = urlHost != null && !urlHost.isEmpty() ? urlHost : null;
+        String hostName = urlHost != null && !urlHost.isEmpty() ? urlHost : null;
         String urlPath = url.getPath();
         if (urlPath.isEmpty()) {
-            throw new IllegalArgumentException("Empty URL path not allowed in " + JavaNetSubstitutions.RESOURCE_PROTOCOL + " URL");
+            throw new IllegalArgumentException("Empty URL path not allowed in " + RESOURCE_PROTOCOL + " URL");
         }
         String resourceName = urlPath.substring(1);
 
-        Module module = hostNameOrNull != null ? ModuleLayer.boot().findModule(hostNameOrNull).orElse(null) : null;
-        Object entry = Resources.getAtRuntime(module, resourceName, false);
+        Object entry;
+        if (ClassRegistries.respectClassLoader()) {
+            if (hostName == null) {
+                throw new IllegalArgumentException("Host required in " + RESOURCE_PROTOCOL + " URL");
+            }
+            String moduleName = url.getUserInfo();
+            Module resourceModule = moduleName != null ? ModuleLayer.boot().findModule(moduleName).orElse(null) : null;
+            entry = Resources.getAtRuntime(hostName, resourceModule, resourceName, false);
+        } else {
+            Module module = hostName != null ? ModuleLayer.boot().findModule(hostName).orElse(null) : null;
+            entry = Resources.getAtRuntime(module, resourceName, false);
+        }
         if (entry != null) {
             ResourceStorageEntry resourceStorageEntry = (ResourceStorageEntry) entry;
             byte[][] bytes = resourceStorageEntry.getData();
@@ -85,7 +97,7 @@ public final class ResourceURLConnection extends URLConnection {
                 try {
                     index = Integer.parseInt(urlRef);
                 } catch (NumberFormatException e) {
-                    throw new IllegalArgumentException("URL anchor '#" + urlRef + "' not allowed in " + JavaNetSubstitutions.RESOURCE_PROTOCOL + " URL");
+                    throw new IllegalArgumentException("URL anchor '#" + urlRef + "' not allowed in " + RESOURCE_PROTOCOL + " URL");
                 }
             }
             if (index < bytes.length) {

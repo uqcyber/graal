@@ -797,7 +797,7 @@ public class NativeImageGenerator {
 
             compileQueue.purge();
 
-            int numCompilations = codeCache.getOrderedCompilations().size();
+            int numCompilations = codeCache.getCodeAreaCompilationCount();
             int imageDiskFileSize;
 
             try (StopTimer _ = TimerCollection.createTimerAndStart(TimerCollection.Registry.WRITE)) {
@@ -1095,7 +1095,8 @@ public class NativeImageGenerator {
 
                 if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
                     HostedImageLayerBuildingSupport imageLayerBuildingSupport = HostedImageLayerBuildingSupport.singleton();
-                    SVMImageLayerLoader imageLayerLoader = HostedConfiguration.instance().createSVMImageLayerLoader(imageLayerSnapshotUtil, imageLayerBuildingSupport, useSharedLayerGraphs);
+                    SVMImageLayerLoader imageLayerLoader = HostedConfiguration.instance().createSVMImageLayerLoader(imageLayerSnapshotUtil, imageLayerBuildingSupport,
+                                    useSharedLayerGraphs, useSharedLayerStrengthenedGraphs);
                     imageLayerBuildingSupport.setLoader(imageLayerLoader);
                     CGlobalDataFeature.singleton().getAppLayerCGlobalTracking().initializePriorLayerCGlobals();
                 }

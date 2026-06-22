@@ -879,6 +879,8 @@ public abstract class Accessor {
         public abstract boolean isUntrustedCodeMitigationPolicySoftware(Enum<?> policy);
 
         public abstract void collectNativeImagePresetOptions();
+
+        public abstract Source getSourceReceiver(org.graalvm.polyglot.Source source);
     }
 
     public abstract static class LanguageSupport extends Support {
@@ -1342,6 +1344,8 @@ public abstract class Accessor {
 
         public abstract void onEnginePatch(Object runtimeData, OptionValues runtimeOptions, Function<String, TruffleLogger> logSupplier, SandboxPolicy sandboxPolicy);
 
+        public abstract void onEnginePatchSuccess(Object runtimeData);
+
         public abstract boolean onEngineClosing(Object runtimeData);
 
         public abstract boolean onStoreCache(Object runtimeData, Path targetPath, long cancelledWord);
@@ -1369,8 +1373,6 @@ public abstract class Accessor {
         public abstract boolean isLegacyCompilerOption(String key);
 
         public abstract <T> ThreadLocal<T> createTerminatingThreadLocal(Supplier<T> initialValue, Consumer<T> onThreadTermination);
-
-        public abstract void setInitializedTimestamp(CallTarget target, long timestamp);
 
         public abstract void initializeInterpreterCallStackHeadRoom(Object engineData, long interpreterCallStackHeadRoom);
 
@@ -1590,9 +1592,15 @@ public abstract class Accessor {
             super(IMPL_CLASS_NAME);
         }
 
+        public abstract boolean isSupported();
+
         public abstract boolean isIsolateGuest();
 
         public abstract boolean isIsolateHost();
+
+        public abstract boolean hasIsolateLibraryForLanguages(Set<String> languageIds);
+
+        public abstract Collection<Set<String>> getAvailableIsolatedLanguages();
 
         public abstract Engine buildIsolatedEngine(AbstractPolyglotImpl polyglot, Engine localEngine, String[] isolateLanguages, String[] permittedLanguages, SandboxPolicy sandboxPolicy,
                         OutputStream out, OutputStream err, InputStream in, Map<String, String> options, Map<String, String> systemPropertiesOptions, boolean useSystemProperties,
@@ -1721,7 +1729,8 @@ public abstract class Accessor {
                         "com.oracle.truffle.api.library.LibraryAccessor".equals(thisClassName) ||
                         "com.oracle.truffle.polyglot.isolate.PolyglotIsolateAccessor".equals(thisClassName) ||
                         "com.oracle.truffle.api.staticobject.SomAccessor".equals(thisClassName) ||
-                        "com.oracle.truffle.api.strings.TStringAccessor".equals(thisClassName)) {
+                        "com.oracle.truffle.api.strings.TStringAccessor".equals(thisClassName) ||
+                        "com.oracle.truffle.tck.TruffleTCKAccessor".equals(thisClassName)) {
             // OK, classes allowed to use accessors
         } else {
             throw new IllegalStateException(thisClassName);

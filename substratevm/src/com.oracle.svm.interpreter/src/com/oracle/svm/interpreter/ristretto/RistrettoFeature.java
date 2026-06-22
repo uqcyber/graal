@@ -115,6 +115,11 @@ public final class RistrettoFeature implements InternalFeature {
     }
 
     @Override
+    public void onRegistration(OnRegistrationAccess access) {
+        ImageSingletons.add(RistrettoFeature.class, this);
+    }
+
+    @Override
     public void afterRegistration(AfterRegistrationAccess access) {
         RuntimeSupport.getRuntimeSupport().addTearDownHook(RistrettoCompilationManager.getProfileSupportTearDownHook());
 
@@ -130,6 +135,8 @@ public final class RistrettoFeature implements InternalFeature {
     public void beforeAnalysis(BeforeAnalysisAccess a) {
         FeatureImpl.BeforeAnalysisAccessImpl access = (FeatureImpl.BeforeAnalysisAccessImpl) a;
         RistrettoUtils.forcePreserveType(RistrettoDirectives.class);
+        RistrettoUtils.forcePreserveType(RistrettoOSRSupport.class);
+        RistrettoOptions.registerRuntimeOptionValidations();
 
         /*
          * The low-level Ristretto fast path reads these fields via offsets recorded in

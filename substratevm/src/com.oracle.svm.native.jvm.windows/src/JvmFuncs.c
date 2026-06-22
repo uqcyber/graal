@@ -33,6 +33,17 @@
 
 #define BitsPerByte 8
 
+void* __svm_find_builtin_symbol(const char* name);
+
+#if defined(_MSC_VER)
+  #pragma comment(linker, "/alternatename:__svm_find_builtin_symbol=__svm_find_builtin_symbol_default")
+#endif
+
+void* __svm_find_builtin_symbol_default(const char* name) {
+    (void) name;
+    return NULL;
+}
+
 #ifdef JNI_VERSION_9
     #define JVM_INTERFACE_VERSION 6
 #else
@@ -194,6 +205,49 @@ JNIEXPORT jlong JNICALL JVM_GetNanoTimeAdjustment(void *env, void *ignored, jlon
 
 JNIEXPORT jlong JNICALL Java_jdk_internal_misc_VM_getNanoTimeAdjustment(void *env, void * ignored, jlong offset_secs) {
     return JVM_GetNanoTimeAdjustment(env, ignored, offset_secs);
+}
+
+/* Used by Java_jdk_internal_loader_NativeLibraries_load when validating JNI_OnLoad. */
+JNIEXPORT jboolean JNICALL JVM_IsSupportedJNIVersion(jint version) {
+    return version == JNI_VERSION_24 ||
+           version == JNI_VERSION_21 ||
+           version == JNI_VERSION_20 ||
+           version == JNI_VERSION_19 ||
+           version == JNI_VERSION_10 ||
+           version == JNI_VERSION_9 ||
+           version == JNI_VERSION_1_8 ||
+           version == JNI_VERSION_1_6 ||
+           version == JNI_VERSION_1_4 ||
+           version == JNI_VERSION_1_2 ||
+           version == JNI_VERSION_1_1;
+}
+
+/* Used by Java_jdk_internal_loader_NativeLibraries_load. */
+// TODO GR-76023: add and handle second function parameter throwException
+JNIEXPORT void* JNICALL JVM_LoadLibrary(const char* name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    return (void*) LoadLibraryA(name);
+}
+
+/* Used by Java_jdk_internal_loader_NativeLibraries_load. */
+JNIEXPORT void JNICALL JVM_UnloadLibrary(void* handle) {
+    if (handle != NULL) {
+        FreeLibrary((HMODULE) handle);
+    }
+}
+
+/* Java_jdk_internal_loader_NativeLibraries_findBuiltinLib calls findJniFunction which uses JVM_FindLibraryEntry. */
+JNIEXPORT void* JNICALL JVM_FindLibraryEntry(void* handle, const char* name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    void* result = __svm_find_builtin_symbol(name);
+    if (result != NULL) {
+        return result;
+    }
+    return (void*) GetProcAddress((HMODULE) handle, name);
 }
 
 JNIEXPORT void JNICALL JVM_BeforeHalt() {

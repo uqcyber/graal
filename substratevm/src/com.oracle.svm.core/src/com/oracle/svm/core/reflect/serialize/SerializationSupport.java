@@ -43,6 +43,7 @@ import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.reflect.SubstrateConstructorAccessor;
 import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
@@ -229,13 +230,8 @@ public class SerializationSupport {
     public void registerSerializationTargetClass(AccessCondition cnd, DynamicHub hub, boolean preserved) {
         VMError.guarantee(!BuildPhaseProvider.isHostedUniverseBuilt());
         synchronized (hostedClasses) {
-            var previous = hostedClasses.putIfAbsent(new DynamicHubKey(hub), RuntimeDynamicAccessMetadata.createHosted(cnd, preserved));
-            if (previous != null) {
-                previous.addCondition(cnd);
-                if (!preserved) {
-                    previous.setNotPreserved();
-                }
-            }
+            DynamicHubKey key = new DynamicHubKey(hub);
+            hostedClasses.put(key, RuntimeDynamicAccessMetadata.addCondition(hostedClasses.get(key), cnd, preserved));
         }
     }
 
@@ -269,11 +265,9 @@ public class SerializationSupport {
     @Platforms(Platform.HOSTED_ONLY.class)
     public void registerLambdaCapturingClass(AccessCondition cnd, String lambdaCapturingClass) {
         synchronized (lambdaCapturingClasses) {
-            var previousConditions = lambdaCapturingClasses.putIfAbsent(lambdaCapturingClass, RuntimeDynamicAccessMetadata.createHosted(cnd, false));
-            if (previousConditions != null) {
-                previousConditions.addCondition(cnd);
-            }
+            lambdaCapturingClasses.put(lambdaCapturingClass, RuntimeDynamicAccessMetadata.addCondition(lambdaCapturingClasses.get(lambdaCapturingClass), cnd, false));
         }
+        PredefinedClassesSupport.registerSerializableLambdasForCapturingClass(lambdaCapturingClass);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)

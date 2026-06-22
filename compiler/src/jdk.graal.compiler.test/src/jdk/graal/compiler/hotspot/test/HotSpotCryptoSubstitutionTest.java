@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -55,15 +55,33 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.internal.AssumptionViolatedException;
 
+import jdk.graal.compiler.core.common.spi.ForeignCallDescriptor;
 import jdk.graal.compiler.core.test.GraalCompilerTest;
-import jdk.graal.compiler.hotspot.meta.HotSpotForeignCallDescriptor;
+import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.extended.ForeignCallNode;
 import jdk.graal.compiler.replacements.SnippetSubstitutionNode;
 import jdk.graal.compiler.replacements.nodes.AESNode;
 import jdk.graal.compiler.replacements.nodes.CipherBlockChainingAESNode;
+import jdk.graal.compiler.replacements.nodes.ChaCha20Node;
 import jdk.graal.compiler.replacements.nodes.CounterModeAESNode;
+import jdk.graal.compiler.replacements.nodes.DilithiumNode;
 import jdk.graal.compiler.replacements.nodes.ElectronicCodeBookAESNode;
+import jdk.graal.compiler.replacements.nodes.GaloisCounterModeAESNode;
+import jdk.graal.compiler.replacements.nodes.Poly1305ProcessBlocksNode;
+import jdk.graal.compiler.replacements.nodes.DilithiumNode.DilithiumAlmostInverseNttNode;
+import jdk.graal.compiler.replacements.nodes.DilithiumNode.DilithiumAlmostNttNode;
+import jdk.graal.compiler.replacements.nodes.DilithiumNode.DilithiumDecomposePolyNode;
+import jdk.graal.compiler.replacements.nodes.DilithiumNode.DilithiumMontMulByConstantNode;
+import jdk.graal.compiler.replacements.nodes.DilithiumNode.DilithiumNttMultNode;
+import jdk.graal.compiler.replacements.nodes.KyberNode;
+import jdk.graal.compiler.replacements.nodes.KyberNode.Kyber12To16Node;
+import jdk.graal.compiler.replacements.nodes.KyberNode.KyberAddPoly2Node;
+import jdk.graal.compiler.replacements.nodes.KyberNode.KyberAddPoly3Node;
+import jdk.graal.compiler.replacements.nodes.KyberNode.KyberBarrettReduceNode;
+import jdk.graal.compiler.replacements.nodes.KyberNode.KyberInverseNttNode;
+import jdk.graal.compiler.replacements.nodes.KyberNode.KyberNttMultNode;
+import jdk.graal.compiler.replacements.nodes.KyberNode.KyberNttNode;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA1Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA256Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA3Node;
@@ -198,7 +216,7 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
 
     @Test
     public void testGaloisCounterModeCrypt() throws Exception {
-        Assume.assumeTrue("GaloisCounterMode not supported", runtime().getVMConfig().galoisCounterModeCrypt != 0L);
+        Assume.assumeTrue("GaloisCounterMode not supported", GaloisCounterModeAESNode.isSupported(getArchitecture()));
         testEncryptDecrypt("com.sun.crypto.provider.GaloisCounterMode", "implGCMCrypt0", "AES", 128, "AES/GCM/NoPadding");
         testEncryptDecrypt("com.sun.crypto.provider.GaloisCounterMode", "implGCMCrypt0", "AES", 128, "AES/GCM/PKCS5Padding");
         testEncryptDecrypt("com.sun.crypto.provider.GaloisCounterMode", "implGCMCrypt0", "DESede", 168, "DESede/GCM/NoPadding");
@@ -207,7 +225,7 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
 
     @Test
     public void testPoly1305() throws Exception {
-        Assume.assumeTrue("Poly1305 not supported", runtime().getVMConfig().poly1305ProcessBlocks != 0L);
+        Assume.assumeTrue("Poly1305 not supported", Poly1305ProcessBlocksNode.isSupportedForRuntimeCheckedStub(getTarget().arch));
         testEncryptDecrypt(getResolvedJavaMethod("com.sun.crypto.provider.Poly1305", "processMultipleBlocks", byte[].class, int.class, int.class, long[].class, long[].class),
                         "ChaCha20", 256, "ChaCha20-Poly1305/None/NoPadding");
         testEncryptDecrypt(getResolvedJavaMethod("com.sun.crypto.provider.Poly1305", "processMultipleBlocks", byte[].class, int.class, int.class, long[].class, long[].class),
@@ -220,11 +238,50 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
 
     @Test
     public void testChaCha20() throws Exception {
-        Assume.assumeTrue("ChaCha20 not support", runtime().getVMConfig().chacha20Block != 0L);
+        Assume.assumeTrue("ChaCha20 not support", ChaCha20Node.isSupported(getArchitecture()));
         testEncryptDecrypt("com.sun.crypto.provider.ChaCha20Cipher", "implChaCha20Block", "ChaCha20", 256, "ChaCha20-Poly1305/None/NoPadding");
         testEncryptDecrypt("com.sun.crypto.provider.ChaCha20Cipher", "implChaCha20Block", "ChaCha20", 256, "ChaCha20-Poly1305/ECB/NoPadding");
         testEncryptDecrypt("com.sun.crypto.provider.ChaCha20Cipher", "implChaCha20Block", "ChaCha20", 256, "ChaCha20-Poly1305/None/PKCS5Padding");
         testEncryptDecrypt("com.sun.crypto.provider.ChaCha20Cipher", "implChaCha20Block", "ChaCha20", 256, "ChaCha20-Poly1305/ECB/PKCS5Padding");
+    }
+
+    @Test
+    public void testChaCha20OwnershipAndDirectImplBlock() throws Exception {
+        Assume.assumeTrue("ChaCha20 not support", ChaCha20Node.isSupported(getArchitecture()));
+
+        ResolvedJavaMethod intrinsicMethod = getResolvedJavaMethod("com.sun.crypto.provider.ChaCha20Cipher", "implChaCha20Block", int[].class, byte[].class);
+
+        InstalledCode intrinsic = compileAndInstallSubstitution(intrinsicMethod);
+        Assert.assertTrue("missing intrinsic", intrinsic != null);
+        try {
+            int[] state = initialChaCha20State();
+            byte[] actualKeystream = new byte[1024];
+            int actualLength = (int) executeVarargsSafe(intrinsic, state, actualKeystream);
+
+            Assert.assertTrue("unexpected ChaCha20 output length", actualLength == 128 || actualLength == 256 || actualLength == 1024);
+            Assert.assertFalse("keystream should not be all zero", isAllZero(actualKeystream, actualLength));
+            Assert.assertArrayEquals("intrinsic must not mutate initState", initialChaCha20State(), state);
+        } finally {
+            intrinsic.invalidate();
+        }
+    }
+
+    private static int[] initialChaCha20State() {
+        return new int[]{
+                        0x61707865, 0x3320646e, 0x79622d32, 0x6b206574,
+                        0x03020100, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
+                        0x13121110, 0x17161514, 0x1b1a1918, 0x1f1e1d1c,
+                        1, 0x09000000, 0x4a000000, 0,
+        };
+    }
+
+    private static boolean isAllZero(byte[] data, int length) {
+        for (int i = 0; i < length; i++) {
+            if (data[i] != 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     AlgorithmParameters algorithmParameters;
@@ -310,9 +367,11 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
     @Before
     public void clearExceptionCall() {
         expectedCall = null;
+        expectedNode = null;
     }
 
-    HotSpotForeignCallDescriptor expectedCall;
+    ForeignCallDescriptor expectedCall;
+    Class<? extends Node> expectedNode;
 
     @Override
     protected void checkLowTierGraph(StructuredGraph graph) {
@@ -324,9 +383,12 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
             }
             assertTrue("expected call to " + expectedCall, false);
         }
+        if (expectedNode != null && graph.getNodes().filter(expectedNode).isEmpty()) {
+            assertTrue("expected node " + expectedNode.getSimpleName(), false);
+        }
     }
 
-    private void testDigestBase(String className, String methodName, String algorithm, HotSpotForeignCallDescriptor call) throws Exception {
+    private void testDigestBase(String className, String methodName, String algorithm, ForeignCallDescriptor call) throws Exception {
         Class<?> klass = Class.forName(className);
         expectedCall = call;
         MessageDigest digest = MessageDigest.getInstance(algorithm);
@@ -423,6 +485,39 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
         }
     }
 
+    void testWithInstalledIntrinsicAndExpectedNode(String className, String methodName, Class<? extends Node> expectedNodeClass, String testSnippetName, Object... args) {
+        Class<?> c;
+        try {
+            c = Class.forName(className);
+        } catch (ClassNotFoundException e) {
+            Assume.assumeTrue(className + " is not available", false);
+            return;
+        }
+        testWithInstalledIntrinsicAndExpectedNode(getMetaAccess().lookupJavaMethod(getMethod(c, methodName)), expectedNodeClass, testSnippetName, args);
+    }
+
+    void testWithInstalledIntrinsicAndExpectedNode(ResolvedJavaMethod intrinsicMethod, Class<? extends Node> expectedNodeClass, String testSnippetName, Object... args) {
+        InstalledCode code = null;
+        try {
+            ResolvedJavaMethod method = getResolvedJavaMethod(testSnippetName);
+            Object receiver = method.isStatic() ? null : this;
+            GraalCompilerTest.Result expect = executeExpected(method, receiver, args);
+            expectedNode = expectedNodeClass;
+            code = compileAndInstallSubstitution(intrinsicMethod);
+            assertTrue("Failed to install " + intrinsicMethod.getName(), code != null);
+            expectedNode = null;
+            testAgainstExpected(method, expect, receiver, args);
+        } catch (AssumptionViolatedException e) {
+            // Suppress so that subsequent calls to this method within the
+            // same Junit @Test annotated method can proceed.
+        } finally {
+            expectedNode = null;
+            if (code != null) {
+                code.invalidate();
+            }
+        }
+    }
+
     @Test
     public void testSha256() {
         Assume.assumeTrue("SHA256 not supported", SHA256Node.isSupported(getArchitecture()));
@@ -507,11 +602,8 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
     @Test
     public void testMLDSASigVer() {
         Assume.assumeTrue("ML_DSA not supported", runtime().getVMConfig().stubDoubleKeccak != 0L);
-        Assume.assumeTrue("ML_DSA not supported", runtime().getVMConfig().stubDilithiumAlmostNtt != 0L);
-        Assume.assumeTrue("ML_DSA not supported", runtime().getVMConfig().stubDilithiumAlmostInverseNtt != 0L);
-        Assume.assumeTrue("ML_DSA not supported", runtime().getVMConfig().stubDilithiumNttMult != 0L);
-        Assume.assumeTrue("ML_DSA not supported", runtime().getVMConfig().stubDilithiumMontMulByConstant != 0L);
-        Assume.assumeTrue("ML_DSA not supported", runtime().getVMConfig().stubDilithiumDecomposePoly != 0L);
+        Assume.assumeTrue("ML_DSA not supported", DilithiumNode.isSupported(getArchitecture()));
+        assertMLDSAGraalNodeInstallations();
         // ML-DSA-44
         testWithInstalledIntrinsic("sun.security.provider.SHA3Parallel", "doubleKeccak", "testSignVer", "ML-DSA-44");
         testWithInstalledIntrinsic("sun.security.provider.ML_DSA", "implDilithiumAlmostNtt", "testSignVer", "ML-DSA-44");
@@ -535,6 +627,40 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
         testWithInstalledIntrinsic("sun.security.provider.ML_DSA", "implDilithiumDecomposePoly", "testSignVer", "ML-DSA-87");
     }
 
+    private void assertMLDSAGraalNodeInstallations() {
+        try {
+            assertNodeInstalledWithoutForeignCall("implDilithiumAlmostNtt", DilithiumAlmostNttNode.class, int[].class, int[].class);
+            assertNodeInstalledWithoutForeignCall("implDilithiumAlmostInverseNtt", DilithiumAlmostInverseNttNode.class, int[].class, int[].class);
+            assertNodeInstalledWithoutForeignCall("implDilithiumNttMult", DilithiumNttMultNode.class, int[].class, int[].class, int[].class);
+            assertNodeInstalledWithoutForeignCall("implDilithiumMontMulByConstant", DilithiumMontMulByConstantNode.class, int[].class, int.class);
+            assertNodeInstalledWithoutForeignCall("implDilithiumDecomposePoly", DilithiumDecomposePolyNode.class,
+                            int[].class, int[].class, int[].class, int.class, int.class);
+        } catch (ClassNotFoundException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private void assertNodeInstalledWithoutForeignCall(String methodName, Class<? extends Node> expectedNodeClass, Class<?>... parameterTypes) throws ClassNotFoundException {
+        ResolvedJavaMethod method = getResolvedJavaMethod("sun.security.provider.ML_DSA", methodName, parameterTypes);
+        var compilationId = runtime().getHostBackend().getCompilationIdentifier(method);
+        StructuredGraph graph = getIntrinsicGraph(method, compilationId, getDebugContext(getInitialOptions()), StructuredGraph.AllowAssumptions.YES, null);
+        assertTrue("missing intrinsic graph for " + methodName, graph != null);
+        boolean hasExpectedNode = graph.getNodes().filter(expectedNodeClass).isNotEmpty();
+        if (!hasExpectedNode) {
+            StringBuilder nodeKinds = new StringBuilder();
+            for (Node node : graph.getNodes()) {
+                if (!nodeKinds.isEmpty()) {
+                    nodeKinds.append(", ");
+                }
+                nodeKinds.append(node.getClass().getSimpleName());
+            }
+            throw new AssertionError("expected Dilithium node " + expectedNodeClass.getSimpleName() + " for " + methodName + "; nodes=" + nodeKinds);
+        }
+        for (ForeignCallNode node : graph.getNodes().filter(ForeignCallNode.class)) {
+            throw new AssertionError("unexpected ForeignCallNode path for " + methodName + ": " + node.getDescriptor());
+        }
+    }
+
     public boolean testMLKEMEncapsulateDecapsulate(String algorithm) throws GeneralSecurityException {
         var kp = generateKeyPair(algorithm);
         var senderKem = KEM.getInstance(algorithm);
@@ -553,49 +679,51 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
 
     @Test
     public void testMLKEM() {
-        Assume.assumeTrue("ML_KEM not supported", runtime().getVMConfig().stubKyberNtt != 0L);
-        Assume.assumeTrue("ML_KEM not supported", runtime().getVMConfig().stubKyberInverseNtt != 0L);
-        Assume.assumeTrue("ML_KEM not supported", runtime().getVMConfig().stubKyberNttMult != 0L);
-        Assume.assumeTrue("ML_KEM not supported", runtime().getVMConfig().stubKyberAddPoly2 != 0L);
-        Assume.assumeTrue("ML_KEM not supported", runtime().getVMConfig().stubKyberAddPoly3 != 0L);
-        Assume.assumeTrue("ML_KEM not supported", runtime().getVMConfig().stubKyber12To16 != 0L);
-        Assume.assumeTrue("ML_KEM not supported", runtime().getVMConfig().stubKyberBarrettReduce != 0L);
+        Assume.assumeTrue("ML_KEM not supported", KyberNode.isSupported(getArchitecture()));
 
         Class<?> c;
         try {
-            c = Class.forName("sun.security.provider.ML_KEM");
+            c = Class.forName("com.sun.crypto.provider.ML_KEM");
         } catch (ClassNotFoundException e) {
-            Assume.assumeTrue("sun.security.provider.ML_KEM is not available", false);
+            Assume.assumeTrue("com.sun.crypto.provider.ML_KEM is not available", false);
             return;
         }
 
         // ML-KEM-512
-        testWithInstalledIntrinsic("sun.security.provider.ML_KEM", "implKyberNtt", "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberInverseNtt", "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberNttMult", "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
-        testWithInstalledIntrinsic(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class)), "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
-        testWithInstalledIntrinsic(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class, short[].class)), "testMLKEMEncapsulateDecapsulate",
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberNtt", KyberNttNode.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberInverseNtt", KyberInverseNttNode.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberNttMult", KyberNttMultNode.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
+        testWithInstalledIntrinsicAndExpectedNode(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class)), KyberAddPoly2Node.class,
+                        "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
+        testWithInstalledIntrinsicAndExpectedNode(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class, short[].class)),
+                        KyberAddPoly3Node.class, "testMLKEMEncapsulateDecapsulate",
                         "ML-KEM-512");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyber12To16", "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyber12To16", "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberBarrettReduce", "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyber12To16", Kyber12To16Node.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-512");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberBarrettReduce", KyberBarrettReduceNode.class, "testMLKEMEncapsulateDecapsulate",
+                        "ML-KEM-512");
         // ML-KEM-768
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberNtt", "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberInverseNtt", "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberNttMult", "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
-        testWithInstalledIntrinsic(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class)), "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
-        testWithInstalledIntrinsic(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class, short[].class)), "testMLKEMEncapsulateDecapsulate",
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberNtt", KyberNttNode.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberInverseNtt", KyberInverseNttNode.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberNttMult", KyberNttMultNode.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
+        testWithInstalledIntrinsicAndExpectedNode(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class)), KyberAddPoly2Node.class,
+                        "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
+        testWithInstalledIntrinsicAndExpectedNode(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class, short[].class)),
+                        KyberAddPoly3Node.class, "testMLKEMEncapsulateDecapsulate",
                         "ML-KEM-768");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyber12To16", "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberBarrettReduce", "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyber12To16", Kyber12To16Node.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-768");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberBarrettReduce", KyberBarrettReduceNode.class, "testMLKEMEncapsulateDecapsulate",
+                        "ML-KEM-768");
         // ML-KEM-1024
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberNtt", "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberInverseNtt", "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberNttMult", "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
-        testWithInstalledIntrinsic(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class)), "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
-        testWithInstalledIntrinsic(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class, short[].class)), "testMLKEMEncapsulateDecapsulate",
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberNtt", KyberNttNode.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberInverseNtt", KyberInverseNttNode.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberNttMult", KyberNttMultNode.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
+        testWithInstalledIntrinsicAndExpectedNode(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class)), KyberAddPoly2Node.class,
+                        "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
+        testWithInstalledIntrinsicAndExpectedNode(getMetaAccess().lookupJavaMethod(getMethod(c, "implKyberAddPoly", short[].class, short[].class, short[].class, short[].class)),
+                        KyberAddPoly3Node.class, "testMLKEMEncapsulateDecapsulate",
                         "ML-KEM-1024");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyber12To16", "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
-        testWithInstalledIntrinsic("sun.security.provider.ML-KEM", "implKyberBarrettReduce", "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyber12To16", Kyber12To16Node.class, "testMLKEMEncapsulateDecapsulate", "ML-KEM-1024");
+        testWithInstalledIntrinsicAndExpectedNode("com.sun.crypto.provider.ML_KEM", "implKyberBarrettReduce", KyberBarrettReduceNode.class, "testMLKEMEncapsulateDecapsulate",
+                        "ML-KEM-1024");
     }
 }

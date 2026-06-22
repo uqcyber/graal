@@ -104,6 +104,7 @@ import jdk.vm.ci.meta.Signature;
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public class InterpreterFeature implements InternalFeature {
     private AnalysisMethod leaveStub;
+    private AnalysisMethod leaveJNIStub;
 
     static boolean assertionsEnabled() {
         boolean enabled = false;
@@ -261,19 +262,29 @@ public class InterpreterFeature implements InternalFeature {
         int intrinsicMethodSlot = findLocalSlotByName("method", intrinsicVariableTable.getLocalsAt(0)); // parameter
         int intrinsicFrameSlot = findLocalSlotByName("frame", intrinsicVariableTable.getLocalsAt(0)); // parameter
 
-        ImageSingletons.add(InterpreterSupport.class, new InterpreterSupportImpl(bciSlot, interpreterStartBCISlot, interpreterMethodSlot, interpreterFrameSlot,
-                        intrinsicMethodSlot, intrinsicFrameSlot));
+        AnalysisMethod interpreterJNIDowncallRoot = (AnalysisMethod) getLeaveInterpreterJNIMethod(metaAccess);
+        assert interpreterJNIDowncallRoot.hasNeverInlineDirective();
+        LocalVariableTable interpreterJNIDowncallVariableTable = interpreterJNIDowncallRoot.getLocalVariableTable();
+        int interpreterJNIDowncallMethodSlot = findLocalSlotByName("seedMethod", interpreterJNIDowncallVariableTable.getLocalsAt(0)); // parameter
+
+        ImageSingletons.add(InterpreterSupport.class, new InterpreterSupportImpl(bciSlot, interpreterStartBCISlot, interpreterMethodSlot, interpreterFrameSlot, intrinsicMethodSlot, intrinsicFrameSlot,
+                        interpreterJNIDowncallMethodSlot));
         ImageSingletons.add(InterpreterDirectivesSupport.class, new InterpreterDirectivesSupportImpl());
-        ImageSingletons.add(InterpreterNotCompiledMethodPointerHolder.class, new InterpreterNotCompiledMethodPointerHolder(accessImpl.getMetaAccess()));
+        ImageSingletons.add(InterpreterKnownCompiledEntryPoints.class, new InterpreterKnownCompiledEntryPoints(accessImpl, accessImpl.getMetaAccess()));
 
         // Locals must be available at runtime to retrieve BCI, interpreted method and interpreter
         // frame.
         SubstrateCompilationDirectives.singleton().registerFrameInformationRequired(interpreterRoot);
         SubstrateCompilationDirectives.singleton().registerFrameInformationRequired(intrinsicRoot);
+        SubstrateCompilationDirectives.singleton().registerFrameInformationRequired(interpreterJNIDowncallRoot);
 
         Method leaveMethod = ReflectionUtil.lookupMethod(InterpreterStubSection.class, "leaveInterpreterStub", CFunctionPointer.class, Pointer.class, long.class, boolean.class);
         leaveStub = metaAccess.lookupJavaMethod(leaveMethod);
         accessImpl.registerAsRoot(leaveStub, true, "low level entry point");
+
+        Method leaveJNIMethod = ReflectionUtil.lookupMethod(InterpreterStubSection.class, "leaveInterpreterJNIStub", CFunctionPointer.class, Pointer.class, long.class, boolean.class);
+        leaveJNIStub = metaAccess.lookupJavaMethod(leaveJNIMethod);
+        accessImpl.registerAsRoot(leaveJNIStub, true, "low level JNI entry point");
 
         InterpreterOptions.registerInterpreterTraceOptionValidation();
     }
@@ -313,6 +324,11 @@ public class InterpreterFeature implements InternalFeature {
         int leaveStubLength = accessImpl.getCompilations().get(hLeaveStub).result.getTargetCodeSize();
 
         InterpreterSupport.setLeaveStubPointer(new MethodPointer(hLeaveStub), leaveStubLength);
+
+        HostedMethod hLeaveJNIStub = accessImpl.getUniverse().lookup(leaveJNIStub);
+        int leaveJNIStubLength = accessImpl.getCompilations().get(hLeaveJNIStub).result.getTargetCodeSize();
+
+        InterpreterSupport.setLeaveJNIStubPointer(new MethodPointer(hLeaveJNIStub), leaveJNIStubLength);
     }
 
     private static ResolvedJavaMethod getExecuteBodyFromBCIMethod(MetaAccessProvider metaAccess) {
@@ -325,6 +341,11 @@ public class InterpreterFeature implements InternalFeature {
         ResolvedJavaType intrinsicRootType = metaAccess.lookupJavaType(Interpreter.IntrinsicRoot.class);
         return JVMCIReflectionUtil.getUniqueDeclaredMethod(metaAccess, intrinsicRootType, "execute",
                         InterpreterFrame.class, InterpreterResolvedJavaMethod.class, SignaturePolymorphicIntrinsic.class, boolean.class);
+    }
+
+    private static ResolvedJavaMethod getLeaveInterpreterJNIMethod(MetaAccessProvider metaAccess) {
+        ResolvedJavaType jniDowncallRootType = metaAccess.lookupJavaType(Interpreter.JNIDowncallRoot.class);
+        return JVMCIReflectionUtil.getUniqueDeclaredMethod(metaAccess, jniDowncallRootType, "execute", InterpreterResolvedJavaMethod.class, Object[].class);
     }
 
     @Override

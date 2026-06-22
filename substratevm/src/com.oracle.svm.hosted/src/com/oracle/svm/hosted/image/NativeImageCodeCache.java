@@ -44,7 +44,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -84,6 +83,7 @@ import com.oracle.svm.core.configure.ConditionalRuntimeValue;
 import com.oracle.svm.core.deopt.DeoptEntryInfopoint;
 import com.oracle.svm.core.graal.code.SubstrateDataBuilder;
 import com.oracle.svm.core.graal.nodes.TLABObjectHeaderConstant;
+import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.interpreter.InterpreterSupport;
 import com.oracle.svm.core.meta.CompressedNullConstant;
 import com.oracle.svm.core.meta.MethodPointer;
@@ -113,6 +113,7 @@ import com.oracle.svm.shared.util.VMError;
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.code.DataSection;
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.type.CompressibleConstant;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.options.Option;
@@ -143,7 +144,7 @@ public abstract class NativeImageCodeCache {
     protected final NativeImageHeap imageHeap;
 
     /** The entirety of compilations in this code cache. */
-    private Map<HostedMethod, CompilationResult> compilations;
+    protected Map<HostedMethod, CompilationResult> compilationsMap;
 
     private List<Pair<HostedMethod, CompilationResult>> orderedCompilations;
 
@@ -170,27 +171,40 @@ public abstract class NativeImageCodeCache {
     }
 
     public void purge() {
-        assert compilations != null && orderedCompilations != null && deterministicCompilationUnitOrderForConstantLayout != null : "Code cache already purged";
-        compilations = null;
+        assert compilationsMap != null && orderedCompilations != null && deterministicCompilationUnitOrderForConstantLayout != null : "Code cache already purged";
+        compilationsMap = null;
         orderedCompilations = null;
         deterministicCompilationUnitOrderForConstantLayout = null;
     }
 
     @SuppressWarnings("this-escape")//
-    public NativeImageCodeCache(Map<HostedMethod, CompilationResult> compilations, NativeImageHeap imageHeap, Platform targetPlatform) {
-        this.compilations = compilations;
+    public NativeImageCodeCache(Map<HostedMethod, CompilationResult> compilationsMap, NativeImageHeap imageHeap, Platform targetPlatform) {
+        this.compilationsMap = compilationsMap;
         this.imageHeap = imageHeap;
         this.dataSection = new DataSection();
         this.targetPlatform = targetPlatform;
         this.orderedCompilations = layoutCompilations();
-        this.deterministicCompilationUnitOrderForConstantLayout = doLayoutWithLayouter(compilations, new SortByMethodNameCodeSectionLayouter());
+        this.deterministicCompilationUnitOrderForConstantLayout = doLayoutCompilations(compilationsMap, new SortByMethodNameCodeSectionLayouter());
     }
 
     public abstract int getCodeCacheSize();
 
+    /**
+     * Some code cache implementations emit their method code into a separate linker input. In that
+     * case, the native image object file still needs a text section while it is being built, but
+     * that section must not define the final code section boundary symbols.
+     */
+    public boolean definesTextSectionBoundarySymbols() {
+        return true;
+    }
+
     public int getCodeAreaSize() {
         assert codeAreaSize >= 0;
         return codeAreaSize;
+    }
+
+    public int getCodeAreaCompilationCount() {
+        return getOrderedCompilations().size();
     }
 
     public void setCodeAreaSize(int size) {
@@ -207,42 +221,45 @@ public abstract class NativeImageCodeCache {
         return orderedCompilations.getLast();
     }
 
-    private List<Pair<HostedMethod, CompilationResult>> layoutCompilations() {
+    protected List<Pair<HostedMethod, CompilationResult>> layoutCompilations() {
+        return doLayoutCompilations(compilationsMap, ImageSingletons.lookup(CodeSectionLayouter.class), getInvalidCodeAddressHandler(imageHeap.hMetaAccess));
+    }
 
-        /* We force this method to be at code offset 0 to make that offset and address invalid. */
-        HostedMethod invalidMethod = getInvalidCodeAddressHandler(imageHeap.hMetaAccess);
+    /**
+     * Returns the ordered list of compilations from {@code compilationMap} using {@code layouter} as the ordering strategy.
+     * If {@code invalidMethod} is not null it will be at index 0 in the returned ordered list.
+     */
+    protected static List<Pair<HostedMethod, CompilationResult>> doLayoutCompilations(Map<HostedMethod, CompilationResult> compilationMap, CodeSectionLayouter layouter, HostedMethod invalidMethod) {
+        List<Pair<HostedMethod, CompilationResult>> orderedCompilations = new ArrayList<>(compilationMap.size());
 
-        var ordCompilations = new ArrayList<Pair<HostedMethod, CompilationResult>>();
         if (invalidMethod != null) {
-            ordCompilations.add(Pair.create(invalidMethod, compilations.get(invalidMethod)));
+            /*
+             * We force this method to be at code offset 0 to make that offset and address invalid.
+             */
+            orderedCompilations.add(Pair.create(invalidMethod, compilationMap.get(invalidMethod)));
         }
 
-        var orderedMethods = doLayout(compilations, ImageSingletons.lookup(CodeSectionLayouter.class));
-        for (Pair<HostedMethod, CompilationResult> pair : orderedMethods) {
-            HostedMethod method = pair.getLeft();
-            if (!Objects.equals(invalidMethod, method)) {
-                ordCompilations.add(pair);
+        for (HostedMethod method : layouter.layout(compilationMap)) {
+            if (!method.equals(invalidMethod)) {
+                orderedCompilations.add(Pair.create(method, compilationMap.get(method)));
             }
         }
-        return ordCompilations;
+
+        assert orderedCompilations.size() == compilationMap.size();
+        return orderedCompilations;
     }
 
-    protected List<Pair<HostedMethod, CompilationResult>> doLayout(Map<HostedMethod, CompilationResult> compilationMap, CodeSectionLayouter layouter) {
-        return doLayoutWithLayouter(compilationMap, layouter);
+    protected static List<Pair<HostedMethod, CompilationResult>> doLayoutCompilations(Map<HostedMethod, CompilationResult> compilationMap, CodeSectionLayouter layouter) {
+        return doLayoutCompilations(compilationMap, layouter, null);
     }
 
-    private static List<Pair<HostedMethod, CompilationResult>> doLayoutWithLayouter(Map<HostedMethod, CompilationResult> compilationMap, CodeSectionLayouter layouter) {
-        return layouter.layout(compilationMap).stream()
-                        .map(hm -> Pair.create(hm, compilationMap.get(hm)))
-                        .collect(Collectors.toCollection(() -> new ArrayList<>(compilationMap.size())));
-    }
-
-    private static HostedMethod getInvalidCodeAddressHandler(HostedMetaAccess metaAccess) {
+    protected static HostedMethod getInvalidCodeAddressHandler(HostedMetaAccess metaAccess) {
         Method invalidCodeMethod = MethodPointerInvalidHandlerFeature.getInvalidCodeAddressHandler();
         return (invalidCodeMethod == null) ? null : metaAccess.lookupJavaMethod(invalidCodeMethod);
     }
 
     public List<Pair<HostedMethod, CompilationResult>> getOrderedCompilations() {
+        assert orderedCompilations != null;
         return orderedCompilations;
     }
 
@@ -256,7 +273,7 @@ public abstract class NativeImageCodeCache {
     public abstract int codeSizeFor(HostedMethod method);
 
     public CompilationResult compilationResultFor(HostedMethod method) {
-        return compilations.get(method);
+        return compilationsMap.get(method);
     }
 
     public abstract void layoutMethods(DebugContext debug, BigBang bb);
@@ -776,7 +793,25 @@ public abstract class NativeImageCodeCache {
 
     public void writeConstants(NativeImageHeapWriter writer, RelocatableBuffer buffer) {
         ByteBuffer bb = buffer.getByteBuffer();
-        dataSection.buildDataSection(bb, (position, constant) -> writer.writeReference(buffer, position, (JavaConstant) constant, "VMConstant: " + constant));
+        dataSection.buildDataSection(bb, (position, constant) -> {
+            if (constant instanceof TLABObjectHeaderConstant objectHeaderConstant) {
+                writeTLABObjectHeader(buffer, position, objectHeaderConstant);
+            } else {
+                writer.writeReference(buffer, position, (JavaConstant) constant, "VMConstant: " + constant);
+            }
+        });
+    }
+
+    private void writeTLABObjectHeader(RelocatableBuffer buffer, int position, TLABObjectHeaderConstant constant) {
+        JavaConstant hub = constant.hub();
+        long hubOffsetFromHeapBase = imageHeap.getConstantInfo(hub).getOffset();
+        VMError.guarantee(hubOffsetFromHeapBase != 0, "hub must be non-null: %s", hub);
+        long targetValue = Heap.getHeap().getObjectHeader().encodeAsTLABObjectHeader(hubOffsetFromHeapBase);
+        if (constant.getJavaKind() == JavaKind.Long) {
+            buffer.getByteBuffer().putLong(position, targetValue);
+        } else {
+            buffer.getByteBuffer().putInt(position, NumUtil.safeToUInt(targetValue));
+        }
     }
 
     public abstract NativeTextSectionImpl getTextSectionImpl(RelocatableBuffer buffer, ObjectFile objectFile, NativeImageCodeCache codeCache);

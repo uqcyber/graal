@@ -33,14 +33,12 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.RuntimeJNIAccess;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 
-import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.jdk.JNIRegistrationUtil;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.hosted.FeatureImpl;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.util.dynamicaccess.JVMCIRuntimeJNIAccess;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -49,7 +47,6 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * Registration of classes, methods, and fields accessed via JNI by C code of the JDK.
  */
 @Platforms(InternalPlatform.PLATFORM_JNI.class)
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 @AutomaticallyRegisteredFeature
 class JNIRegistrationJava extends JNIRegistrationUtil implements InternalFeature {
 
@@ -112,6 +109,12 @@ class JNIRegistrationJava extends JNIRegistrationUtil implements InternalFeature
         RuntimeJNIAccess.register(System.class);
         JVMCIRuntimeJNIAccess.register(method(a, "java.lang.System", "getProperty", String.class));
         RuntimeJNIAccess.register(java.nio.charset.Charset.class);
+        if (ClassRegistries.respectClassLoader()) {
+            // initIDs in NativeLibraries.c needs the following symbols to be available via JNI
+            Class<?> nativeLibraryImpl = a.findClassByName("jdk.internal.loader.NativeLibraries$NativeLibraryImpl");
+            RuntimeJNIAccess.register(nativeLibraryImpl);
+            JVMCIRuntimeJNIAccess.register(fields(a, "jdk.internal.loader.NativeLibraries$NativeLibraryImpl", "handle", "jniVersion"));
+        }
         JVMCIRuntimeJNIAccess.register(constructor(a, "java.lang.String", byte[].class));
         JVMCIRuntimeJNIAccess.register(method(a, "java.lang.String", "getBytes"));
         JVMCIRuntimeJNIAccess.register(method(a, "java.nio.charset.Charset", "forName", String.class));
@@ -142,7 +145,15 @@ class JNIRegistrationJava extends JNIRegistrationUtil implements InternalFeature
                             method(a, "sun.net.spi.DefaultProxySelector", "getSystemProxies", String.class, String.class),
                             method(a, "sun.net.spi.DefaultProxySelector", "init")));
 
-            a.registerReachabilityHandler(CORESERVICES_LINKER, methods.toArray(new Object[]{}));
+            if (ClassRegistries.respectClassLoader()) {
+                // GR-76168: frameworks should not be necessary
+                FeatureImpl.BeforeAnalysisAccessImpl accessImpl = (FeatureImpl.BeforeAnalysisAccessImpl) a;
+                accessImpl.getNativeLibraries().addDynamicNonJniLibrary("-framework CoreServices");
+                accessImpl.getNativeLibraries().addDynamicNonJniLibrary("-framework SystemConfiguration");
+            } else {
+                a.registerReachabilityHandler(CORESERVICES_LINKER, methods.toArray(new Object[]{}));
+            }
+
         }
 
         a.registerReachabilityHandler(JNIRegistrationJava::registerProcessHandleImplInfoInitIDs, method(a, "java.lang.ProcessHandleImpl$Info", "initIDs"));

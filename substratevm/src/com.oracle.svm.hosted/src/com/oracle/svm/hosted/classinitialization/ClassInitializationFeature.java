@@ -36,6 +36,7 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.impl.clinit.ClassInitializationTracking;
 
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
@@ -71,6 +72,11 @@ import jdk.graal.compiler.phases.util.Providers;
 @AutomaticallyRegisteredFeature
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 public class ClassInitializationFeature implements InternalFeature {
+    @Override
+    public void onRegistration(OnRegistrationAccess access) {
+        ImageSingletons.add(ClassInitializationFeature.class, this);
+    }
+
     private static final String NATIVE_IMAGE_CLASS_REASON = "Native Image classes are always initialized at build time";
 
     private ClassInitializationSupport classInitializationSupport;
@@ -258,7 +264,7 @@ public class ClassInitializationFeature implements InternalFeature {
                  * which JDK classes are safe for initialization at image build time.
                  */
                 List<String> unspecifiedClasses = classInitializationSupport.classesWithKind(RUN_TIME).stream()
-                                .filter(c -> c.getClassLoader() != null && c.getClassLoader() != ClassLoader.getPlatformClassLoader())
+                                .filter(ClassInitializationFeature::shouldCheckInitializationPolicy)
                                 .filter(c -> classInitializationSupport.specifiedInitKindFor(c) == null)
                                 .map(Class::getTypeName)
                                 .filter(name -> !name.contains(LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING))
@@ -270,6 +276,27 @@ public class ClassInitializationFeature implements InternalFeature {
                 }
             }
         }
+    }
+
+    private static boolean shouldCheckInitializationPolicy(Class<?> clazz) {
+        ClassLoader classLoader = clazz.getClassLoader();
+        if (classLoader == null || classLoader == ClassLoader.getPlatformClassLoader()) {
+            return false;
+        }
+
+        /*
+         * Some JDK tool modules, for example jdk.compiler and jdk.jpackage, are defined to the
+         * application class loader. Exclude them by module name so the assertion remains limited to
+         * application classes.
+         */
+        Module module = clazz.getModule();
+        if (module.isNamed()) {
+            String moduleName = module.getName();
+            if (moduleName.startsWith("java.") || moduleName.startsWith("jdk.")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

@@ -88,7 +88,6 @@ import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
 import jdk.vm.ci.hotspot.HotSpotResolvedJavaMethod;
 import jdk.vm.ci.hotspot.HotSpotVMConfigAccess;
 import jdk.vm.ci.meta.AllocatableValue;
-import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.Value;
 import jdk.vm.ci.runtime.JVMCICompiler;
@@ -124,12 +123,6 @@ public abstract class HotSpotBackend extends Backend implements FrameMap.Referen
                     void.class, Object.class, Word.class);
 
     private final HotSpotGraalRuntimeProvider runtime;
-
-    public static final HotSpotForeignCallDescriptor MONTGOMERY_MULTIPLY = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, NamedLocationIdentity.getArrayLocation(JavaKind.Int),
-                    "implMontgomeryMultiply", void.class, Word.class, Word.class, Word.class, int.class, long.class, Word.class);
-
-    public static final HotSpotForeignCallDescriptor MONTGOMERY_SQUARE = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, NamedLocationIdentity.getArrayLocation(JavaKind.Int),
-                    "implMontgomerySquare", void.class, Word.class, Word.class, int.class, long.class, Word.class);
 
     public static final HotSpotForeignCallDescriptor MD5_IMPL_COMPRESS_MB = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "md5ImplCompress", int.class, Word.class,
                     Object.class, int.class, int.class);
@@ -183,18 +176,6 @@ public abstract class HotSpotBackend extends Backend implements FrameMap.Referen
 
     public static final LocationIdentity CRC_TABLE_LOCATION = NamedLocationIdentity.immutable("crc32_table");
 
-    public static final HotSpotForeignCallDescriptor UPDATE_BYTES_ADLER32 = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "updateBytesAdler32", int.class, int.class,
-                    WordBase.class, int.class);
-
-    public static final HotSpotForeignCallDescriptor GALOIS_COUNTER_MODE_CRYPT = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_galoisCounterMode_AESCrypt", int.class,
-                    WordBase.class, int.class, WordBase.class, WordBase.class, WordBase.class, WordBase.class, WordBase.class, WordBase.class);
-
-    public static final HotSpotForeignCallDescriptor POLY1305_PROCESSBLOCKS = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_poly1305_processBlocks", int.class,
-                    WordBase.class, int.class, WordBase.class, WordBase.class);
-
-    public static final HotSpotForeignCallDescriptor CHACHA20Block = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_chacha20Block", int.class,
-                    WordBase.class, WordBase.class);
-
     public static final HotSpotForeignCallDescriptor INTPOLY_MONTGOMERYMULT_P256 = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_intpoly_montgomeryMult_P256", void.class,
                     WordBase.class, WordBase.class, WordBase.class);
 
@@ -203,31 +184,7 @@ public abstract class HotSpotBackend extends Backend implements FrameMap.Referen
 
     public static final HotSpotForeignCallDescriptor DOUBLE_KECCAK = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_double_keccak", int.class,
                     WordBase.class, WordBase.class);
-    public static final HotSpotForeignCallDescriptor DILITHIUM_ALMOST_NTT = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_dilithiumAlmostNtt", int.class,
-                    WordBase.class, WordBase.class);
-    public static final HotSpotForeignCallDescriptor DILITHIUM_ALMOST_INVERSE_NTT = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_dilithiumAlmostInverseNtt", int.class,
-                    WordBase.class, WordBase.class);
-    public static final HotSpotForeignCallDescriptor DILITHIUM_NTT_MULT = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_dilithiumNttMult", int.class,
-                    WordBase.class, WordBase.class, WordBase.class);
-    public static final HotSpotForeignCallDescriptor DILITHIUM_MONT_MUL_BY_CONSTANT = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_dilithiumMontMulByConstant", int.class,
-                    WordBase.class, int.class);
-    public static final HotSpotForeignCallDescriptor DILITHIUM_DECOMPOSE_POLY = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_dilithiumDecomposePoly", int.class,
-                    WordBase.class, WordBase.class, WordBase.class, int.class, int.class);
 
-    public static final HotSpotForeignCallDescriptor KYBER_NTT = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_kyberNtt", int.class,
-                    WordBase.class, WordBase.class);
-    public static final HotSpotForeignCallDescriptor KYBER_INVERSE_NTT = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_kyberInverseNtt", int.class,
-                    WordBase.class, WordBase.class);
-    public static final HotSpotForeignCallDescriptor KYBER_NTT_MULT = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_kyberNttMult", int.class,
-                    WordBase.class, WordBase.class, WordBase.class, WordBase.class);
-    public static final HotSpotForeignCallDescriptor KYBER_ADD_POLY_2 = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_kyberAddPoly_2", int.class,
-                    WordBase.class, WordBase.class, WordBase.class);
-    public static final HotSpotForeignCallDescriptor KYBER_ADD_POLY_3 = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_kyberAddPoly_3", int.class,
-                    WordBase.class, WordBase.class, WordBase.class, WordBase.class);
-    public static final HotSpotForeignCallDescriptor KYBER_12_TO_16 = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_kyber12To16", int.class,
-                    WordBase.class, int.class, WordBase.class, int.class);
-    public static final HotSpotForeignCallDescriptor KYBER_BARRETT_REDUCE = new HotSpotForeignCallDescriptor(LEAF, HAS_SIDE_EFFECT, any(), "_kyberBarrettReduce", int.class,
-                    WordBase.class);
     public static final HotSpotForeignCallDescriptor ARRAY_SORT = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, any(), "_array_sort", void.class,
                     WordBase.class, int.class, int.class, int.class);
     public static final HotSpotForeignCallDescriptor ARRAY_PARTITION = new HotSpotForeignCallDescriptor(LEAF_NO_VZERO, HAS_SIDE_EFFECT, any(), "_array_partition", void.class,

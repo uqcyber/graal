@@ -101,6 +101,7 @@ import org.graalvm.wasm.exception.WasmException;
 import org.graalvm.wasm.exception.WasmRuntimeException;
 import org.graalvm.wasm.memory.WasmMemory;
 import org.graalvm.wasm.memory.WasmMemoryLibrary;
+import org.graalvm.wasm.parser.validation.ExceptionHandler;
 import org.graalvm.wasm.struct.WasmStruct;
 import org.graalvm.wasm.struct.WasmStructAccess;
 import org.graalvm.wasm.types.DefinedType;
@@ -143,11 +144,6 @@ import java.io.Serial;
 public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNode {
 
     private static final int REPORT_LOOP_STRIDE = 1 << 8;
-    private static final int EXCEPTION_HANDLER_TO_OFFSET = 4;
-    private static final int EXCEPTION_HANDLER_TYPE_OFFSET = 8;
-    private static final int EXCEPTION_HANDLER_TAG_OFFSET = 9;
-    private static final int EXCEPTION_HANDLER_TARGET_OFFSET = 13;
-    private static final int EXCEPTION_HANDLER_SIZE = 17;
 
     static {
         assert Integer.bitCount(REPORT_LOOP_STRIDE) == 1 : "must be a power of 2";
@@ -1469,7 +1465,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                  */
                 while (true) {
                     final int handlerOffset = exceptionTableOffset;
-                    final int from = rawPeekI32(bytecode, exceptionTableOffset);
+                    final int from = rawPeekI32(bytecode, handlerOffset + ExceptionHandler.FROM_OFFSET);
                     if (from == -1) {
                         // we reached the end of the table
                         break;
@@ -1496,11 +1492,10 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
 
                     final int target = exceptionHandlerTarget(handlerOffset);
                     if (catchType == ExceptionHandlerType.LEGACY_DELEGATE) {
-                        // Legacy try tables are serialized inner-to-outer, so delegate continues by
-                        // scanning the remaining handlers with the delegated lookup offset. No
-                        // earlier entry can become visible again, because delegation only moves the
-                        // search to an enclosing try.
-                        handlerLookupOffset = target;
+                        // Legacy delegate targets a continuation in the exception table, not a
+                        // bytecode offset. This skips intervening handlers that are not visible
+                        // from the delegated label, even if they protect the same bytecode range.
+                        exceptionTableOffset = target;
                         continue;
                     }
 
@@ -4990,6 +4985,10 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 CompilerAsserts.partialEvaluationConstant(elemType);
 
                 int length = WasmFrame.popInt(frame, stackPointer - 1);
+                if (module.limits().exceedsArrayInstanceSizeLimit(length, elemType)) {
+                    enterErrorBranch(codeEntry);
+                    throw WasmException.create(Failure.ARRAY_LENGTH_LIMIT_EXCEEDED);
+                }
                 WasmArray array = switch (elemType) {
                     case WasmType.I8_TYPE -> {
                         byte initialValue = (byte) WasmFrame.popInt(frame, stackPointer - 2);
@@ -5037,6 +5036,10 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 CompilerAsserts.partialEvaluationConstant(elemType);
 
                 int length = WasmFrame.popInt(frame, stackPointer - 1);
+                if (module.limits().exceedsArrayInstanceSizeLimit(length, elemType)) {
+                    enterErrorBranch(codeEntry);
+                    throw WasmException.create(Failure.ARRAY_LENGTH_LIMIT_EXCEEDED);
+                }
                 WasmArray array = switch (elemType) {
                     case WasmType.I8_TYPE -> new WasmInt8Array(arrayType, length);
                     case WasmType.I16_TYPE -> new WasmInt16Array(arrayType, length);
@@ -5063,9 +5066,13 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
 
                 int length = WasmFrame.popInt(frame, stackPointer - 1);
                 int source = WasmFrame.popInt(frame, stackPointer - 2);
-                if (checkOutOfBounds(source, length * WasmType.storageByteSize(elemType), dataLength)) {
+                if (checkOutOfBounds(source, (long) length * WasmType.storageByteSize(elemType), dataLength)) {
                     enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_MEMORY_ACCESS);
+                }
+                if (module.limits().exceedsArrayInstanceSizeLimit(length, elemType)) {
+                    enterErrorBranch(codeEntry);
+                    throw WasmException.create(Failure.ARRAY_LENGTH_LIMIT_EXCEEDED);
                 }
                 WasmArray array = switch (elemType) {
                     case WasmType.I8_TYPE -> new WasmInt8Array(arrayType, length, bytecode, dataOffset + source);
@@ -5094,6 +5101,10 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 if (checkOutOfBounds(source, length, elemInstance == null ? 0 : elemInstance.length)) {
                     enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_TABLE_ACCESS);
+                }
+                if (module.limits().exceedsArrayInstanceSizeLimit(length, module.arrayTypeElemType(arrayTypeIdx))) {
+                    enterErrorBranch(codeEntry);
+                    throw WasmException.create(Failure.ARRAY_LENGTH_LIMIT_EXCEEDED);
                 }
                 WasmRefArray array = length == 0 ? new WasmRefArray(arrayType, 0) : new WasmRefArray(arrayType, length, elemInstance, source);
                 WasmFrame.pushReference(frame, stackPointer - 2, array);
@@ -5294,7 +5305,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                     enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_ARRAY_ACCESS);
                 }
-                if (checkOutOfBounds(source, length * WasmType.storageByteSize(elemType), dataLength)) {
+                if (checkOutOfBounds(source, (long) length * WasmType.storageByteSize(elemType), dataLength)) {
                     enterErrorBranch(codeEntry);
                     throw WasmException.create(Failure.OUT_OF_BOUNDS_MEMORY_ACCESS);
                 }
@@ -5398,7 +5409,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
             }
             case Bytecode.REF_I31: {
                 int i32 = WasmFrame.popInt(frame, stackPointer - 1);
-                Integer i31 = (i32 << 1) >> 1;
+                Integer i31 = WasmType.asSignedI31(i32);
                 WasmFrame.pushReference(frame, stackPointer - 1, i31);
                 break;
             }
@@ -5411,7 +5422,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 }
                 int i32 = (int) i31;
                 if (aggregateOpcode == Bytecode.I31_GET_U) {
-                    i32 &= ~(1 << 31);
+                    i32 = WasmType.asUnsignedI31(i32);
                 }
                 WasmFrame.pushInt(frame, stackPointer - 1, i32);
                 break;
@@ -7959,6 +7970,10 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
         return offset < 0 || length < 0 || offset + length < 0 || offset + length > size;
     }
 
+    private static boolean checkOutOfBounds(int offset, long length, int size) {
+        return offset < 0 || length < 0 || offset + length < 0 || offset + length > size;
+    }
+
     @ExplodeLoop
     private Object[] createArgumentsForCall(VirtualFrame frame, int functionTypeIndex, int numArgs, int stackPointerOffset) {
         CompilerAsserts.partialEvaluationConstant(numArgs);
@@ -7990,19 +8005,19 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
     }
 
     private int exceptionHandlerTo(int handlerOffset) {
-        return rawPeekI32(bytecode, handlerOffset + EXCEPTION_HANDLER_TO_OFFSET);
+        return rawPeekI32(bytecode, handlerOffset + ExceptionHandler.TO_OFFSET);
     }
 
     private int exceptionHandlerType(int handlerOffset) {
-        return rawPeekU8(bytecode, handlerOffset + EXCEPTION_HANDLER_TYPE_OFFSET);
+        return rawPeekU8(bytecode, handlerOffset + ExceptionHandler.TYPE_OFFSET);
     }
 
     private int exceptionHandlerTagIndex(int handlerOffset) {
-        return rawPeekI32(bytecode, handlerOffset + EXCEPTION_HANDLER_TAG_OFFSET);
+        return rawPeekI32(bytecode, handlerOffset + ExceptionHandler.TAG_OFFSET);
     }
 
     private int exceptionHandlerTarget(int handlerOffset) {
-        return rawPeekI32(bytecode, handlerOffset + EXCEPTION_HANDLER_TARGET_OFFSET);
+        return rawPeekI32(bytecode, handlerOffset + ExceptionHandler.TARGET_OFFSET);
     }
 
     private static boolean isLegacyCatchType(int catchType) {
@@ -8034,7 +8049,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
     }
 
     private static int nextExceptionHandlerOffset(int handlerOffset) {
-        return handlerOffset + EXCEPTION_HANDLER_SIZE;
+        return handlerOffset + ExceptionHandler.SIZE;
     }
 
     /**
@@ -8168,7 +8183,7 @@ public final class WasmFunctionNode<V128> extends Node implements BytecodeOSRNod
                 for (int i = length - 1; i >= 0; i--) {
                     vector128Ops().intoArray(WasmFrame.popVector128(frame, --stackPointer), fixedArray, i << 4);
                 }
-                return new WasmVec128Array(arrayType, fixedArray);
+                return new WasmVec128Array(arrayType, length, fixedArray);
             }
             default: {
                 Object[] fixedArray = new Object[length];

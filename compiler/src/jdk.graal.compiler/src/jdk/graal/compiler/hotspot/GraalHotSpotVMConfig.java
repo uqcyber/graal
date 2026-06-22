@@ -471,23 +471,11 @@ public class GraalHotSpotVMConfig extends GraalHotSpotVMConfigAccess {
     public final long pollingPageReturnHandler = getFieldValue("CompilerToVM::Data::SharedRuntime_polling_page_return_handler", Long.class, "address");
     public final long deoptBlobUncommonTrap = getFieldValue("CompilerToVM::Data::SharedRuntime_deopt_blob_uncommon_trap", Long.class, "address");
 
-    public final long updateBytesCRC32Stub = getFieldValue("StubRoutines::_updateBytesCRC32", Long.class, "address");
-
     public final long md5ImplCompressMultiBlock = getFieldValue("StubRoutines::_md5_implCompressMB", Long.class, "address");
     public final long sha1ImplCompressMultiBlock = getFieldValue("StubRoutines::_sha1_implCompressMB", Long.class, "address");
     public final long sha256ImplCompressMultiBlock = getFieldValue("StubRoutines::_sha256_implCompressMB", Long.class, "address");
     public final long sha512ImplCompressMultiBlock = getFieldValue("StubRoutines::_sha512_implCompressMB", Long.class, "address");
     public final long sha3ImplCompressMultiBlock = getFieldValue("StubRoutines::_sha3_implCompressMB", Long.class, "address");
-
-    public final long updateBytesCRC32C = getFieldValue("StubRoutines::_updateBytesCRC32C", Long.class, "address");
-    public final long updateBytesAdler32 = getFieldValue("StubRoutines::_updateBytesAdler32", Long.class, "address");
-    public final long montgomeryMultiply = getFieldValue("StubRoutines::_montgomeryMultiply", Long.class, "address");
-    public final long montgomerySquare = getFieldValue("StubRoutines::_montgomerySquare", Long.class, "address");
-
-    public final long galoisCounterModeCrypt = getFieldValue("StubRoutines::_galoisCounterMode_AESCrypt", Long.class, "address");
-
-    public final long poly1305ProcessBlocks = getFieldValue("StubRoutines::_poly1305_processBlocks", Long.class, "address");
-    public final long chacha20Block = getFieldValue("StubRoutines::_chacha20Block", Long.class, "address");
 
     public final long intpolyMontgomeryMultP256 = getFieldValue("StubRoutines::_intpoly_montgomeryMult_P256", Long.class, "address");
     public final long intpolyAssign = getFieldValue("StubRoutines::_intpoly_assign", Long.class, "address");
@@ -525,19 +513,6 @@ public class GraalHotSpotVMConfig extends GraalHotSpotVMConfigAccess {
     public final long unsafeSetMemory = getFieldValue("StubRoutines::_unsafe_setmemory", Long.class, "address");
 
     public final long stubDoubleKeccak = getFieldValue("StubRoutines::_double_keccak", Long.class, "address");
-    public final long stubDilithiumAlmostNtt = getFieldValue("StubRoutines::_dilithiumAlmostNtt", Long.class, "address");
-    public final long stubDilithiumAlmostInverseNtt = getFieldValue("StubRoutines::_dilithiumAlmostInverseNtt", Long.class, "address");
-    public final long stubDilithiumNttMult = getFieldValue("StubRoutines::_dilithiumNttMult", Long.class, "address");
-    public final long stubDilithiumMontMulByConstant = getFieldValue("StubRoutines::_dilithiumMontMulByConstant", Long.class, "address");
-    public final long stubDilithiumDecomposePoly = getFieldValue("StubRoutines::_dilithiumDecomposePoly", Long.class, "address");
-
-    public final long stubKyberNtt = getFieldValue("StubRoutines::_kyberNtt", Long.class, "address");
-    public final long stubKyberInverseNtt = getFieldValue("StubRoutines::_kyberInverseNtt", Long.class, "address");
-    public final long stubKyberNttMult = getFieldValue("StubRoutines::_kyberNttMult", Long.class, "address");
-    public final long stubKyberAddPoly2 = getFieldValue("StubRoutines::_kyberAddPoly_2", Long.class, "address");
-    public final long stubKyberAddPoly3 = getFieldValue("StubRoutines::_kyberAddPoly_3", Long.class, "address");
-    public final long stubKyber12To16 = getFieldValue("StubRoutines::_kyber12To16", Long.class, "address");
-    public final long stubKyberBarrettReduce = getFieldValue("StubRoutines::_kyberBarrettReduce", Long.class, "address");
 
     public final long stubArraySort = getFieldValue("StubRoutines::_array_sort", Long.class, "address");
     public final long stubArrayPartition = getFieldValue("StubRoutines::_array_partition", Long.class, "address");
@@ -655,12 +630,15 @@ public class GraalHotSpotVMConfig extends GraalHotSpotVMConfigAccess {
                     osArch.equals("aarch64"));
     public final int NMethodPatchingType_stw_instruction_and_data_patch = getConstant("NMethodPatchingType::stw_instruction_and_data_patch", Integer.class, -1, osArch.equals("aarch64"));
     public final int NMethodPatchingType_conc_instruction_and_data_patch = getConstant("NMethodPatchingType::conc_instruction_and_data_patch", Integer.class, -1, osArch.equals("aarch64"));
+    // conc_data_patch is currently only exposed by Oracle JDK builds.
+    public final int NMethodPatchingType_conc_data_patch = getConstant("NMethodPatchingType::conc_data_patch", Integer.class, -1, osArch.equals("aarch64") && isOracleVmVendor);
     // @formatter:on
 
     {
         if (osArch.equals("aarch64")) {
             if (BarrierSetAssembler_nmethod_patching_type != NMethodPatchingType_stw_instruction_and_data_patch &&
-                            BarrierSetAssembler_nmethod_patching_type != NMethodPatchingType_conc_instruction_and_data_patch) {
+                            BarrierSetAssembler_nmethod_patching_type != NMethodPatchingType_conc_instruction_and_data_patch &&
+                            (!isOracleVmVendor || BarrierSetAssembler_nmethod_patching_type != NMethodPatchingType_conc_data_patch)) {
                 throw new IllegalArgumentException("unsupported barrier sequence " + BarrierSetAssembler_nmethod_patching_type);
             }
         }

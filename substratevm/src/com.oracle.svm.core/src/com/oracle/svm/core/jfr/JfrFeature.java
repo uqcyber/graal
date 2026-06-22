@@ -27,7 +27,6 @@ package com.oracle.svm.core.jfr;
 import java.util.List;
 
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 
 import com.oracle.svm.core.SubstrateOptions;
@@ -44,10 +43,6 @@ import com.oracle.svm.core.sampler.SamplerStatistics;
 import com.oracle.svm.core.thread.ThreadListenerSupport;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.shared.Uninterruptible;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
@@ -59,8 +54,9 @@ import jdk.jfr.internal.JVMSupport;
 import jdk.jfr.internal.jfc.JFC;
 
 /**
- * Provides basic JFR support. As this support is both platform-dependent and JDK-specific, the
- * current support is limited to Linux & MacOS.
+ * Provides basic JFR support. The core event infrastructure is shared across platforms, while some
+ * integration points such as out-of-process control and platform events remain platform-dependent
+ * and JDK-specific.
  *
  * There are two different kinds of JFR events:
  * <ul>
@@ -98,7 +94,6 @@ import jdk.jfr.internal.jfc.JFC;
  * </ul>
  */
 @AutomaticallyRegisteredFeature
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
 public class JfrFeature implements InternalFeature {
     /*
      * Note that we could initialize the native part of JFR at image build time and that the native
@@ -122,10 +117,10 @@ public class JfrFeature implements InternalFeature {
     }
 
     public static boolean isInConfiguration(boolean allowPrinting) {
-        boolean systemSupported = osSupported();
+        boolean systemSupported = VMInspectionOptions.hasJfrPlatformSupport();
         if (HOSTED_ENABLED && !systemSupported) {
             throw UserError.abort("FlightRecorder cannot be used to profile the image generator on this platform. " +
-                            "The image generator can only be profiled on platforms where FlightRecoder is also supported at run time.");
+                            "The image generator can only be profiled on platforms where FlightRecorder is also supported at run time.");
         }
         boolean runtimeEnabled = VMInspectionOptions.hasJfrSupport();
         if (HOSTED_ENABLED && !runtimeEnabled) {
@@ -140,10 +135,6 @@ public class JfrFeature implements InternalFeature {
             return false;
         }
         return runtimeEnabled && systemSupported;
-    }
-
-    private static boolean osSupported() {
-        return Platform.includedIn(Platform.LINUX.class) || Platform.includedIn(Platform.DARWIN.class);
     }
 
     /**

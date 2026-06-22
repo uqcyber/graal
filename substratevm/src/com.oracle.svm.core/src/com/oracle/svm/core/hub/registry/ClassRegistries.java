@@ -134,7 +134,21 @@ public final class ClassRegistries implements ParsingContext {
     private final ConcurrentHashMap<ClassLoader, AbstractClassRegistry> buildTimeRegistries;
 
     private final AbstractClassRegistry bootRegistry;
+
+    /**
+     * Maps boot loader packages in internal form (e.g. {@code java/lang}) to their defining module.
+     */
     private final EconomicMap<String, String> bootPackageToModule;
+
+    /**
+     * Maps loaded boot-append package names in internal form (e.g. {@code org/example}) to the
+     * {@code -Xbootclasspath/a:} entry (e.g. {@code /path/to/boot-append.jar}) that supplied
+     * the first successfully defined class in the package.
+     * <p>
+     * GR-76444: Remove this field and use jdk.internal.loader.BuiltinClassLoader.packageToModule
+     * as the canonical source for named boot-module package lookup.
+     */
+    private static final ConcurrentHashMap<String, String> loadedBootAppendPackageLocations = new ConcurrentHashMap<>();
 
     /**
      * Holds all class names known to the image build. The value linked to each name is a
@@ -142,7 +156,7 @@ public final class ClassRegistries implements ParsingContext {
      * Throwable object if querying the class with this name should throw a specific error at
      * run-time, excluding ClassNotFoundException, or null otherwise.
      */
-    private final EconomicMap<String, ConditionalRuntimeValue<Throwable>> knownClassNames;
+    private final EconomicMap<String, Object> knownClassNames;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public ClassRegistries() {
@@ -158,7 +172,7 @@ public final class ClassRegistries implements ParsingContext {
 
     private static EconomicMap<String, String> computeBootPackageToModuleMap() {
         EconomicMap<String, String> bootPackageToModule = EconomicMap.create();
-        JVMCIReflectionUtil.bootLoaderPackages().forEach(p -> bootPackageToModule.put(p.getName(), p.module().getName()));
+        JVMCIReflectionUtil.bootLoaderPackages().forEach(p -> bootPackageToModule.put(p.getName().replace('.', '/'), p.module().getName()));
         return bootPackageToModule;
     }
 
@@ -175,9 +189,12 @@ public final class ClassRegistries implements ParsingContext {
         return singletons[singletons.length - 1];
     }
 
-    static String getBootModuleForPackage(String pkg) {
+    /**
+     * Finds the boot module that defines `internalPackageName`.
+     */
+    static String getBootModuleForPackage(String internalPackageName) {
         for (var singleton : layeredSingletons()) {
-            var module = singleton.bootPackageToModule.get(pkg);
+            var module = singleton.bootPackageToModule.get(internalPackageName);
             if (module != null) {
                 return module;
             }
@@ -185,6 +202,43 @@ public final class ClassRegistries implements ParsingContext {
         return null;
     }
 
+    /**
+     * Returns the boot loader package location in the format expected by
+     * {@code BootLoader.PackageHelper}.
+     *
+     * @param internalPackageName package name in internal form (e.g. "org/foo/impl")
+     */
+    public static String getSystemPackageLocation(String internalPackageName) {
+        String module = getBootModuleForPackage(internalPackageName);
+        if (module != null) {
+            return "jrt:/" + module;
+        }
+        return getBootLoaderPackageLocation(internalPackageName);
+    }
+
+    /**
+     * Records the package source for `internalClassName` after a boot-append class has loaded.
+     */
+    public static void recordBootAppendPackageLocation(String internalClassName, String location) {
+        int lastSlash = internalClassName.lastIndexOf('/');
+        if (lastSlash != -1 && location != null) {
+            loadedBootAppendPackageLocations.putIfAbsent(internalClassName.substring(0, lastSlash), location);
+        }
+    }
+
+    /**
+     * Looks up the boot loader class path entry that provided `internalPackageName`.
+     *
+     * This is only for boot loader package discovery after a runtime-loaded boot class has made the
+     * package observable. It must not be used as a general class path package lookup.
+     */
+    private static String getBootLoaderPackageLocation(String internalPackageName) {
+        return loadedBootAppendPackageLocations.get(internalPackageName);
+    }
+
+    /**
+     * Returns boot loader package names in internal form, matching `BootLoader.getSystemPackageNames`.
+     */
     public static String[] getSystemPackageNames() {
         Set<String> systemPackageNames = new HashSet<>();
         for (var singleton : layeredSingletons()) {
@@ -192,6 +246,11 @@ public final class ClassRegistries implements ParsingContext {
                 systemPackageNames.add(key);
             }
         }
+        /*
+         * Runtime-loaded boot-append classes define their packages after image startup, so they
+         * live outside the build-time boot module package map.
+         */
+        systemPackageNames.addAll(loadedBootAppendPackageLocations.keySet());
         return systemPackageNames.toArray(String[]::new);
     }
 
@@ -218,13 +277,9 @@ public final class ClassRegistries implements ParsingContext {
 
     public static Class<?> findLoadedClass(String name, ClassLoader loader) {
         ByteSequence typeBytes = ByteSequence.createTypeFromName(name);
-        Symbol<Type> type = SymbolsSupport.getTypes().lookupValidType(typeBytes);
         ClassNotFoundException classNotFoundException = null;
         for (var singleton : layeredSingletons()) {
-            Class<?> result = null;
-            if (type != null) {
-                result = singleton.getRegistry(loader).findLoadedClass(type);
-            }
+            Class<?> result = singleton.getRegistry(loader).findLoadedClass(typeBytes);
             if (result == null) {
                 result = PredefinedClassesSupport.getLoadedForNameOrNull(name, loader);
             }
@@ -352,11 +407,11 @@ public final class ClassRegistries implements ParsingContext {
     }
 
     private Throwable getSavedException(String name) {
-        var cond = knownClassNames.get(name);
-        if (cond == null || cond.getDynamicAccessMetadata() == null || !cond.getDynamicAccessMetadata().satisfied()) {
+        Object cond = knownClassNames.get(name);
+        if (cond == null || !ConditionalRuntimeValue.isSatisfied(cond)) {
             return null;
         }
-        Throwable exception = cond.getValue();
+        Throwable exception = ConditionalRuntimeValue.getValue(cond);
         if (exception == null) {
             exception = new ClassNotFoundException(name);
         }
@@ -414,10 +469,11 @@ public final class ClassRegistries implements ParsingContext {
     }
 
     public static Class<?> defineClass(ClassLoader loader, String name, byte[] b, int off, int len, ClassDefinitionInfo info) {
-        // name is a "binary name": `foo.Bar$1`
+        // name can use either dot or slash package separators.
         assert RuntimeClassLoading.isSupported();
-        if (throwMissingRegistrationErrors() && shouldFollowReflectionConfiguration() && !isRegisteredClassName(name)) {
-            MissingReflectionRegistrationUtils.reportClassAccess(name);
+        String reflectionName = toReflectionName(name);
+        if (throwMissingRegistrationErrors() && shouldFollowReflectionConfiguration() && !isRegisteredClassName(reflectionName)) {
+            MissingReflectionRegistrationUtils.reportClassAccess(reflectionName);
             // The defineClass path usually can't throw ClassNotFoundException
             throw sneakyThrow(new ClassNotFoundException(name));
         }
@@ -432,6 +488,10 @@ public final class ClassRegistries implements ParsingContext {
         } else {
             return registry.defineClass(null, b, off, len, info);
         }
+    }
+
+    private static String toReflectionName(String name) {
+        return name == null ? null : ClassNameSupport.jniNameToReflectionName(name);
     }
 
     private static boolean isRegisteredClassName(String name) {
@@ -517,16 +577,13 @@ public final class ClassRegistries implements ParsingContext {
     public static void addKnownClassName(AccessCondition condition, String typeName, Throwable exception, boolean preserved) {
         var knownClassNamesMap = currentLayer().knownClassNames;
         synchronized (knownClassNamesMap) {
-            var cond = knownClassNamesMap.get(typeName);
+            Object cond = knownClassNamesMap.get(typeName);
             if (cond == null) {
-                cond = new ConditionalRuntimeValue<>(RuntimeDynamicAccessMetadata.createHosted(condition, preserved), exception);
+                cond = ConditionalRuntimeValue.create(RuntimeDynamicAccessMetadata.createHosted(condition, preserved), exception);
             } else {
-                cond.getDynamicAccessMetadata().addCondition(condition);
-                if (!preserved) {
-                    cond.getDynamicAccessMetadata().setNotPreserved();
-                }
-                if (cond.getValueUnconditionally() == null && exception != null) {
-                    cond = new ConditionalRuntimeValue<>(cond.getDynamicAccessMetadata(), exception);
+                cond = ConditionalRuntimeValue.withCondition(cond, condition, preserved);
+                if (ConditionalRuntimeValue.getValueUnconditionally(cond) == null && exception != null) {
+                    cond = ConditionalRuntimeValue.withValue(cond, exception);
                 }
             }
             knownClassNamesMap.put(typeName, cond);

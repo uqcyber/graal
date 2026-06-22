@@ -83,6 +83,7 @@ import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.guest.staging.layered.LayeredFieldValueTransformer;
 import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
 import com.oracle.svm.hosted.analysis.Inflation;
 import com.oracle.svm.hosted.bootstrap.BootstrapMethodConfiguration;
@@ -163,10 +164,10 @@ public class FeatureImpl {
         }
     }
 
-    public static class IsInConfigurationAccessImpl extends FeatureAccessImpl implements Feature.IsInConfigurationAccess {
+    abstract static class RegistrationAccessBase extends FeatureAccessImpl {
         private final MetaAccessProvider metaAccess;
 
-        IsInConfigurationAccessImpl(FeatureHandler featureHandler, ImageClassLoader imageClassLoader, MetaAccessProvider metaAccess, DebugContext debugContext) {
+        RegistrationAccessBase(FeatureHandler featureHandler, ImageClassLoader imageClassLoader, MetaAccessProvider metaAccess, DebugContext debugContext) {
             super(featureHandler, imageClassLoader, debugContext);
             this.metaAccess = metaAccess;
         }
@@ -186,21 +187,28 @@ public class FeatureImpl {
         }
     }
 
-    public static class AfterRegistrationAccessImpl extends FeatureAccessImpl implements Feature.AfterRegistrationAccess {
-        private final MetaAccessProvider metaAccess;
+    public static class IsInConfigurationAccessImpl extends RegistrationAccessBase implements Feature.IsInConfigurationAccess {
+
+        IsInConfigurationAccessImpl(FeatureHandler featureHandler, ImageClassLoader imageClassLoader, MetaAccessProvider metaAccess, DebugContext debugContext) {
+            super(featureHandler, imageClassLoader, metaAccess, debugContext);
+        }
+    }
+
+    public static class OnRegistrationAccessImpl extends RegistrationAccessBase implements Feature.OnRegistrationAccess {
+
+        OnRegistrationAccessImpl(FeatureHandler featureHandler, ImageClassLoader imageClassLoader, MetaAccessProvider metaAccess, DebugContext debugContext) {
+            super(featureHandler, imageClassLoader, metaAccess, debugContext);
+        }
+    }
+
+    public static class AfterRegistrationAccessImpl extends RegistrationAccessBase implements Feature.AfterRegistrationAccess {
         private MainEntryPoint mainEntryPoint;
 
         public AfterRegistrationAccessImpl(FeatureHandler featureHandler, ImageClassLoader imageClassLoader, MetaAccessProvider metaAccess,
                         MainEntryPoint mainEntryPoint,
                         DebugContext debugContext) {
-            super(featureHandler, imageClassLoader, debugContext);
-            this.metaAccess = metaAccess;
+            super(featureHandler, imageClassLoader, metaAccess, debugContext);
             this.mainEntryPoint = mainEntryPoint;
-        }
-
-        @Override
-        public MetaAccessProvider getMetaAccess() {
-            return metaAccess;
         }
 
         public void setMainEntryPoint(MainEntryPoint mainEntryPoint) {
@@ -229,15 +237,6 @@ public class FeatureImpl {
         @Override
         public ForeignAccess getForeignAccess() {
             return ForeignAccessImpl.singleton();
-        }
-
-        @Override
-        public ResolvedJavaType findTypeByName(String className) {
-            Class<?> clazz = findClassByName(className);
-            if (clazz == null) {
-                return null;
-            }
-            return getMetaAccess().lookupJavaType(clazz);
         }
     }
 
@@ -680,6 +679,20 @@ public class FeatureImpl {
             VMError.guarantee(!(field instanceof OriginalFieldProvider),
                             "The ResolvedJavaField %s must be the original (Host VM) field. You can use OriginalFieldProvider.getOriginalField() to retrieve that", field);
             FieldValueInterceptionSupport.singleton().registerFieldValueTransformer(field, transformer);
+        }
+
+        /**
+         * Registers a {@link LayeredFieldValueTransformer} for a field whose value may be carried
+         * forward from an initial layer and updated by an extension layer. Unlike
+         * {@link #registerFieldValueTransformer(Field, FieldValueTransformer)}, the transformer is
+         * represented as an image-layer-aware JVMCI transformer so that updatable prior-layer field
+         * values can be tracked and patched when a later layer supplies a replacement value.
+         *
+         * @param field the field whose value should be transformed
+         * @param transformer the layered transformer instance to apply to the field
+         */
+        public void registerLayeredFieldValueTransformer(Field field, LayeredFieldValueTransformer<?> transformer) {
+            FieldValueInterceptionSupport.singleton().registerLayeredFieldValueTransformer(getMetaAccess().lookupJavaField(field), transformer);
         }
 
         /**

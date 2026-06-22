@@ -1,5 +1,6 @@
 {
   local c = (import '../../../ci/ci_common/common.jsonnet'),
+  local utils = (import '../../../ci/ci_common/common-utils.libsonnet'),
   local bc = (import '../../../ci/ci_common/bench-common.libsonnet'),
   local config = (import '../../../ci/repo-configuration.libsonnet'),
   local cc = (import 'compiler-common.libsonnet'),
@@ -24,9 +25,13 @@
   // suite definitions
   // *****************
   awfy: cc.compiler_benchmark + c.heap.small + bc.bench_max_threads + {
+    local is_xint = std.objectHasAll(self.environment, "JVM_CONFIG") && utils.contains(self.environment["JVM_CONFIG"], "xint"),
+    // Required for Havlak in interpreter mode to avoid a stack overflow.
+    local awfy_vm_args = self.extra_vm_args + (if is_xint then ["-Xss16m"] else []),
+    local awfy_run_args = if is_xint then ["--", "-i", "5"] else [],
     suite:: "awfy",
     run+: [
-      self.benchmark_cmd + [self.suite + ":*", "--"] + self.extra_vm_args
+      self.benchmark_cmd + [self.suite + ":*", "--"] + awfy_vm_args + awfy_run_args
     ],
     timelimit: "1:00:00",
     forks_batches:: null,
@@ -90,7 +95,7 @@
 
   barista_template(suite_version=null, suite_name="barista", max_jdk_version=null, cmd_app_prefix=["hwloc-bind --cpubind node:0.core:0-3.pu:0 --membind node:0"], non_prefix_barista_args=[]):: cc.compiler_benchmark + {
     suite:: suite_name,
-    local barista_version = "0.6.5",
+    local barista_version = "0.7.3",
     local suite_version_args = if suite_version != null then ["--bench-suite-version=" + suite_version] else [],
     local prefix_barista_arg = if std.length(cmd_app_prefix) > 0 then [std.format("--cmd-app-prefix=%s", std.join(" ", cmd_app_prefix))] else [],
     local all_barista_args = prefix_barista_arg + non_prefix_barista_args,

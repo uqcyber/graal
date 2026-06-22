@@ -105,8 +105,10 @@ import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.interpreter.InterpreterSupport;
 import com.oracle.svm.core.jdk.LambdaFormHiddenMethod;
 import com.oracle.svm.core.reflect.proxy.DynamicProxySupport;
+import com.oracle.svm.core.stringformat.StringFormatPhase;
 import com.oracle.svm.core.thread.ContinuationSupport;
 import com.oracle.svm.core.threadlocal.VMThreadLocalInfo;
+import com.oracle.svm.core.threadlocal.VMThreadLocalSupport;
 import com.oracle.svm.core.util.Counter;
 import com.oracle.svm.core.util.HostedStringDeduplication;
 import com.oracle.svm.core.util.UserError;
@@ -840,6 +842,17 @@ public class SVMHost extends HostVM {
                 new PartialEscapePhase(false, false, CanonicalizerPhase.create(), null, options).apply(graph, getProviders(method.getMethodVariantKey()));
             }
         }
+        if (shouldIntrinsifyStringFormat(method)) {
+            new StringFormatPhase(allowStringFormatFormatterFallback()).apply(graph, bb.getProviders(method));
+        }
+    }
+
+    protected boolean shouldIntrinsifyStringFormat(AnalysisMethod method) {
+        return method.isOriginalMethod() && StringFormatPhase.Options.IntrinsifyStringFormat.getValue();
+    }
+
+    protected boolean allowStringFormatFormatterFallback() {
+        return true;
     }
 
     @Override
@@ -1031,6 +1044,13 @@ public class SVMHost extends HostVM {
          * FastThreadLocalBytes.getSizeSupplier
          */
         closedFields.add(lookupOriginalDeclaredField(VMThreadLocalInfo.class, "sizeSupplier"));
+        /*
+         * These fields need to fold to constants when compiling the base layer. Including them as
+         * shared-layer root fields would mark them as accessed, which prevents constant folding.
+         */
+        closedFields.add(lookupOriginalDeclaredField(VMThreadLocalSupport.class, "vmThreadSize"));
+        closedFields.add(lookupOriginalDeclaredField(VMThreadLocalSupport.class, "vmThreadReferenceMapEncoding"));
+        closedFields.add(lookupOriginalDeclaredField(VMThreadLocalSupport.class, "vmThreadReferenceMapIndex"));
         /* This field cannot be written to (see documentation) */
         closedFields.add(lookupOriginalDeclaredField(Counter.Group.class, "enabled"));
         /* This field can contain a reference to a Thread, which is not allowed in the heap */

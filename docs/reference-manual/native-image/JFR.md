@@ -15,8 +15,6 @@ GraalVM Native Image supports building a native executable with JFR events, and 
 
 JFR support is disabled by default and must be explicitly enabled at build time.
 
-> Note: JFR event recording is not yet available with Native Image on Windows.
-
 To build a native executable with JFR, use the `--enable-monitoring=jfr` option:
 ```shell
 native-image --enable-monitoring=jfr JavaApplication
@@ -84,6 +82,9 @@ Otherwise, this option expects a comma-separated list of tag combinations, each 
 ## Features and Limitations
 
 This section outlines the JFR features that are available in Native Image.
+
+On Windows, Native Image supports local JFR recordings written to `.jfr` files. Remote JMX access to `FlightRecorderMXBean` and JFR control through `jcmd` are not currently available on Windows.
+The signal-handler-based execution sampler (`-H:+SignalHandlerBasedExecutionSampler`) uses POSIX `SIGPROF` support and is therefore not available on Windows; Windows uses the default recurring-callback sampler for JFR method profiling.
 
 ### Method Profiling and Stack Traces
 
