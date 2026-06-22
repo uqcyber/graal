@@ -668,12 +668,14 @@ public final class Serializers {
                         InterpreterResolvedObjectType holder = context.readReference(in);
                         InterpreterResolvedJavaMethod[] vtable = context.readerFor(InterpreterResolvedJavaMethod[].class).read(context, in);
                         int classVtableLength = LEB128.readUnsignedInt(in);
-                        return new InterpreterResolvedObjectType.VTableHolder(holder, vtable, classVtableLength);
+                        int mirandaMethodsStart = LEB128.readUnsignedInt(in);
+                        return new InterpreterResolvedObjectType.VTableHolder(holder, vtable, classVtableLength, mirandaMethodsStart);
                     },
                     (context, out, value) -> {
                         context.writeReference(out, value.holder);
                         context.writerFor(InterpreterResolvedJavaMethod[].class).write(context, out, value.vtable);
                         LEB128.writeUnsignedInt(out, value.classVtableLength);
+                        LEB128.writeUnsignedInt(out, value.mirandaMethodsStart);
                     });
 
     static final ValueSerializer<PreparedSignature> PREPARED_SIGNATURE = createSerializer(
@@ -732,7 +734,7 @@ public final class Serializers {
 
                         ReferenceConstant<MethodRefHolder> nativeEntryPointHolder = value.getNativeEntryPointHolderConstant();
                         int vtableIndex = value.getVTableIndex();
-                        int gotOffset = value.getGotOffset();
+                        int gotOffset = value.getGOTOffset();
                         int enterStubOffset = value.getEnterStubOffset();
                         int methodId = value.getMethodId();
 

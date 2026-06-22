@@ -560,6 +560,14 @@ public abstract class AArch64ASIMDAssembler {
         /* Advanced SIMD load/store single structure (C4-299). */
         LD1R(LoadFlag | 0b110 << 13),
         LD4R(LoadFlag | ReplicateFlag | 0b111 << 13),
+        /**
+         * ST4 here is used as the family tag for the Advanced SIMD single-structure store-4
+         * instructions, not as a single fixed opcode. The concrete encoding still varies by element
+         * size and lane form, and those opcode bits are filled in by
+         * {@link #st4SingleLaneEncoding}, so the different ST4 variants intentionally encode to
+         * different opcodes.
+         */
+        ST4(0b001 << 13),
 
         /* Cryptographic AES (C4-341). */
         AESE(0b00100 << 12),
@@ -670,12 +678,14 @@ public abstract class AArch64ASIMDAssembler {
         PMULL(0b1110 << 12),
         USUBL(UBit | 0b0010 << 12),
         UMLAL(UBit | 0b1000 << 12),
+        UMULL(UBit | 0b1100 << 12),
         UMLSL(UBit | 0b1010 << 12),
 
         /*
          * Advanced SIMD three same (C4-366) & Advanced SIMD scalar three same (C4-349).
          */
         /* size xx */
+        SHSUB(0b00100 << 11),
         CMGT(0b00110 << 11),
         CMGE(0b00111 << 11),
         SSHL(0b01000 << 11),
@@ -686,6 +696,7 @@ public abstract class AArch64ASIMDAssembler {
         CMTST(0b10001 << 11),
         MLA(0b10010 << 11),
         MUL(0b10011 << 11),
+        SQDMULH(0b10110 << 11),
         ADDP(0b10111 << 11),
         /* size 0x */
         FMLA(0b11001 << 11),
@@ -736,6 +747,8 @@ public abstract class AArch64ASIMDAssembler {
         /* Advanced SIMD shift by immediate (C4-371). */
         SSHR(0b00000 << 11),
         SHL(0b01010 << 11),
+        /* UBit 1 */
+        SLI(UBit | 0b01010 << 11),
         SHRN(0b10000 << 11),
         SSHLL(0b10100 << 11),
         USHR(UBit | 0b00000 << 11),
@@ -876,6 +889,30 @@ public abstract class AArch64ASIMDAssembler {
         int eSizeEncoding = singleStructureElemSizeEncoding(instr, eSize);
         int addressEncoding = encodeStructureAddress(instr, size, eSize, address);
         emitInt(instr.encoding | baseEncoding | qBit(size) | eSizeEncoding | addressEncoding | rd(value));
+    }
+
+    private static int bitAt(int value, int index) {
+        return (value >>> index) & 1;
+    }
+
+    private static int st4SingleLaneEncoding(ElementSize eSize, int index) {
+        assert index >= 0 && index < ASIMDSize.FullReg.bytes() / eSize.bytes() : "index=" + index + " " + eSize;
+        return switch (eSize) {
+            case Byte -> (bitAt(index, 3) << 30) |
+                            (0b001 << 13) |
+                            (bitAt(index, 2) << 12) |
+                            ((index & 0b11) << 10);
+            case HalfWord -> (bitAt(index, 2) << 30) |
+                            (0b011 << 13) |
+                            (bitAt(index, 1) << 12) |
+                            (bitAt(index, 0) << 11);
+            case Word -> (bitAt(index, 1) << 30) |
+                            (0b101 << 13) |
+                            (bitAt(index, 0) << 12);
+            case DoubleWord -> (bitAt(index, 0) << 30) |
+                            (0b101 << 13) |
+                            (0b01 << 10);
+        };
     }
 
     private void cryptographicAES(ASIMDInstruction instr, Register dst, Register src) {
@@ -3035,7 +3072,7 @@ public abstract class AArch64ASIMDAssembler {
     }
 
     /**
-     * C7.2.258 shift right narrow
+     * C7.2.256 shift right narrow
      * <p>
      * From the manual: "This instruction reads each unsigned integer value from the source
      * SIMD&amp;FP register, right shifts each result by an immediate value, put the final result
@@ -3063,6 +3100,55 @@ public abstract class AArch64ASIMDAssembler {
         int imm7 = dstESize.nbits * 2 - shift;
 
         shiftByImmEncoding(ASIMDInstruction.SHRN, false, imm7, dst, src);
+    }
+
+    /**
+     * C7.2.257 Signed Halving Subtract.<br>
+     *
+     * <code>for i in 0..n-1 do dst[i] = (src1[i] - src2[i]) >> 1</code>
+     *
+     * @param size register size.
+     * @param eSize element size. Cannot be DoubleWord.
+     * @param dst SIMD register.
+     * @param src1 SIMD register.
+     * @param src2 SIMD register.
+     */
+    public void shsubVVV(ASIMDSize size, ElementSize eSize, Register dst, Register src1, Register src2) {
+        assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src1.getRegisterCategory().equals(SIMD) : src1;
+        assert src2.getRegisterCategory().equals(SIMD) : src2;
+        assert eSize != ElementSize.DoubleWord : eSize;
+
+        threeSameEncoding(ASIMDInstruction.SHSUB, size, elemSizeXX(eSize), dst, src1, src2);
+    }
+
+    /**
+     * C7.2.258 Shift Left and Insert (immediate).<br>
+     *
+     * This instruction reads each vector element in the source SIMD&FP register, left shifts each
+     * vector element by an immediate value, and inserts the result into the corresponding vector
+     * element in the destination SIMD&FP register such that the new zero bits created by the shift
+     * are not inserted but retain their existing value. Bits shifted out of the left of each vector
+     * element in the source register are lost.
+     *
+     * @param size register size.
+     * @param eSize element size. ElementSize.DoubleWord is only applicable when size is 128 (i.e.
+     *            the operation is performed on more than one element).
+     * @param dst SIMD register.
+     * @param src SIMD register.
+     * @param shift the shift amount.
+     */
+    public void sliVVI(ASIMDSize size, ElementSize eSize, Register dst, Register src, int shift) {
+        assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src.getRegisterCategory().equals(SIMD) : src;
+        assert shift > 0 && shift <= eSize.nbits : shift + " " + eSize;
+        assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
+
+        // shift = imm7 - eSize.nbits
+        int imm7 = eSize.nbits + shift;
+        shiftByImmEncoding(ASIMDInstruction.SLI, size, imm7, dst, src);
     }
 
     /**
@@ -3196,6 +3282,27 @@ public abstract class AArch64ASIMDAssembler {
         assert src.getRegisterCategory().equals(SIMD) : src;
 
         copyEncoding(ASIMDInstruction.SMOV, dstESize == ElementSize.DoubleWord, srcESize, dst, src, index);
+    }
+
+    /**
+     * C7.2.289 Signed saturating doubling multiply returning high half.<br>
+     *
+     * <code>for i in 0..n-1 do dst[i] = sat_high_half(2 * src1[i] * src2[i])</code>
+     *
+     * @param size register size.
+     * @param eSize element size. Must be HalfWord or Word.
+     * @param dst SIMD register.
+     * @param src1 SIMD register.
+     * @param src2 SIMD register.
+     */
+    public void sqdmulhVVV(ASIMDSize size, ElementSize eSize, Register dst, Register src1, Register src2) {
+        assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src1.getRegisterCategory().equals(SIMD) : src1;
+        assert src2.getRegisterCategory().equals(SIMD) : src2;
+        assert eSize == ElementSize.HalfWord || eSize == ElementSize.Word : eSize;
+
+        threeSameEncoding(ASIMDInstruction.SQDMULH, size, elemSizeXX(eSize), dst, src1, src2);
     }
 
     /**
@@ -3478,6 +3585,40 @@ public abstract class AArch64ASIMDAssembler {
         assert assertConsecutiveSIMDRegisters(src1, src2, src3, src4);
         assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
         loadStoreMultipleStructures(ASIMDInstruction.ST4_MULTIPLE_4R, size, eSize, src1, addr);
+    }
+
+    /**
+     * C7.2.328 Store single 4-element structure from one lane of four registers. This instruction
+     * stores a 4-element structure to memory from the selected lane of four SIMD&FP registers.
+     * <br>
+     *
+     * Note the registers must be consecutive (modulo the number of SIMD registers).<br>
+     *
+     * <code>
+     * src1: b0 b4 b8 ... <br>
+     * src2: b1 b5 b9 ... <br>
+     * src3: b2 b6 b10 ... <br>
+     * src4: b3 b7 b11 ... <br>
+     * lane == 0 -> result in memory at addr: b0 b1 b2 b3 <br>
+     * lane == 1 -> result in memory at addr: b4 b5 b6 b7 <br>
+     * </code>
+     *
+     * @param eSize element size.
+     * @param src1 structure's first value.
+     * @param src2 structure's second value. Must be register after src1.
+     * @param src3 structure's third value. Must be register after src2.
+     * @param src4 structure's fourth value. Must be register after src3.
+     * @param lane lane index selecting which element from each source register is stored.
+     * @param addr destination address of first structure.
+     */
+    public void st4SingleVVVV(ElementSize eSize, Register src1, Register src2, Register src3, Register src4, int lane, AArch64Address addr) {
+        assert assertConsecutiveSIMDRegisters(src1, src2, src3, src4);
+
+        int baseEncoding = 0b0_0_001101_1_0_1_00000_000_0_00_00000_00000;
+        int laneEncoding = st4SingleLaneEncoding(eSize, lane);
+        int addressEncoding = encodeStructureAddress(ASIMDInstruction.ST4, ASIMDSize.FullReg, eSize, addr);
+
+        emitInt(baseEncoding | laneEncoding | addressEncoding | rd(src1));
     }
 
     /**
@@ -3853,7 +3994,7 @@ public abstract class AArch64ASIMDAssembler {
     }
 
     /**
-     * C7.2.367 Unsigned Multiply-Add Long.<br>
+     * C7.2.367 UMLAL (vector). Unsigned Multiply-Add Long.<br>
      *
      * <code>for i in 0..n-1 do dst[i] += uint_multiply(src1[i], src2[i])</code>
      *
@@ -3870,6 +4011,26 @@ public abstract class AArch64ASIMDAssembler {
         assert srcESize != ElementSize.DoubleWord : srcESize;
 
         threeDifferentEncoding(ASIMDInstruction.UMLAL, false, elemSizeXX(srcESize), dst, src1, src2);
+    }
+
+    /**
+     * C7.2.367 UMLAL2 (vector). Unsigned Multiply-Add Long, second half.<br>
+     *
+     * <code>for i in 0..n-1 do dst[i] += uint_multiply(src1[i+n], src2[i+n])</code>
+     *
+     * @param srcESize source element size. Cannot be ElementSize.DoubleWord. The destination
+     *            element size will be double this width.
+     * @param dst SIMD register.
+     * @param src1 SIMD register.
+     * @param src2 SIMD register.
+     */
+    public void umlal2VVV(ElementSize srcESize, Register dst, Register src1, Register src2) {
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src1.getRegisterCategory().equals(SIMD) : src1;
+        assert src2.getRegisterCategory().equals(SIMD) : src2;
+        assert srcESize != ElementSize.DoubleWord : srcESize;
+
+        threeDifferentEncoding(ASIMDInstruction.UMLAL, true, elemSizeXX(srcESize), dst, src1, src2);
     }
 
     /**
@@ -3907,6 +4068,26 @@ public abstract class AArch64ASIMDAssembler {
         assert src.getRegisterCategory().equals(SIMD) : src;
 
         copyEncoding(ASIMDInstruction.UMOV, eSize == ElementSize.DoubleWord, eSize, dst, src, index);
+    }
+
+    /**
+     * C7.2.373 UMULL (vector). Unsigned Multiply Long.<br>
+     *
+     * <code>for i in 0..n-1 do dst[i] = uint_multiply(src1[i], src2[i])</code>
+     *
+     * @param srcESize source element size. Cannot be ElementSize.DoubleWord. The destination
+     *            element size will be double this width.
+     * @param dst SIMD register.
+     * @param src1 SIMD register.
+     * @param src2 SIMD register.
+     */
+    public void umullVVV(ElementSize srcESize, Register dst, Register src1, Register src2) {
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src1.getRegisterCategory().equals(SIMD) : src1;
+        assert src2.getRegisterCategory().equals(SIMD) : src2;
+        assert srcESize != ElementSize.DoubleWord : srcESize;
+
+        threeDifferentEncoding(ASIMDInstruction.UMULL, false, elemSizeXX(srcESize), dst, src1, src2);
     }
 
     /**

@@ -30,15 +30,17 @@ import java.util.function.Function;
 
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.word.PointerBase;
+import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
-import com.oracle.svm.core.jdk.NativeLibrarySupport;
+import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
+import com.oracle.svm.core.jdk.Target_java_lang_ClassLoader;
 
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.MetaUtil;
 import jdk.vm.ci.meta.Signature;
-import org.graalvm.word.impl.Word;
 
 /**
  * Encapsulates the code address of a {@code native} method's implementation at runtime. This object
@@ -48,6 +50,7 @@ public final class JNINativeLinkage {
 
     private PointerBase entryPoint = Word.nullPointer();
 
+    private final Class<?> declaringClassObject;
     private final CharSequence declaringClass;
     private final CharSequence name;
     private final CharSequence descriptor;
@@ -64,6 +67,11 @@ public final class JNINativeLinkage {
      *            method
      */
     public JNINativeLinkage(CharSequence declaringClass, CharSequence name, CharSequence descriptor) {
+        this(null, declaringClass, name, descriptor);
+    }
+
+    public JNINativeLinkage(Class<?> declaringClassObject, CharSequence declaringClass, CharSequence name, CharSequence descriptor) {
+        this.declaringClassObject = declaringClassObject;
         this.declaringClass = declaringClass;
         this.name = name;
         this.descriptor = descriptor;
@@ -131,9 +139,8 @@ public final class JNINativeLinkage {
 
     @Override
     public String toString() {
-        String shortName = getShortName();
         return MetaUtil.internalNameToJava(getDeclaringClassName(), true, false) + "." + name + descriptor +
-                        " [symbol: " + shortName + " or " + shortName + "__" + getSignature() + "]";
+                        " [symbol: " + getShortName() + " or " + getLongName() + "]";
 
     }
 
@@ -143,11 +150,13 @@ public final class JNINativeLinkage {
      */
     public PointerBase getOrFindEntryPoint() {
         if (entryPoint.isNull()) {
+            Class<?> classObject = getDeclaringClassObject();
+            ClassLoader classLoader = classObject == null ? null : DynamicHub.fromClass(classObject).getClassLoader();
             String shortName = getShortName();
-            entryPoint = NativeLibrarySupport.singleton().findSymbol(shortName);
+            entryPoint = Word.pointer(Target_java_lang_ClassLoader.findNative(classLoader, classObject, shortName, getName()));
             if (entryPoint.isNull()) {
-                String longName = shortName + "__" + getSignature();
-                entryPoint = NativeLibrarySupport.singleton().findSymbol(longName);
+                String longName = getLongName();
+                entryPoint = Word.pointer(Target_java_lang_ClassLoader.findNative(classLoader, classObject, longName, getName()));
                 if (entryPoint.isNull()) {
                     throw new UnsatisfiedLinkError(toString());
                 }
@@ -156,12 +165,26 @@ public final class JNINativeLinkage {
         return entryPoint;
     }
 
-    private String getShortName() {
+    private Class<?> getDeclaringClassObject() {
+        if (ClassRegistries.respectClassLoader()) {
+            if (declaringClassObject != null) {
+                return declaringClassObject;
+            }
+            return JNIReflectionDictionary.getClassObjectByName(getDeclaringClassName());
+        }
+        return null;
+    }
+
+    public String getShortName() {
         StringBuilder sb = new StringBuilder("Java_");
         mangleName(getDeclaringClassName(), 1, getDeclaringClassName().length() - 1, sb);
         sb.append('_');
         mangleName(getName(), 0, name.length(), sb);
         return sb.toString();
+    }
+
+    public String getLongName() {
+        return getShortName() + "__" + getSignature();
     }
 
     private String getSignature() {

@@ -81,7 +81,6 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.JVMCIReflectionUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.asm.amd64.AMD64Assembler;
@@ -672,14 +671,46 @@ public class SubstrateOptions {
     @Option(help = "Trace all native tool invocations as part of image building", type = User)//
     public static final HostedOptionKey<Boolean> TraceNativeToolUsage = new HostedOptionKey<>(false);
 
-    @APIOption(name = "enable-http", fixedValue = "http", customHelp = "enable http support in the generated image")//
-    @APIOption(name = "enable-https", fixedValue = "https", customHelp = "enable https support in the generated image")//
-    @APIOption(name = "enable-url-protocols")//
+    private static final String DEPRECATION_MESSAGE_ENABLE_HTTP = """
+                    Use reachability metadata instead. Add this entry to META-INF/native-image/reachability-metadata.json:
+                    {
+                      "reflection": [
+                        {
+                          "type": "sun.net.www.protocol.http.Handler",
+                          "methods": [
+                            {
+                              "name": "<init>",
+                              "parameterTypes": []
+                            }
+                          ]
+                        }
+                      ]
+                    }""";
+    private static final String DEPRECATION_MESSAGE_ENABLE_HTTPS = """
+                    Use reachability metadata instead. Add this entry to META-INF/native-image/reachability-metadata.json:
+                    {
+                      "reflection": [
+                        {
+                          "type": "sun.net.www.protocol.https.Handler",
+                          "methods": [
+                            {
+                              "name": "<init>",
+                              "parameterTypes": []
+                            }
+                          ]
+                        }
+                      ]
+                    }""";
+    @APIOption(name = "enable-http", fixedValue = "http", customHelp = "enable http support in the generated image", deprecated = DEPRECATION_MESSAGE_ENABLE_HTTP)//
+    @APIOption(name = "enable-https", fixedValue = "https", customHelp = "enable https support in the generated image", deprecated = DEPRECATION_MESSAGE_ENABLE_HTTPS)//
+    @APIOption(name = "enable-url-protocols", deprecated = "Use reachability metadata instead.")//
     @Option(help = "List of comma separated URL protocols to enable.")//
     public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> EnableURLProtocols = new HostedOptionKey<>(
                     AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
-    @Option(help = "List of comma separated URL protocols that must never be included.")//
+    private static final String DEPRECATION_MESSAGE_DISABLE_URL_PROTOCOLS = "Non-default URL protocols are disabled unless registered in reachability metadata. " +
+                    "This option has no reachability-metadata replacement for default protocols such as file and resource.";
+    @Option(help = "List of comma separated URL protocols that must never be included.", deprecated = true, deprecationMessage = DEPRECATION_MESSAGE_DISABLE_URL_PROTOCOLS)//
     public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> DisableURLProtocols = new HostedOptionKey<>(
                     AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
@@ -930,17 +961,10 @@ public class SubstrateOptions {
 
     @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error)//
     @Option(help = "Backend used by the compiler", type = OptionType.User)//
-    public static final HostedOptionKey<String> CompilerBackend = new HostedOptionKey<>("lir") {
+    public static final HostedOptionKey<String> CompilerBackend = new HostedOptionKey<>("lir", SubstrateOptions::validateCompilerBackend) {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, String oldValue, String newValue) {
             if ("llvm".equals(newValue)) {
-                boolean isLLVMBackendMissing = JVMCIReflectionUtil.bootModuleLayer().findModule("org.graalvm.nativeimage.llvm").isEmpty();
-                if (isLLVMBackendMissing) {
-                    throw UserError.invalidOptionValue(CompilerBackend, newValue,
-                                    "The LLVM backend for GraalVM Native Image is missing and needs to be built from source. " +
-                                                    "For instructions, please see https://github.com/oracle/graal/blob/master/docs/reference-manual/native-image/LLVMBackend.md.");
-                }
-
                 /* See GR-14405, https://github.com/oracle/graal/issues/1056 */
                 GraalOptions.EmitStringSubstitutions.update(values, false);
                 /*
@@ -956,6 +980,13 @@ public class SubstrateOptions {
             }
         }
     };
+
+    private static void validateCompilerBackend(HostedOptionKey<String> optionKey) {
+        String compilerBackend = optionKey.getValue();
+        if ("llvm".equals(compilerBackend) && !SpawnIsolates.getValue()) {
+            throw UserError.invalidOptionValue(optionKey, compilerBackend, "The LLVM backend requires isolate support. Use -H:+SpawnIsolates or select a different compiler backend.");
+        }
+    }
 
     @Fold
     public static boolean useLLVMBackend() {
@@ -1312,6 +1343,16 @@ public class SubstrateOptions {
                 }
             }
         }
+
+        /** Use {@link SubstrateOptions#isForeignAPIEnabled} instead. */
+        @Option(help = "Support for calls via the Java Foreign Function and Memory API", type = Expert) //
+        public static final HostedOptionKey<Boolean> ForeignAPISupport = new HostedOptionKey<>(null, ConcealedOptions::validateForeignAPISupport);
+
+        private static void validateForeignAPISupport(HostedOptionKey<Boolean> optionKey) {
+            if (Boolean.TRUE.equals(optionKey.getValue()) && useLLVMBackend()) {
+                throw UserError.invalidOptionValue(optionKey, true, "Support for the Foreign Function and Memory API is not available with the LLVM backend.");
+            }
+        }
     }
 
     @Option(help = "Overwrites the available number of processors provided by the OS. Any value <= 0 means using the processor count from the OS.")//
@@ -1503,12 +1544,14 @@ public class SubstrateOptions {
     public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> IgnorePreserveForClasses = new HostedOptionKey<>(
                     AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
-    @Option(help = "Support for calls via the Java Foreign Function and Memory API", type = Expert) //
-    public static final HostedOptionKey<Boolean> ForeignAPISupport = new HostedOptionKey<>(true);
-
     @Fold
     public static boolean isForeignAPIEnabled() {
-        return SubstrateOptions.ForeignAPISupport.getValue();
+        Boolean value = ConcealedOptions.ForeignAPISupport.getValue();
+        if (value != null) {
+            return value;
+        }
+        /* Enabled by default but disabled for the LLVM backend. */
+        return !useLLVMBackend();
     }
 
     @Option(help = "Support for intrinsics from the Java Vector API", type = Expert) //

@@ -25,6 +25,7 @@
 package com.oracle.svm.core.classinitialization;
 
 import static com.oracle.svm.core.NeverInline.CALLER_CATCHES_IMPLICIT_EXCEPTIONS;
+import static com.oracle.svm.core.snippets.KnownIntrinsics.readCallerStackPointer;
 
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -44,6 +45,7 @@ import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.hub.crema.CremaSupport;
+import com.oracle.svm.core.jdk.StackTraceUtils;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.ContinuationSupport;
@@ -55,7 +57,6 @@ import com.oracle.svm.guest.staging.jdk.InternalVMMethod;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.shared.util.VMError;
 
-import jdk.internal.reflect.Reflection;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /**
@@ -363,10 +364,13 @@ public final class ClassInitializationInfo {
          * This does not work in general as class loading happens in more places than class
          * initialization, e.g., on class literals. However, this workaround makes most of the cases
          * work until we have a proper implementation of class loading.
+         *
+         * This is only done for "native" platforms because this requires reading the stack pointer
+         * and stack walking.
          */
-        if (!hub.isLoaded()) {
-            Class<?> callerClass = Reflection.getCallerClass();
-            if (DynamicHub.fromClass(callerClass).isLoaded()) {
+        if (Platform.includedIn(NATIVE_ONLY.class) && !hub.isLoaded()) {
+            Class<?> callerClass = getClassInitializationCallerClass();
+            if (callerClass != null && DynamicHub.fromClass(callerClass).isLoaded()) {
                 PredefinedClassesSupport.loadClassIfNotLoaded(callerClass.getClassLoader(), null, DynamicHub.toClass(hub));
             }
         }
@@ -394,6 +398,17 @@ public final class ClassInitializationInfo {
                 StackOverflowCheck.singleton().protectYellowZone();
             }
         }
+    }
+
+    @NeverInline("Starting a stack walk in the caller frame")
+    @Platforms(NATIVE_ONLY.class)
+    private static Class<?> getClassInitializationCallerClass() {
+        /*
+         * We don't use Reflection.getCallerClass() here because we are in a
+         * `@InternalVMMethod`-class so unlike Reflection.getCallerClass, we don't need to ignore
+         * the first frame.
+         */
+        return StackTraceUtils.getCallerClass(readCallerStackPointer(), true, false);
     }
 
     /**
@@ -485,7 +500,7 @@ public final class ClassInitializationInfo {
                 return;
             }
 
-            initState = InitState.BeingInitialized;
+            initState = InitState.BeingLinked;
             setInitThread();
         } finally {
             initLock.unlock();
@@ -545,7 +560,7 @@ public final class ClassInitializationInfo {
      * explicitly don't do any optimizations in that regard.
      */
     @NeverInline(CALLER_CATCHES_IMPLICIT_EXCEPTIONS)
-    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L1184-L1364")
+    @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L1184-L1364")
     private void tryInitialize0(DynamicHub hub) {
         assert !Platform.includedIn(NATIVE_ONLY.class) || StackOverflowCheck.singleton().isYellowZoneAvailable();
         /*
@@ -744,7 +759,7 @@ public final class ClassInitializationInfo {
 
     /** Eagerly initialize superinterfaces that declare default methods. May throw exceptions. */
     @NeverInline(CALLER_CATCHES_IMPLICIT_EXCEPTIONS)
-    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L1099-L1117")
+    @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L1099-L1117")
     private static void initializeSuperInterfaces(DynamicHub hub) {
         assert hub.hasDefaultMethods() : "caller should have checked this";
         for (DynamicHub iface : hub.getInterfaces()) {
@@ -787,8 +802,8 @@ public final class ClassInitializationInfo {
      * Acquire lock, set state, and notify all waiting threads. This method must not throw any
      * exceptions as this could result in deadlocks.
      */
-    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L1367-L1380")
-    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L802-L811")
+    @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L1367-L1380")
+    @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L802-L811")
     private void setInitializationStateAndNotify(InitState state) {
         try {
             setInitializationStateAndNotify0(state);
@@ -816,7 +831,7 @@ public final class ClassInitializationInfo {
         }
     }
 
-    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L1675-L1715")
+    @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L1675-L1715")
     private void invokeClassInitializer(DynamicHub hub) {
         if (runtimeClassInitializer == null) {
             return;
@@ -838,6 +853,7 @@ public final class ClassInitializationInfo {
     private void invokeClassInitializer0(DynamicHub hub) {
         if (RuntimeClassLoading.isSupported() && runtimeClassInitializer == INTERPRETER_INITIALIZATION_MARKER) {
             ResolvedJavaMethod classInitializer = hub.getInterpreterType().getClassInitializer();
+            VMError.guarantee(classInitializer != null, "Class initializer not found for class that declares `hasClassInitializer`.");
             CremaSupport.singleton().execute(classInitializer, new Object[0], CallKind.STATIC);
         } else {
             ClassInitializerFunctionPointer functionPointer = (ClassInitializerFunctionPointer) runtimeClassInitializer.functionPointer;

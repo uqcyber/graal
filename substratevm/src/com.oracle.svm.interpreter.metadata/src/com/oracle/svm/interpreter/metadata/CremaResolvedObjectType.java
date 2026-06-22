@@ -32,6 +32,7 @@ import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaMethod;
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaRecordComponent;
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaType;
+import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.espresso.classfile.Constants;
 import com.oracle.svm.espresso.classfile.ParserKlass;
 import com.oracle.svm.espresso.classfile.attributes.Attribute;
@@ -48,9 +49,11 @@ import com.oracle.svm.espresso.classfile.attributes.SignatureAttribute;
 import com.oracle.svm.espresso.classfile.descriptors.Descriptor;
 import com.oracle.svm.espresso.classfile.descriptors.Name;
 import com.oracle.svm.espresso.classfile.descriptors.ParserSymbols;
+import com.oracle.svm.espresso.classfile.descriptors.Signature;
 import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.meta.JavaType;
@@ -69,8 +72,8 @@ public final class CremaResolvedObjectType extends InterpreterResolvedObjectType
     private final byte[] primitiveStatics;
     private final Object[] referenceStatics;
 
-    // GR-70720: Allow AOT types as nest host.
-    private CremaResolvedObjectType host;
+    // GR-70720: The nest host can be either parsed from classfile attributes or supplied dynamically for hidden classes.
+    private InterpreterResolvedObjectType host;
 
     public CremaResolvedObjectType(ParserKlass parserKlass, InterpreterResolvedJavaType componentType, InterpreterResolvedObjectType superclass,
                     InterpreterResolvedObjectType[] interfaces,
@@ -103,11 +106,28 @@ public final class CremaResolvedObjectType extends InterpreterResolvedObjectType
         // filter out constructors
         ArrayList<CremaResolvedJavaMethod> result = new ArrayList<>();
         for (InterpreterResolvedJavaMethod declaredMethod : getDeclaredMethods()) {
-            if (!declaredMethod.isConstructor()) {
+            if (!declaredMethod.isConstructor() && !declaredMethod.isInternal()) {
                 result.add((CremaResolvedJavaMethod) declaredMethod);
             }
         }
         return result.toArray(new CremaResolvedJavaMethod[0]);
+    }
+
+    @Override
+    public CremaResolvedJavaMethod lookupDeclaredMethod(String name, String descriptor) {
+        Symbol<Name> symbolicName = SymbolsSupport.getNames().lookup(name);
+        if (symbolicName == null) {
+            return null;
+        }
+        Symbol<Signature> symbolicDescriptor = SymbolsSupport.getSignatures().lookupValidSignature(descriptor);
+        if (symbolicDescriptor == null) {
+            return null;
+        }
+        InterpreterResolvedJavaMethod method = lookupDeclaredMethod(symbolicName, symbolicDescriptor);
+        if (method instanceof CremaResolvedJavaMethod cremaMethod) {
+            return cremaMethod;
+        }
+        return null;
     }
 
     @Override
@@ -122,11 +142,20 @@ public final class CremaResolvedObjectType extends InterpreterResolvedObjectType
     }
 
     @Override
+    @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-26+13/src/hotspot/share/oops/instanceKlass.cpp#L1666-L1673")
     public ResolvedJavaMethod getClassInitializer() {
-        for (InterpreterResolvedJavaMethod method : getDeclaredMethods(false)) {
-            if (method.isClassInitializer()) {
-                return method;
-            }
+        /*
+         * Note: According to JVMS25 2.9.2:
+         *
+         * In a class file whose version number is 50.0 or below, a method named <clinit> that is
+         * void is considered the class or interface initialization method regardless of the
+         * setting of its ACC_STATIC flag or whether it takes arguments.
+         *
+         * However, HotSpot only calls static initializers that are static and `()V`.
+         */
+        InterpreterResolvedJavaMethod clinit = lookupDeclaredMethod(ParserSymbols.ParserNames._clinit_, ParserSymbols.ParserSignatures._void);
+        if (clinit != null && clinit.isClassInitializer()) {
+            return clinit;
         }
         return null;
     }
@@ -234,11 +263,16 @@ public final class CremaResolvedObjectType extends InterpreterResolvedObjectType
     }
 
     @Override
-    public CremaResolvedObjectType getNestHost() {
+    public InterpreterResolvedObjectType getNestHost() {
         if (host == null) {
             host = resolveHost();
         }
         return host;
+    }
+
+    public void setNestHost(InterpreterResolvedObjectType nestHost) {
+        assert host == null;
+        host = nestHost;
     }
 
     @Override
@@ -247,14 +281,18 @@ public final class CremaResolvedObjectType extends InterpreterResolvedObjectType
          * This method is not called for VM operations, only for reflection. No need to cache the
          * result as this is a rare operation.
          */
-        CremaResolvedObjectType nestHost = getNestHost();
+        InterpreterResolvedObjectType nestHost = getNestHost();
         if (this != nestHost) {
-            return resolveNestMembers(nestHost);
+            if (nestHost instanceof CremaResolvedObjectType cremaNestHost) {
+                return resolveNestMembers(cremaNestHost);
+            }
+            // GR-70720: For non-Crema hosts, report the host itself; hidden nestmates are not listed as nest members.
+            return new InterpreterResolvedObjectType[]{nestHost};
         }
         return resolveNestMembers(this);
     }
 
-    private CremaResolvedObjectType resolveHost() {
+    private InterpreterResolvedObjectType resolveHost() {
         NestHostAttribute nestHostAttribute = getAttribute(NestHostAttribute.NAME, NestHostAttribute.class);
         if (nestHostAttribute == null) {
             return this;

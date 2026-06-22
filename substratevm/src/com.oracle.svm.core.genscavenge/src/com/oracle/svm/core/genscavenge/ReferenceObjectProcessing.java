@@ -46,6 +46,7 @@ import com.oracle.svm.core.heap.ObjectHeader;
 import com.oracle.svm.core.heap.ObjectReferenceVisitor;
 import com.oracle.svm.core.heap.ReferenceInternals;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.metaspace.Metaspace;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.shared.Uninterruptible;
@@ -110,8 +111,8 @@ final class ReferenceObjectProcessing {
              */
             return;
         }
-        if (Heap.getHeap().isInImageHeap(referentAddr)) {
-            // Referents in the image heap cannot be moved or reclaimed, no need to look closer.
+        if (isNeverReclaimed(referentAddr)) {
+            // Referents in memory spaces that are not reclaimed do not need to be processed.
             return;
         }
         if (maybeUpdateForwardedReference(dr, referentAddr)) {
@@ -202,7 +203,7 @@ final class ReferenceObjectProcessing {
      */
     private static boolean processRememberedRef(Reference<?> dr) {
         Pointer refPointer = ReferenceInternals.getReferentPointer(dr);
-        assert !HeapImpl.getHeapImpl().isInImageHeap(refPointer) : "Image heap referent: should not have been discovered";
+        assert !isNeverReclaimed(refPointer) : "Never-reclaimed referent: should not have been discovered";
 
         if (SerialGCOptions.useCompactingOldGen() && GCImpl.getGCImpl().isCompleteCollection()) {
             // References have already been fixed up or nulled if the referent did not survive.
@@ -228,6 +229,11 @@ final class ReferenceObjectProcessing {
          */
         ReferenceInternals.setReferent(dr, null);
         return false;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    private static boolean isNeverReclaimed(Pointer ptr) {
+        return Heap.getHeap().isInImageHeap(ptr) || (Metaspace.isSupported() && Metaspace.singleton().isInAddressSpace(ptr));
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)

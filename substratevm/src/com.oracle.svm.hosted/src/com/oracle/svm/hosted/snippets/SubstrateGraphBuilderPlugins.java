@@ -156,6 +156,7 @@ import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins;
 import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins.AllocateUninitializedArrayPlugin;
 import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins.ReachabilityFencePlugin;
+import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins.Poly1305ProcessBlocksPlugin;
 import jdk.graal.compiler.replacements.nodes.AESNode;
 import jdk.graal.compiler.replacements.nodes.MacroNode.MacroParams;
 import jdk.graal.compiler.word.WordCastNode;
@@ -209,6 +210,7 @@ public class SubstrateGraphBuilderPlugins {
         if (supportsStubBasedPlugins) {
             registerAESPlugins(plugins);
             registerArraysSupportPlugins(plugins);
+            registerPoly1305Plugin(plugins);
         }
     }
 
@@ -1029,7 +1031,16 @@ public class SubstrateGraphBuilderPlugins {
 
     private static void registerStackValuePlugins(InvocationPlugins plugins) {
         registerStackValuePlugins(new Registration(plugins, StackValue.class), true);
-        registerStackValuePlugins(new Registration(plugins, UnsafeStackValue.class), false);
+        Registration unsafeStackValue = new Registration(plugins, UnsafeStackValue.class);
+        registerStackValuePlugins(unsafeStackValue, false);
+        unsafeStackValue.register(new RequiredInvocationPlugin("getShared", int.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode sizeNode) {
+                long size = longValue(b, targetMethod, sizeNode, "size");
+                b.addPush(JavaKind.Object, StackValueNode.createShared(1, size, b, false));
+                return true;
+            }
+        });
 
         Registration unsafeLateStackValue = new Registration(plugins, UnsafeLateStackValue.class);
         unsafeLateStackValue.register(new RequiredInvocationPlugin("get", int.class) {
@@ -1285,6 +1296,11 @@ public class SubstrateGraphBuilderPlugins {
         r.register(new StandardGraphBuilderPlugins.VectorizedHashCodeInvocationPlugin());
     }
 
+    private static void registerPoly1305Plugin(InvocationPlugins plugins) {
+        Registration r = new Registration(plugins, "com.sun.crypto.provider.Poly1305");
+        r.register(new Poly1305ProcessBlocksPlugin());
+    }
+
     public static class SubstrateCipherBlockChainingCryptPlugin extends StandardGraphBuilderPlugins.CipherBlockChainingCryptPlugin {
 
         public SubstrateCipherBlockChainingCryptPlugin(AESNode.CryptMode mode) {
@@ -1318,6 +1334,37 @@ public class SubstrateGraphBuilderPlugins {
         protected ResolvedJavaType getTypeAESCrypt(MetaAccessProvider metaAccess, ResolvedJavaType context) throws ClassNotFoundException {
             Class<?> classAESCrypt = ReflectionUtil.lookupClass("com.sun.crypto.provider.AESCrypt");
             return metaAccess.lookupJavaType(classAESCrypt);
+        }
+    }
+
+    public static class SubstrateGaloisCounterModeCryptPlugin extends StandardGraphBuilderPlugins.GaloisCounterModeCryptPlugin {
+
+        @Override
+        protected boolean canApply(GraphBuilderContext b) {
+            return b instanceof BytecodeParser;
+        }
+
+        @Override
+        protected ResolvedJavaType getTypeAESCrypt(MetaAccessProvider metaAccess, ResolvedJavaType context) throws ClassNotFoundException {
+            Class<?> classAESCrypt = ReflectionUtil.lookupClass("com.sun.crypto.provider.AESCrypt");
+            return metaAccess.lookupJavaType(classAESCrypt);
+        }
+
+        @Override
+        protected ResolvedJavaType getTypeGCTR(MetaAccessProvider metaAccess, ResolvedJavaType context) throws ClassNotFoundException {
+            Class<?> classGCTR = ReflectionUtil.lookupClass("com.sun.crypto.provider.GCTR");
+            return metaAccess.lookupJavaType(classGCTR);
+        }
+
+        @Override
+        protected ResolvedJavaType getTypeGHASH(MetaAccessProvider metaAccess, ResolvedJavaType context) throws ClassNotFoundException {
+            Class<?> classGHASH = ReflectionUtil.lookupClass("com.sun.crypto.provider.GHASH");
+            return metaAccess.lookupJavaType(classGHASH);
+        }
+
+        @Override
+        public boolean isRuntimeChecked(Architecture arch) {
+            return false;
         }
     }
 
@@ -1375,6 +1422,9 @@ public class SubstrateGraphBuilderPlugins {
                 return false;
             }
         });
+
+        r = new Registration(plugins, "com.sun.crypto.provider.GaloisCounterMode");
+        r.register(new SubstrateGaloisCounterModeCryptPlugin());
     }
 
     private static <T> T constantObjectParameter(GraphBuilderContext b, ResolvedJavaMethod targetMethod, int parameterIndex, Class<T> declaredType, ValueNode classNode) {

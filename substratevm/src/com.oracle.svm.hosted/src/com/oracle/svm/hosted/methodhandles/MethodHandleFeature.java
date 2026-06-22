@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.hosted.methodhandles;
 
+import static com.oracle.svm.core.invoke.MethodHandleUtils.JLI_PACKAGE;
+
 import java.lang.invoke.CallSite;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -38,8 +40,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.collections.EconomicSet;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
 
 import com.oracle.graal.pointsto.ObjectScanner;
@@ -49,23 +51,19 @@ import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.BuildPhaseProvider;
-import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
 import com.oracle.svm.core.fieldvaluetransformer.NewEmptyArrayFieldValueTransformer;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.invoke.MethodHandleIntrinsic;
-import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
-import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
-import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.util.dynamicaccess.JVMCIRuntimeReflection;
 
 import jdk.graal.compiler.vmaccess.VMAccess;
@@ -98,7 +96,6 @@ import sun.invoke.util.Wrapper;
  * {@code Target_java_lang_invoke_MethodHandleNatives}).
  */
 @AutomaticallyRegisteredFeature
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 @SuppressWarnings("unused")
 public class MethodHandleFeature implements InternalFeature {
 
@@ -119,7 +116,8 @@ public class MethodHandleFeature implements InternalFeature {
     private Object runtimeMethodTypeInternTable;
     private Method referencedKeySetAdd;
 
-    private EconomicSet<Object> heapSpeciesData = EconomicSet.create(); // concurrent access
+    private final Object heapSpeciesDataLock = new Object();
+    private EconomicSet<Object> heapSpeciesData = EconomicSet.create();
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
@@ -192,14 +190,13 @@ public class MethodHandleFeature implements InternalFeature {
                             @SuppressWarnings("unchecked")
                             public Object transform(Object receiver, Object originalValue) {
                                 ConcurrentHashMap<Object, Object> originalMap = (ConcurrentHashMap<Object, Object>) originalValue;
+                                EconomicSet<Object> reachableSpeciesData = takeReachableSpeciesData();
                                 ConcurrentHashMap<Object, Object> filteredMap = new ConcurrentHashMap<>();
                                 originalMap.forEach((key, speciesData) -> {
-                                    if (heapSpeciesData.contains(speciesData)) {
+                                    if (reachableSpeciesData.contains(speciesData)) {
                                         filteredMap.put(key, speciesData);
                                     }
                                 });
-                                /* No uses of heapSpeciesData should be needed after this point. */
-                                heapSpeciesData = null;
                                 return filteredMap;
                             }
                         });
@@ -418,7 +415,7 @@ public class MethodHandleFeature implements InternalFeature {
     }
 
     private static void registerVarHandleMethodsForReflection(FeatureAccess access, Class<?> subtype) {
-        if (subtype.getPackage().getName().equals("java.lang.invoke") && subtype != VarHandle.class) {
+        if (subtype.getPackage().getName().equals(JLI_PACKAGE) && subtype != VarHandle.class) {
             JVMCIRuntimeReflection.register(((DuringAnalysisAccessImpl) access).getMetaAccess().lookupJavaType(subtype).getDeclaredMethods(false));
         }
     }
@@ -465,9 +462,23 @@ public class MethodHandleFeature implements InternalFeature {
     }
 
     public void registerHeapSpeciesData(Object speciesData) {
-        VMError.guarantee(heapSpeciesData != null, "The collected SpeciesData objects have already been processed.");
-        synchronized (heapSpeciesData) {
+        synchronized (heapSpeciesDataLock) {
+            VMError.guarantee(heapSpeciesData != null, "The collected SpeciesData objects have already been processed.");
             heapSpeciesData.add(speciesData);
+        }
+    }
+
+    private EconomicSet<Object> takeReachableSpeciesData() {
+        synchronized (heapSpeciesDataLock) {
+            VMError.guarantee(heapSpeciesData != null, "The collected SpeciesData objects have already been processed.");
+            EconomicSet<Object> result = heapSpeciesData;
+            /*
+             * No uses of heapSpeciesData should be needed after this point. Setting it to null while
+             * holding the lock prevents concurrent object-reachable callbacks from silently adding
+             * SpeciesData objects after filtering has started.
+             */
+            heapSpeciesData = null;
+            return result;
         }
     }
 

@@ -35,6 +35,9 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -48,6 +51,7 @@ import com.oracle.svm.core.LinkerInvocation;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.libc.BionicLibC;
 import com.oracle.svm.core.c.libc.LibCBase;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.c.CGlobalDataFeature;
@@ -314,6 +318,13 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                  * reference within this library.
                  */
                 additionalPreOptions.add("-Wl,-Bsymbolic");
+            } else if (imageKind == AbstractImage.NativeImageKind.SHARED_LIBRARY) {
+                /*
+                 * NativeLibraries.c is linked into the image and calls JVM_FindLibraryEntry. Keep
+                 * those calls bound to this image's implementation instead of allowing HotSpot's
+                 * libjvm symbol to preempt them.
+                 */
+                additionalPreOptions.add("-Wl,-Bsymbolic-functions");
             }
 
             /* Use --version-script to control the visibility of image symbols. */
@@ -454,7 +465,8 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
              */
             try {
                 Path exportedSymbolsPath = nativeLibs.tempDirectory.resolve("exported_symbols.list");
-                Files.write(exportedSymbolsPath, getImageSymbols(true));
+                Set<String> globalSymbols = Stream.concat(getImageSymbols(true).stream(), JNIRegistrationSupport.getShimLibrarySymbols().map("_"::concat)).collect(Collectors.toSet());
+                Files.write(exportedSymbolsPath, globalSymbols);
                 additionalPreOptions.add("-Wl,-exported_symbols_list");
                 additionalPreOptions.add("-Wl," + exportedSymbolsPath.toAbsolutePath());
             } catch (IOException e) {
@@ -506,6 +518,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                 case STATIC_EXECUTABLE:
                     // checked in the definition of --static
                     throw VMError.shouldNotReachHereUnexpectedInput(imageKind);
+                case IMAGE_LAYER:
                 case SHARED_LIBRARY:
                     cmd.add("-shared");
                     if (Platform.includedIn(Platform.DARWIN.class)) {
@@ -518,6 +531,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
     }
 
     private static class WindowsCCLinkerInvocation extends CCLinkerInvocation {
+        private static final Pattern UNRESOLVED_EXTERNAL_SYMBOL_PATTERN = Pattern.compile("\\bLNK(?:2001|2019): unresolved external symbol (\\S+)");
 
         private final String imageName;
 
@@ -551,6 +565,32 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
         }
 
         @Override
+        public void verifyLinkerOutput(List<String> lines, Set<String> allowedUnresolvedSymbols) {
+            if (imageKind != AbstractImage.NativeImageKind.IMAGE_LAYER) {
+                return;
+            }
+
+            Set<String> unresolvedSymbols = new TreeSet<>();
+            for (String line : lines) {
+                Matcher matcher = UNRESOLVED_EXTERNAL_SYMBOL_PATTERN.matcher(line);
+                if (matcher.find()) {
+                    unresolvedSymbols.add(matcher.group(1));
+                }
+            }
+
+            if (unresolvedSymbols.isEmpty()) {
+                return;
+            }
+
+            Set<String> unexpectedSymbols = new TreeSet<>(unresolvedSymbols);
+            unexpectedSymbols.removeAll(allowedUnresolvedSymbols);
+            if (!unexpectedSymbols.isEmpty()) {
+                throw UserError.abort("Linking the image layer produced unexpected unresolved PE/COFF symbols: %s. Allowed unresolved symbols are: %s",
+                                unexpectedSymbols, new TreeSet<>(allowedUnresolvedSymbols));
+            }
+        }
+
+        @Override
         public List<String> getCommand() {
             List<String> compilerCmd = getCompilerCommand(additionalPreOptions);
 
@@ -565,6 +605,18 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
             cmd.add("/link");
             cmd.add("/INCREMENTAL:NO");
             cmd.add("/NODEFAULTLIB:LIBCMT");
+
+            if (imageKind == AbstractImage.NativeImageKind.IMAGE_LAYER) {
+                /*
+                 * Image layer DLLs have forward references to symbols defined in the application
+                 * layer (e.g. CGlobalData forSymbol references, delayed method symbols). On
+                 * ELF/Mach-O, these are undefined symbols resolved by the dynamic linker at load
+                 * time. On PE/COFF, we must allow the link to succeed with unresolved externals.
+                 * The application layer exports the required symbols and Windows runtime support
+                 * patches the recorded forward-reference slots at isolate startup.
+                 */
+                cmd.add("/FORCE:UNRESOLVED");
+            }
 
             /* Use page size alignment to support memory mapping of the image heap. */
             cmd.add("/FILEALIGN:4096");
@@ -598,15 +650,32 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                 cmd.add(library + ".lib");
             }
 
+            if (imageKind.isExecutable && ImageLayerBuildingSupport.buildingApplicationLayer()) {
+                /*
+                 * Application layer executables can be small enough that the link does not pull in
+                 * any MSVC-built object with a /DEFAULTLIB:msvcrt directive. The GraalVM-generated
+                 * object file does not contain such directives, so add the CRT import library
+                 * explicitly for mainCRTStartup.
+                 */
+                cmd.add("msvcrt.lib");
+            }
+
             // Add required Windows Libraries
             cmd.add("advapi32.lib");
             cmd.add("ws2_32.lib");
             cmd.add("secur32.lib");
             cmd.add("iphlpapi.lib");
             cmd.add("userenv.lib");
+
+            // GR-76168: added libraries should not be necessary
+            if (ClassRegistries.respectClassLoader()) {
+                cmd.add("winhttp.lib");
+                cmd.add("shell32.lib");
+                cmd.add("ole32.lib");
+            }
+
             /* JDK-8295231 removed implicit linking via pragma directives in source files. */
             cmd.add("mswsock.lib");
-
             if (SubstrateOptions.EnableWildcardExpansion.getValue() && imageKind == AbstractImage.NativeImageKind.EXECUTABLE) {
                 /*
                  * Enable wildcard expansion in command line arguments, see

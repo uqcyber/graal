@@ -36,6 +36,8 @@ import java.lang.reflect.Method;
 import java.net.URL;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.Scanner;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -43,6 +45,12 @@ import java.util.stream.Collectors;
 import jdk.dynalink.StandardOperation;
 
 public class Main {
+    private static final String MISC_MODULE_RESOURCE_NAME = "META-INF/native-image-module-tests/misc-resource.txt";
+    private static final String CONDITIONAL_DUPLICATE_MODULE_RESOURCE_NAME = "conditional-duplicate-resource.txt";
+    private static final String CONDITIONAL_DUPLICATE_MODULE_RESOURCE_CONTENTS = "Conditionally registered duplicate module resource";
+    private static final String APP_MISC_MODULE_RESOURCE_CONTENTS = "Build-time registered misc resource in module moduletests.hello.app";
+    private static final String RUNTIME_MISC_MODULE_RESOURCE_CONTENTS = "Runtime module-path misc resource in module moduletests.hello.runtime";
+
     public static void main(String[] args) throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
         failIfAssertionsAreDisabled();
 
@@ -187,7 +195,55 @@ public class Main {
         }
         assertClassResourceURLContents(Greeter.class, "/" + sameResourcePathName, helloLibModuleResourceContents);
 
+        testMiscModuleResources(ClassLoader.getSystemClassLoader(), Set.of(APP_MISC_MODULE_RESOURCE_CONTENTS));
+        testDuplicateConditionalModuleResource(helloAppModule);
         testRuntimeOnlyModulePathResource(helloLibModule, runtimeModulePathResourcePathName);
+    }
+
+    private static void testMiscModuleResources(ClassLoader loader, Set<String> expectedContents) {
+        System.out.println("Now testing miscellaneous resource access in modules");
+
+        Set<String> actualContents = new HashSet<>();
+        try {
+            Enumeration<URL> resources = loader.getResources(MISC_MODULE_RESOURCE_NAME);
+            while (resources.hasMoreElements()) {
+                URL resource = resources.nextElement();
+                try (Scanner s = new Scanner(resource.openStream())) {
+                    actualContents.add(s.nextLine());
+                }
+            }
+        } catch (IOException e) {
+            throw new AssertionError("Unable to access miscellaneous module resource " + MISC_MODULE_RESOURCE_NAME + " from " + loader, e);
+        }
+        assert expectedContents.equals(actualContents) : "Unexpected contents for " + MISC_MODULE_RESOURCE_NAME + " from " + loader + ": " + actualContents;
+    }
+
+    private static void testDuplicateConditionalModuleResource(Module helloAppModule) {
+        if (!isNativeImageRuntime() || Boolean.getBoolean("svm.test.expectRuntimeModulePathFallback")) {
+            /*
+             * On the JVM, and in the runtime-module-path fallback test, the resource is visible
+             * through the regular module reader. The conditional metadata behavior is only
+             * observable for resources embedded into the image.
+             */
+            return;
+        }
+        assert ResourceConditionA.class.getName().endsWith("ResourceConditionA");
+
+        try (InputStream stream = helloAppModule.getResourceAsStream(CONDITIONAL_DUPLICATE_MODULE_RESOURCE_NAME)) {
+            assert stream == null : CONDITIONAL_DUPLICATE_MODULE_RESOURCE_NAME + " should not be accessible before either condition type is reached";
+        } catch (IOException e) {
+            throw new AssertionError("Unable to query resource " + CONDITIONAL_DUPLICATE_MODULE_RESOURCE_NAME + " from " + helloAppModule, e);
+        }
+
+        ResourceConditionB.reached = true;
+        try (InputStream stream = helloAppModule.getResourceAsStream(CONDITIONAL_DUPLICATE_MODULE_RESOURCE_NAME)) {
+            assert stream != null : CONDITIONAL_DUPLICATE_MODULE_RESOURCE_NAME + " should be accessible after the second condition type is reached";
+            try (Scanner s = new Scanner(stream)) {
+                assert CONDITIONAL_DUPLICATE_MODULE_RESOURCE_CONTENTS.equals(s.nextLine()) : "Unexpected contents of " + CONDITIONAL_DUPLICATE_MODULE_RESOURCE_NAME;
+            }
+        } catch (IOException e) {
+            throw new AssertionError("Unable to access resource " + CONDITIONAL_DUPLICATE_MODULE_RESOURCE_NAME + " from " + helloAppModule, e);
+        }
     }
 
     private static void testRuntimeOnlyModulePathResource(Module helloLibModule, String resourcePathName) {
@@ -224,6 +280,8 @@ public class Main {
         ClassLoader runtimeModuleLoader = layer.findLoader(moduleName);
         assert module.getClassLoader() == runtimeModuleLoader : module + " not defined to the runtime layer loader";
         assert runtimeModuleLoader.getParent() == ClassLoader.getSystemClassLoader() : module + " loader does not use the system class loader as parent";
+        // This lookup returns a jar: URL for the runtime module-path resource.
+        testMiscModuleResources(runtimeModuleLoader, Set.of(APP_MISC_MODULE_RESOURCE_CONTENTS, RUNTIME_MISC_MODULE_RESOURCE_CONTENTS));
 
         try {
             Class<?> runtimeGreeter = Class.forName("hello.runtime.RuntimeGreeter", true, runtimeModuleLoader);

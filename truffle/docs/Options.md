@@ -78,6 +78,7 @@ The accepted values are:
   Diagnose - Retry compilation with extra diagnostics enabled.
     ExitVM - Exit the VM process.
 - `--engine.CompilerIdleDelay=<ms>` : Set the time in milliseconds an idle Truffle compiler thread will wait for new tasks before terminating. New compiler threads will be started once new compilation tasks are submitted. Select '0' to never terminate the Truffle compiler thread. The option is not supported by all Truffle runtimes. On the runtime which doesn't support it the option has no effect. default: 10000
+- `--engine.CompilerThreadStackSize=[0, inf)B|KB|MB|GB` : Set the requested stack size of Truffle compiler threads. By default compiler threads use 640KB stack space. The requested size is rounded up to implementation-specific minima and page sizes as needed.
 - `--engine.CompilerThreads=[1, inf)` : Manually set the number of compiler threads. By default, the number of compiler threads is scaled with the number of available cores on the CPU.
 - `--engine.EncodedGraphCachePurgeDelay=<ms>` : Delay, in milliseconds, after which the encoded graph cache is dropped when a Truffle compiler thread becomes idle (default: 10000).
 - `--engine.FirstTierBackedgeCounts=true|false` : Whether to emit look-back-edge counters in the first-tier compilations. (default: true)
@@ -151,8 +152,9 @@ These are internal options for debugging language implementations and tools.
 - `--engine.CompileImmediately` : Compile immediately to test Truffle compilation
 - `--engine.CompileOnly=<name>,<name>,...` : Restrict compilation to ','-separated list of includes (or excludes prefixed with '~'). No restriction by default.
 - `--engine.DynamicCompilationThresholds=true|false` : Reduce or increase the compilation threshold depending on the size of the compilation queue (default: true).
+- `--engine.DynamicCompilationThresholdsHighLoadSlope=[0.0, inf)` : The slope used to increase compilation thresholds when compilation queue load is above DynamicCompilationThresholdsMaxNormalLoad (default: 0.09).
 - `--engine.DynamicCompilationThresholdsMaxNormalLoad=[1, inf)` : The desired maximum compilation queue load. When the load rises above this value, the compilation thresholds are increased. The load is scaled by the number of compiler threads.  (default: 90)
-- `--engine.DynamicCompilationThresholdsMinNormalLoad=[1, inf)` : The desired minimum compilation queue load. When the load falls below this value, the compilation thresholds are decreased. The load is scaled by the number of compiler threads (default: 10).
+- `--engine.DynamicCompilationThresholdsMinNormalLoad=[0, inf)` : The desired minimum compilation queue load. When the load falls below this value, the compilation thresholds are decreased. The load is scaled by the number of compiler threads (default: 0).
 - `--engine.DynamicCompilationThresholdsMinScale=[0.0, inf)` : The minimal scale the compilation thresholds can be reduced to (default: 0.1).
 - `--engine.OSRCompilationThreshold=[1, inf)` : Number of loop iterations until on-stack-replacement compilation is triggered (default 100352).
 - `--engine.OSRMaxCompilationReAttempts=[0, inf)` : Number of compilation re-attempts before bailing out of OSR compilation for a given method (default 30). This number is an approximation of the acceptable number of deopts.

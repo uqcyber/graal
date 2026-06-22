@@ -31,7 +31,7 @@ import org.graalvm.nativeimage.c.type.WordPointer;
 import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.thread.VMOperation;
-import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalWord;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.option.HostedOptionKey;
 
@@ -154,6 +154,7 @@ public interface StackOverflowCheck {
     /**
      * Returns the combined size of the yellow and red zone.
      */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     int yellowAndRedZoneSize();
 
     /** @see #setState */

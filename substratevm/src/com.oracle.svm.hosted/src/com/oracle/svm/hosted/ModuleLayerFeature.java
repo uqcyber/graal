@@ -93,12 +93,10 @@ import com.oracle.svm.hosted.reflect.proxy.ProxyRenamingSubstitutionProcessor;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ModuleSupport;
 import com.oracle.svm.shared.util.ReflectionUtil;
-import com.oracle.svm.shared.util.StringUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.HostedModuleSupport;
 
@@ -149,7 +147,6 @@ import jdk.internal.module.SystemModuleFinders;
  * </p>
  */
 @AutomaticallyRegisteredFeature
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = PartiallyLayerAware.class)
 @SuppressWarnings("unused")
 public class ModuleLayerFeature implements InternalFeature {
     private ModuleLayerFeatureUtils moduleLayerFeatureUtils;
@@ -672,6 +669,8 @@ public class ModuleLayerFeature implements InternalFeature {
                 for (Map.Entry<Module, Module> e2 : unnamedModulePairs.entrySet()) {
                     replicateVisibilityModification(accessImpl, applicationModules, hostedFrom, e2.getKey(), runtimeFrom, e2.getValue());
                 }
+            }
+            for (Module runtimeFrom : namedModulePairs.values()) {
                 moduleLayerFeatureUtils.encodeFields(accessImpl, runtimeFrom);
             }
         } catch (IllegalAccessException ex) {
@@ -790,7 +789,17 @@ public class ModuleLayerFeature implements InternalFeature {
         runtimeModuleLayer.modules();
     }
 
+    /**
+     * Compact immutable JDK collection implementations are only safe for closed executable images.
+     * Layered image builds keep module metadata mutable/observable across layer patching and
+     * rescanning, and shared-library images preserve more runtime module state than ordinary
+     * executables.
+     */
     @Platforms(Platform.HOSTED_ONLY.class)
+    private static boolean shouldCompactModuleMetadata() {
+        return !ImageLayerBuildingSupport.buildingImageLayer() && !SubstrateOptions.SharedLibrary.getValue();
+    }
+
     private final class ModuleLayerFeatureUtils {
         private final Map<ClassLoader, Map<String, Module>> runtimeModules;
         private final ImageClassLoader imageClassLoader;
@@ -834,9 +843,7 @@ public class ModuleLayerFeature implements InternalFeature {
         ModuleLayerFeatureUtils(ImageClassLoader cl) {
             runtimeModules = new HashMap<>();
             imageClassLoader = cl;
-            nativeAccessEnabled = NativeImageClassLoaderOptions.EnableNativeAccess.getValue().values().stream()
-                            .flatMap(m -> Arrays.stream(StringUtil.split(m, ",")))
-                            .collect(Collectors.toSet());
+            nativeAccessEnabled = NativeImageClassLoaderOptions.EnableNativeAccess.getValue().valuesAsSet();
 
             Method classGetDeclaredFields0Method = ReflectionUtil.lookupMethod(Class.class, "getDeclaredFields0", boolean.class);
             try {
@@ -1220,6 +1227,17 @@ public class ModuleLayerFeature implements InternalFeature {
             return nameToModule;
         }
 
+        private static Map<String, Set<Module>> compactPackageMap(Map<String, Set<Module>> packages) {
+            if (!shouldCompactModuleMetadata()) {
+                return packages;
+            }
+            Map<String, Set<Module>> compactPackages = new HashMap<>(packages.size());
+            for (Map.Entry<String, Set<Module>> entry : packages.entrySet()) {
+                compactPackages.put(entry.getKey(), Set.copyOf(entry.getValue()));
+            }
+            return compactPackages;
+        }
+
         private void rescan(AnalysisAccessBase access, Map<String, Set<Module>> packages, Module m, Field modulePackagesField) {
             if (ImageLayerBuildingSupport.buildingImageLayer()) {
                 access.rescanObject(packages, scanReason);
@@ -1250,12 +1268,10 @@ public class ModuleLayerFeature implements InternalFeature {
 
         @SuppressWarnings("unchecked")
         void addReads(AfterAnalysisAccessImpl accessImpl, Module module, Module other) throws IllegalAccessException {
-            Set<Module> reads = (Set<Module>) moduleReadsField.get(module);
-            if (reads == null) {
-                reads = new HashSet<>(1); // noEconomicSet(streaming)
-                moduleReadsField.set(module, reads);
-            }
+            Set<Module> oldReads = (Set<Module>) moduleReadsField.get(module);
+            Set<Module> reads = oldReads == null ? new HashSet<>(1) : new HashSet<>(oldReads); // noEconomicSet(streaming)
             reads.add(other == null ? allUnnamedModule : other);
+            moduleReadsField.set(module, reads);
             accessImpl.rescanField(module, moduleReadsField, scanReason);
         }
 
@@ -1304,10 +1320,11 @@ public class ModuleLayerFeature implements InternalFeature {
             if (fieldValue == null) {
                 return;
             }
-            Map<String, Set<Module>> encodedFieldValue = fieldValue.entrySet().stream()
-                            .collect(Collectors.toMap(
-                                            e -> encoder.encodePackage(e.getKey()),
-                                            Map.Entry::getValue));
+            Map<String, Set<Module>> encodedFieldValue = new HashMap<>(fieldValue.size());
+            for (Map.Entry<String, Set<Module>> entry : fieldValue.entrySet()) {
+                encodedFieldValue.put(encoder.encodePackage(entry.getKey()), entry.getValue());
+            }
+            encodedFieldValue = compactPackageMap(encodedFieldValue);
             field.set(module, encodedFieldValue);
             if (ImageLayerBuildingSupport.buildingImageLayer()) {
                 accessImpl.rescanObject(encodedFieldValue, scanReason);
@@ -1381,7 +1398,8 @@ public class ModuleLayerFeature implements InternalFeature {
         }
 
         void patchModuleLayerNameToModuleField(AnalysisAccessBase accessImpl, ModuleLayer moduleLayer, Map<String, Module> nameToModule) throws IllegalAccessException {
-            moduleLayerNameToModuleField.set(moduleLayer, nameToModule);
+            Map<String, Module> runtimeNameToModule = shouldCompactModuleMetadata() ? Map.copyOf(nameToModule) : nameToModule;
+            moduleLayerNameToModuleField.set(moduleLayer, runtimeNameToModule);
             accessImpl.rescanField(moduleLayer, moduleLayerNameToModuleField, scanReason);
         }
 

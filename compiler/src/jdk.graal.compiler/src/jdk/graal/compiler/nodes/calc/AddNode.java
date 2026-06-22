@@ -244,12 +244,12 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
         if (forX instanceof NotNode notY && notY.getValue() == forY) {
             // ~y + y => -1
             // veriopt: AddNot2: ~x + x |-> -1
-            return ConstantNode.forIntegerStamp(forX.stamp(view), -1);
+            return BinaryArithmeticNode.createIntegerConstant(forX.stamp(view), -1);
         }
         if (forY instanceof NotNode notX && forX == notX.getValue()) {
             // x + ~x => -1
             // veriopt: AddNot: x + ~x |-> -1
-            return ConstantNode.forIntegerStamp(forX.stamp(view), -1);
+            return BinaryArithmeticNode.createIntegerConstant(forX.stamp(view), -1);
         }
         if (self == null) {
             self = (AddNode) new AddNode(forX, forY).maybeCommuteInputs();

@@ -179,13 +179,13 @@ suite = {
         },
         "LLVM_LLD_STANDALONE": {
             "license" : "Apache-2.0-LLVM",
-            "version" : "20.1.4-1-ga7183f5a17-bg217527b869",
-            "host" : "https://lafo.ssw.uni-linz.ac.at/pub/llvm-org",
+            "version" : "20.1.4-2-gb73e7327e3-bgd1ab043d9b",
+            "host" : "https://lafo.ssw.uni-linz.ac.at/pub/llvm",
             "os_arch": {
                 "darwin": {
                     "aarch64": {
-                        "urls" : ["{host}/llvm-lldonly-llvmorg-{version}-darwin-aarch64.tar.gz"],
-                        "digest" : "sha512:b4d99953e4d3cc947555da92f4f195cf37e0156a09c04ad97ef67042632768c144d86a3d11fda67dd55a7c6321e6db3cd449d719f7a5af842cd285d27d98fc22",
+                        "urls" : ["{host}/llvm-lldonly-{version}-darwin-aarch64.tar.gz"],
+                        "digest" : "sha512:866a548fe5d76dd3689d73dd478d10a80a5fac2a33d93c276643e33081dd0c677167ea4072c8de349708b37c1ad2379cf9f301ad5d2602be716d4bf121a52538",
                     },
                     "<others>": {
                         "optional": True,
@@ -366,6 +366,14 @@ suite = {
                     "sun.invoke.util",
                     "sun.net",
                     "sun.net.www",
+                    "sun.net.www.protocol.file",
+                    "sun.net.www.protocol.ftp",
+                    "sun.net.www.protocol.http",
+                    "sun.net.www.protocol.https",
+                    "sun.net.www.protocol.jar",
+                    "sun.net.www.protocol.jmod",
+                    "sun.net.www.protocol.jrt",
+                    "sun.net.www.protocol.mailto",
                     "sun.nio.ch",
                     "sun.reflect.annotation",
                     "sun.reflect.generics.factory",
@@ -1202,6 +1210,7 @@ suite = {
             ],
             "requires": [
                 "java.compiler",
+                "java.desktop",
                 "jdk.jfr",
                 "java.xml",
                 "java.management",
@@ -1211,7 +1220,9 @@ suite = {
             ],
             "requiresConcealed" : {
                 "java.base" : [
+                    "jdk.internal.loader",
                     "jdk.internal.misc",
+                    "jdk.internal.reflect",
                     "jdk.internal.vm",
                     "sun.security.jca",
                 ],
@@ -1226,7 +1237,7 @@ suite = {
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
             ],
-            "javaCompliance" : "22+",
+            "javaCompliance" : "24+",
             "jacoco" : "exclude",
         },
 
@@ -1308,7 +1319,7 @@ suite = {
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
             ],
-            "javaCompliance" : "21+",
+            "javaCompliance" : "24+",
             "testProject": True,
             "jacoco" : "exclude",
         },
@@ -1652,7 +1663,7 @@ suite = {
             "workingSets": "SVM",
             "annotationProcessors": [
             ],
-            "javaCompliance" : "21+",
+            "javaCompliance" : "24+",
             "jacoco" : "exclude",
         },
 
@@ -2079,6 +2090,7 @@ suite = {
                             org.graalvm.nativeimage.guest,
                             org.graalvm.nativeimage.guest.staging,
                             org.graalvm.nativeimage.junitsupport,
+                            org.graalvm.nativeimage.llvm,
                             org.graalvm.nativeimage.pointsto,
                             org.graalvm.truffle.runtime.svm""",
                 ],
@@ -2108,6 +2120,7 @@ suite = {
                 "name" : "org.graalvm.nativeimage.guest.staging",
                 "exports" : [
                     """* to org.graalvm.nativeimage.builder,
+                            org.graalvm.nativeimage.llvm,
                             org.graalvm.extraimage.builder,
                             org.graalvm.nativeimage.guest,
                             org.graalvm.nativeimage.foreign,
@@ -2404,6 +2417,9 @@ suite = {
                 },
                 "<others>": {
                     "layout": {
+                        "./": [
+                            "file:src/com.oracle.svm.core/src/com/oracle/svm/core/gc/shared/include",
+                        ],
                         # on all other os's we don't want libc specific subdirectories
                         "include/": [
                             "dependency:com.oracle.svm.native.libchelper/include/*",

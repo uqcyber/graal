@@ -103,6 +103,7 @@ import java.util.List;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.Pair;
 import org.graalvm.wasm.vector.Vector128;
+import org.graalvm.wasm.vector.Vector128Ops;
 import org.graalvm.wasm.vector.Vector128Shape;
 import org.graalvm.wasm.collection.IntArrayList;
 import org.graalvm.wasm.constants.Bytecode;
@@ -145,6 +146,7 @@ public class BinaryParser extends BinaryStreamParser {
 
     private final WasmModule module;
     private final WasmLanguage language;
+    private final WasmContext wasmContext;
     private final WasmContextOptions contextOptions;
     private final int[] multiResult;
     private final long[] longMultiResult;
@@ -166,14 +168,19 @@ public class BinaryParser extends BinaryStreamParser {
 
     @TruffleBoundary
     public BinaryParser(WasmModule module, WasmContext context, byte[] data) {
-        this(module, context.language(), data);
+        this(module, context.language(), context, data);
     }
 
     @TruffleBoundary
     public BinaryParser(WasmModule module, WasmLanguage language, byte[] data) {
+        this(module, language, null, data);
+    }
+
+    private BinaryParser(WasmModule module, WasmLanguage language, WasmContext context, byte[] data) {
         super(data);
         this.module = module;
         this.language = language;
+        this.wasmContext = context;
         this.contextOptions = language.contextOptions();
         this.multiResult = new int[2];
         this.longMultiResult = new long[2];
@@ -1947,6 +1954,10 @@ public class BinaryParser extends BinaryStreamParser {
                     }
                     case Instructions.ARRAY_NEW_DEFAULT: {
                         int arrayTypeIdx = readArrayTypeIndex();
+                        if (!WasmType.hasDefaultValue(module.arrayTypeElemType(arrayTypeIdx))) {
+                            Assert.fail(Failure.TYPE_MISMATCH, "array.new_default: array type %d has non-defaultable element type %s", arrayTypeIdx,
+                                            WasmType.toString(module.arrayTypeElemType(arrayTypeIdx)));
+                        }
                         state.popChecked(I32_TYPE);
                         state.push(WasmType.withNullable(false, arrayTypeIdx));
                         state.addInstruction(Bytecode.ARRAY_NEW_DEFAULT, arrayTypeIdx);
@@ -2126,6 +2137,9 @@ public class BinaryParser extends BinaryStreamParser {
                         state.push(I32_TYPE);
                         state.addInstruction(aggregateOpcode);
                         break;
+                    }
+                    default: {
+                        fail(Failure.UNSPECIFIED_MALFORMED, "Unknown opcode: 0xFB 0x%X", aggregateOpcode);
                     }
                 }
                 break;
@@ -2875,6 +2889,9 @@ public class BinaryParser extends BinaryStreamParser {
 
     private void checkSIMDSupport() {
         checkContextOption(simd, "Vector instructions are not enabled (opcode: 0x%02x)", Instructions.VECTOR);
+        if (wasmContext != null && Vector128Ops.usesFallbackImplementation()) {
+            wasmContext.warnAboutMissingVectorApi();
+        }
     }
 
     private void checkRelaxedSIMDSupport(int vectorOpcode) {
@@ -3266,6 +3283,10 @@ public class BinaryParser extends BinaryStreamParser {
                         }
                         case Instructions.ARRAY_NEW_DEFAULT: {
                             int arrayTypeIdx = readArrayTypeIndex();
+                            if (!WasmType.hasDefaultValue(module.arrayTypeElemType(arrayTypeIdx))) {
+                                Assert.fail(Failure.TYPE_MISMATCH, "array.new_default: array type %d has non-defaultable element type %s", arrayTypeIdx,
+                                                WasmType.toString(module.arrayTypeElemType(arrayTypeIdx)));
+                            }
                             state.popChecked(I32_TYPE);
                             state.push(WasmType.withNullable(false, arrayTypeIdx));
                             state.addInstruction(Bytecode.ARRAY_NEW_DEFAULT, arrayTypeIdx);
@@ -3306,7 +3327,7 @@ public class BinaryParser extends BinaryStreamParser {
                             state.push(WasmType.withNullable(false, I31_HEAPTYPE));
                             state.addInstruction(Bytecode.REF_I31);
                             if (calculable) {
-                                stack.add((int) stack.removeLast() & ~(1 << 31));
+                                stack.add(WasmType.asSignedI31((int) stack.removeLast()));
                             }
                             break;
                         }
@@ -4046,6 +4067,7 @@ public class BinaryParser extends BinaryStreamParser {
         readLongLimits(longOut, boolOut, MAX_MEMORY_DECLARATION_SIZE, MAX_MEMORY_64_DECLARATION_SIZE);
         final boolean is64Bit = boolOut[0];
         if (is64Bit) {
+            assertTrue(memory64, "64-bit indexed memory used without setting --wasm.Memory64", Failure.MALFORMED_LIMITS_FLAGS);
             assertUnsignedLongLessOrEqual(longOut[0], MAX_MEMORY_64_DECLARATION_SIZE, Failure.MEMORY_64_SIZE_LIMIT_EXCEEDED);
             assertUnsignedLongLessOrEqual(longOut[1], MAX_MEMORY_64_DECLARATION_SIZE, Failure.MEMORY_64_SIZE_LIMIT_EXCEEDED);
             assertUnsignedLongLessOrEqual(longOut[0], longOut[1], Failure.LIMIT_MINIMUM_GREATER_THAN_MAXIMUM);

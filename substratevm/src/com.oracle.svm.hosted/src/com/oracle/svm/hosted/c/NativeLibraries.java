@@ -85,9 +85,10 @@ import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-import com.oracle.svm.util.AnnotationUtil;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.ReflectionUtil.ReflectionUtilError;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.debug.DebugContext;
@@ -126,6 +127,7 @@ public final class NativeLibraries {
     private final List<String> libraries;
     private final DependencyGraph dependencyGraph;
     private final List<String> jniStaticLibraries;
+    private final Set<String> jniStaticLibrariesAndDependencies;
     private final LinkedHashSet<String> libraryPaths;
 
     private final List<CInterfaceError> errors;
@@ -270,6 +272,7 @@ public final class NativeLibraries {
         libraries = Collections.synchronizedList(new ArrayList<>());
         dependencyGraph = new DependencyGraph();
         jniStaticLibraries = Collections.synchronizedList(new ArrayList<>());
+        jniStaticLibrariesAndDependencies = ConcurrentHashMap.newKeySet();
 
         libraryPaths = initCLibraryPath();
 
@@ -470,6 +473,8 @@ public final class NativeLibraries {
             /* "nio" implicitly depends on "net" */
             allDeps.add("net");
         }
+        jniStaticLibrariesAndDependencies.add(library);
+        jniStaticLibrariesAndDependencies.addAll(allDeps);
         dependencyGraph.add(library, allDeps);
     }
 
@@ -504,8 +509,31 @@ public final class NativeLibraries {
         return allStaticLibs.get(Paths.get(getStaticLibraryName(staticLibraryName)));
     }
 
+    public List<String> getStaticLibrarySymbols(String staticLibraryName) {
+        Path libraryPath = getStaticLibraryPath(getAllStaticLibs(), staticLibraryName);
+        if (libraryPath == null) {
+            return List.of();
+        }
+        Path symbolsPath = Paths.get(libraryPath + ".symbols");
+        if (!Files.isRegularFile(symbolsPath)) {
+            return List.of();
+        }
+        try {
+            return Files.readAllLines(symbolsPath).stream()
+                            .map(String::trim)
+                            .filter(line -> !line.isEmpty())
+                            .toList();
+        } catch (IOException e) {
+            throw VMError.shouldNotReachHere(e);
+        }
+    }
+
     public Collection<Path> getAllStaticLibNames() {
         return getAllStaticLibs().keySet();
+    }
+
+    public boolean hasStaticLibrary(String library) {
+        return getStaticLibraryPath(getAllStaticLibs(), library) != null;
     }
 
     private Map<Path, Path> getAllStaticLibs() {
@@ -692,5 +720,9 @@ public final class NativeLibraries {
 
     public List<String> getJniStaticLibraries() {
         return jniStaticLibraries;
+    }
+
+    public Collection<String> getJniStaticLibrariesAndDependencies() {
+        return jniStaticLibrariesAndDependencies;
     }
 }

@@ -76,9 +76,11 @@ local evaluate_late(key, object) = task_spec(run_spec.evaluate_late({key:object}
       ],
     },
 
-    local common_vm_linux = common_vm + {
+    local common_vm_linux_amd64 = common_vm + {
       capabilities+: ['manycores'],
     },
+
+    local common_vm_linux_aarch64 = common_vm,
 
     local common_vm_darwin = common_vm + {
       environment+: {
@@ -90,11 +92,11 @@ local evaluate_late(key, object) = task_spec(run_spec.evaluate_late({key:object}
     local common_vm_windows = common_vm + graal_common.windows_server_2016_amd64,
 
     "linux": {
-      "amd64": graal_common.linux_amd64 + common_vm_linux,
-      "aarch64": graal_common.linux_aarch64 + common_vm_linux,
+      "amd64": graal_common.linux_amd64 + common_vm_linux_amd64,
+      "aarch64": graal_common.linux_aarch64 + common_vm_linux_aarch64,
     },
     "ubuntu": {
-      "amd64": graal_common.linux_amd64_ubuntu + common_vm_linux,
+      "amd64": graal_common.linux_amd64_ubuntu + common_vm_linux_amd64,
     },
     "darwin": {
       "aarch64": graal_common.darwin_aarch64 + common_vm_darwin,
@@ -200,7 +202,7 @@ local evaluate_late(key, object) = task_spec(run_spec.evaluate_late({key:object}
   local deploy_graalvm_espresso(major_version, with_g1=false) = svm_common + common_os_deploy + espresso_name + task_spec({
     notify_groups:: ['deploy'],
   }) + build_base_graalvm_image(with_profiles=false) + task_spec({
-    espresso_standalone_dist:: (if vm.edition == 'ce' then 'GRAALVM_ESPRESSO_COMMUNITY_JAVA' + major_version else 'GRAALVM_ESPRESSO_JAVA' + major_version) +
+    espresso_standalone_dist:: (if vm.edition == 'ce' then 'GRAALVM_ESPRESSO_COMMUNITY' + major_version else 'GRAALVM_ESPRESSO' + major_version) +
       (if with_g1 then '_G1' else ''),
     mx_vm_espresso:: vm.mx_cmd_base_no_env + ['--env', self.mx_env_espresso] + self.mx_vm_cmd_suffix,
     run +: (if with_g1 then [['set-export', 'ESPRESSO_DELIVERABLE_VARIANT', 'G1']] else []) + [

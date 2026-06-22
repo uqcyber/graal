@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -411,32 +411,6 @@ public abstract class OptimizedCallTarget implements TruffleCompilable, RootCall
         return size > 0 ? size : childrenCount;
     }
 
-    /*
-     * Legacy implementation.
-     */
-    @SuppressWarnings("deprecation")
-    public final void prepareForCompilation() {
-        RootNode root = this.rootNode;
-        if (root == null) {
-            throw CompilerDirectives.shouldNotReachHere("Initialization call targets cannot be compiled.");
-        }
-        /*
-         * Compared to the new prepareForCompilation we do not return for not initialized call
-         * targets. This is on purpose, as the return value of prepareForCompilation has no effect.
-         */
-        OptimizedRuntimeAccessor.NODES.prepareForCompilation(root, true, 2, true);
-        /*
-         * We need to unconditionally initialize the assumptions as the return value is not
-         * interpreted for the legacy implementation.
-         */
-        if (nodeRewritingAssumption == null) {
-            initializeNodeRewritingAssumption();
-        }
-        if (validRootAssumption == null) {
-            initializeValidRootAssumption();
-        }
-    }
-
     @Override
     public boolean prepareForCompilation(boolean rootCompilation, int compilationTier, boolean lastTier) {
         RootNode root = this.rootNode;
@@ -463,22 +437,6 @@ public abstract class OptimizedCallTarget implements TruffleCompilable, RootCall
             }
         }
         return result;
-    }
-
-    final Assumption getNodeRewritingAssumption() {
-        Assumption assumption = nodeRewritingAssumption;
-        if (assumption == null) {
-            assumption = initializeNodeRewritingAssumption();
-        }
-        return assumption;
-    }
-
-    final Assumption getValidRootAssumption() {
-        Assumption assumption = validRootAssumption;
-        if (assumption == null) {
-            assumption = initializeValidRootAssumption();
-        }
-        return assumption;
     }
 
     @Override
@@ -702,10 +660,15 @@ public abstract class OptimizedCallTarget implements TruffleCompilable, RootCall
             bypassedInstalledCode = true;
         }
         ensureInitialized();
+
+        // Branchless saturating increment. If the increment overflows, the sign-extension term
+        // wraps the counter back to Integer.MAX_VALUE and avoids exception-based overflow handling.
         int intCallCount = this.callCount;
-        this.callCount = intCallCount == Integer.MAX_VALUE ? intCallCount : ++intCallCount;
+        intCallCount = (intCallCount + 1) + ((intCallCount + 1) >> 31);
         int intLoopCallCount = this.callAndLoopCount;
-        this.callAndLoopCount = intLoopCallCount == Integer.MAX_VALUE ? intLoopCallCount : ++intLoopCallCount;
+        intLoopCallCount = (intLoopCallCount + 1) + ((intLoopCallCount + 1) >> 31);
+        this.callCount = intCallCount;
+        this.callAndLoopCount = intLoopCallCount;
 
         // Check if call target is hot enough to compile
         if (shouldCompileImpl(intCallCount, intLoopCallCount)) {
@@ -763,14 +726,18 @@ public abstract class OptimizedCallTarget implements TruffleCompilable, RootCall
 
     private boolean firstTierCall() {
         // this is partially evaluated so the second part should fold to a constant.
+        // Branchless saturating increment. If the increment overflows, the sign-extension term
+        // wraps the counter back to Integer.MAX_VALUE and avoids exception-based overflow handling.
         int firstTierCallCount = this.callCount;
-        this.callCount = firstTierCallCount == Integer.MAX_VALUE ? firstTierCallCount : ++firstTierCallCount;
+        firstTierCallCount = (firstTierCallCount + 1) + ((firstTierCallCount + 1) >> 31);
         int firstTierLoopCallCount = this.callAndLoopCount;
-        this.callAndLoopCount = firstTierLoopCallCount == Integer.MAX_VALUE ? firstTierLoopCallCount : ++firstTierLoopCallCount;
-        if (!compilationFailed //
-                        && !isSubmittedForCompilation()//
-                        && firstTierCallCount >= engine.callThresholdInFirstTier //
-                        && firstTierLoopCallCount >= scaledThreshold(engine.callAndLoopThresholdInFirstTier)) {
+        firstTierLoopCallCount = (firstTierLoopCallCount + 1) + ((firstTierLoopCallCount + 1) >> 31);
+        this.callCount = firstTierCallCount;
+        this.callAndLoopCount = firstTierLoopCallCount;
+        if (firstTierCallCount >= engine.callThresholdInFirstTier //
+                        && firstTierLoopCallCount >= scaledThreshold(engine.callAndLoopThresholdInFirstTier) //
+                        && !compilationFailed //
+                        && !isSubmittedForCompilation()) {
             return lastTierCompile();
         }
         return false;
@@ -1372,13 +1339,11 @@ public abstract class OptimizedCallTarget implements TruffleCompilable, RootCall
     }
 
     public final long getInitializedTimestamp() {
-        return initializedTimestamp;
-    }
-
-    final void setInitializedTimestamp(long timestamp) {
-        if (initialized) {
-            initializedTimestamp = timestamp;
+        if (!initialized) {
+            return 0;
         }
+        long patchTimestamp = engine.patchEpochNanos;
+        return patchTimestamp > initializedTimestamp ? patchTimestamp : initializedTimestamp;
     }
 
     public final Map<String, Object> getDebugProperties() {

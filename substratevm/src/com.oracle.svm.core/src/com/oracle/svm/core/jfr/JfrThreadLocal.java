@@ -35,7 +35,7 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.JavaMainWrapper;
-import com.oracle.svm.core.UnmanagedMemoryUtil;
+import com.oracle.svm.guest.staging.core.UnmanagedMemoryUtil;
 import com.oracle.svm.core.jfr.events.ThreadCPULoadEvent;
 import com.oracle.svm.core.jfr.events.ThreadEndEvent;
 import com.oracle.svm.core.jfr.events.ThreadStartEvent;
@@ -46,11 +46,11 @@ import com.oracle.svm.core.thread.PlatformThreads;
 import com.oracle.svm.core.thread.Target_java_lang_Thread;
 import com.oracle.svm.core.thread.ThreadListener;
 import com.oracle.svm.core.thread.VMOperation;
-import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
-import com.oracle.svm.core.threadlocal.FastThreadLocalInt;
-import com.oracle.svm.core.threadlocal.FastThreadLocalLong;
-import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
-import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalFactory;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalInt;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalLong;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalObject;
+import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalWord;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.SubstrateUtil;
 
@@ -131,7 +131,7 @@ public class JfrThreadLocal implements ThreadListener {
 
     @Uninterruptible(reason = "Only uninterruptible code may be executed before the thread is fully started.")
     @Override
-    public void beforeThreadStart(IsolateThread isolateThread, Thread javaThread) {
+    public void afterThreadStart(IsolateThread isolateThread, Thread javaThread) {
         if (SubstrateJVM.get().isRecording()) {
             SubstrateJVM.getThreadRepo().registerThread(javaThread);
             ThreadCPULoadEvent.initWallclockTime(isolateThread);
@@ -251,10 +251,11 @@ public class JfrThreadLocal implements ThreadListener {
     /**
      * Allocation JFR events can be emitted along the allocation slow path. In some cases, when the
      * slow path may be taken, a {@link Thread} object may not yet be assigned to the current
-     * thread, see {@link PlatformThreads#ensureCurrentAssigned(String, ThreadGroup, boolean)} where
-     * a {@link Thread} object must be created before it can be assigned to the current thread. This
-     * may happen during shutdown in {@link JavaMainWrapper}. Therefore, this method must account
-     * for the case where {@link JavaThreads#getCurrentThreadOrNull()} returns null.
+     * thread, see {@link PlatformThreads#ensureCurrentThreadHasThreadObject(String, ThreadGroup,
+     * boolean)} where a {@link Thread} object must be created before it can be assigned to the
+     * current thread. This may happen during shutdown in {@link JavaMainWrapper}. Therefore, this
+     * method must account for the case where {@link JavaThreads#getCurrentThreadOrNull()} returns
+     * null.
      */
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static boolean isThreadExcluded(Thread thread) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,9 +28,9 @@ import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_
 
 import java.util.Arrays;
 
+import com.oracle.svm.core.interpreter.InterpreterFrameSourceInfo;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.core.monitor.MonitorSupport;
-import com.oracle.svm.shared.util.VMError;
 
 /// Stores JVM locals and operand stack slots for one interpreted frame.
 ///
@@ -51,6 +51,8 @@ public final class InterpreterFrame {
     private final Object[] arguments;
     private Object[] locks;
     private int lockCount;
+    private InterpreterFrameSourceInfo syntheticStackTraceCallerInfo;
+    private boolean hiddenFromStackWalking;
 
     private static final Object[] EMPTY = new Object[0];
 
@@ -60,6 +62,7 @@ public final class InterpreterFrame {
         this.arguments = arguments;
         this.lockCount = 0;
         this.locks = EMPTY;
+        this.hiddenFromStackWalking = false;
     }
 
     static InterpreterFrame create(int slotCount, Object... arguments) {
@@ -174,25 +177,56 @@ public final class InterpreterFrame {
         }
     }
 
-    void removeLock(Object ref) {
+    /// Removes one frame-local monitor acquisition for `ref`, if this frame recorded one.
+    boolean removeLock(Object ref) {
         assert ref != null;
         if (lockCount > 0 && locks[lockCount - 1] == ref) {
             // Fast path, balanced locks.
             locks[--lockCount] = null;
+            return true;
         } else {
             lockCount = -1;
             // Unbalanced locks, linear scan.
             for (int i = 0; i < locks.length; ++i) {
                 if (locks[i] == ref) {
                     locks[i] = null;
-                    return;
+                    return true;
                 }
             }
-            throw VMError.shouldNotReachHere("lock not found in interpreter frame");
+            return false;
         }
     }
 
     Object[] getLocks() {
         return locks;
+    }
+
+    public Object getLock(int index) {
+        return locks[index];
+    }
+
+    boolean isHiddenFromStackWalking() {
+        return hiddenFromStackWalking;
+    }
+
+    public void hideFromStackWalking() {
+        hiddenFromStackWalking = true;
+    }
+
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    InterpreterFrameSourceInfo getStackTraceCallerInfo() {
+        return syntheticStackTraceCallerInfo;
+    }
+
+    /**
+     * Sets the synthetic outer caller chain used when stack walking a deopt-resumed interpreter
+     * frame.
+     *
+     * @param callerInfo virtual caller frames peeled out of the compiled inlining stack, or
+     *            {@code null} to clear the synthetic caller chain
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public void setStackTraceCallerInfo(InterpreterFrameSourceInfo callerInfo) {
+        this.syntheticStackTraceCallerInfo = callerInfo;
     }
 }

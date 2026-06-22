@@ -43,6 +43,10 @@ public class StringAPISet {
     @CConstant
     public static native int CP_ACP();
 
+    /** UTF-8 code page. */
+    @CConstant
+    public static native int CP_UTF8();
+
     /** Maps a character string to a UTF-16 (wide character) string. */
     @CFunction(transition = CFunction.Transition.NO_TRANSITION)
     public static native int MultiByteToWideChar(int CodePage, int dwFlags, CCharPointer lpMultiByteStr, int cbMultiByte, WCharPointer lpWideCharStr, int cchWideChar);

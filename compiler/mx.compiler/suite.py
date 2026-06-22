@@ -1,5 +1,5 @@
 suite = {
-  "mxversion": "7.68.4",
+  "mxversion": "7.83.0",
   "name" : "compiler",
   "sourceinprojectwhitelist" : [],
 
@@ -33,7 +33,7 @@ suite = {
       {
         "name": "barista",
         "subdir": False,
-        "version": "0.6.5",
+        "version": "0.7.3",
         "foreign": True, # barista is not an mx suite
         "dynamic": True,
         "urls": [

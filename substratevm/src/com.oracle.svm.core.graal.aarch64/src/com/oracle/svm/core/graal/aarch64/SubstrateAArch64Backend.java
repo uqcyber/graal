@@ -91,6 +91,7 @@ import com.oracle.svm.core.nodes.SafepointCheckNode;
 import com.oracle.svm.core.nodes.SubstrateIndirectCallTargetNode;
 import com.oracle.svm.core.pltgot.GOTAccess;
 import com.oracle.svm.core.pltgot.PLTGOTConfiguration;
+import com.oracle.svm.core.thread.RecurringCallbackSupport;
 import com.oracle.svm.core.thread.VMThreads.StatusSupport;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.SubstrateUtil;
@@ -538,11 +539,11 @@ public class SubstrateAArch64Backend extends SubstrateBackendWithAssembler<Subst
     }
 
     protected class SubstrateAArch64LIRGenerator extends AArch64LIRGenerator implements SubstrateLIRGenerator {
-        private final PLTGOTConfiguration pltGotConfiguration;
+        private final PLTGOTConfiguration pltGOTConfiguration;
 
         public SubstrateAArch64LIRGenerator(LIRKindTool lirKindTool, AArch64ArithmeticLIRGenerator arithmeticLIRGen, MoveFactory moveFactory, Providers providers, LIRGenerationResult lirGenRes) {
             super(lirKindTool, arithmeticLIRGen, null, moveFactory, providers, lirGenRes);
-            this.pltGotConfiguration = PLTGOTConfiguration.isEnabled() ? PLTGOTConfiguration.singleton() : null;
+            this.pltGOTConfiguration = PLTGOTConfiguration.isEnabled() ? PLTGOTConfiguration.singleton() : null;
         }
 
         @Override
@@ -658,10 +659,10 @@ public class SubstrateAArch64Backend extends SubstrateBackendWithAssembler<Subst
         }
 
         private Variable getGOTEntryAddress(SharedMethod callee) {
-            assert pltGotConfiguration != null : "Foreign call through the GOT table is only possible if the PLT/GOT is enabled.";
+            assert pltGOTConfiguration != null : "Foreign call through the GOT table is only possible if the PLT/GOT is enabled.";
             LIRKind wordKind = getLIRKindTool().getWordKind();
             var heapBase = ReservedRegisters.singleton().getHeapBaseRegister().asValue(wordKind);
-            var heapBaseOffset = GOTAccess.getGotEntryOffsetFromHeapRegister(pltGotConfiguration.getMethodGotEntry(callee));
+            var heapBaseOffset = GOTAccess.getGOTEntryOffsetFromHeapRegister(pltGOTConfiguration.getMethodGOTEntry(callee));
             int wordBits = wordKind.getPlatformKind().getSizeInBytes() * Byte.SIZE;
             Value gotEntryAddress = AArch64AddressValue.makeAddress(wordKind, wordBits, heapBase, heapBaseOffset);
             return getArithmetic().emitLoad(wordKind, gotEntryAddress, null, MemoryOrderMode.PLAIN, MemoryExtendKind.DEFAULT);
@@ -672,7 +673,7 @@ public class SubstrateAArch64Backend extends SubstrateBackendWithAssembler<Subst
         }
 
         private boolean shouldEmitPLTGOTCall(SharedMethod callee) {
-            return pltGotConfiguration != null && pltGotConfiguration.shouldCallViaPLTGOT(getResult().getMethod(), callee);
+            return pltGOTConfiguration != null && pltGOTConfiguration.shouldCallViaPLTGOT(getResult().getMethod(), callee);
         }
 
         /**
@@ -1012,9 +1013,17 @@ public class SubstrateAArch64Backend extends SubstrateBackendWithAssembler<Subst
         @Override
         public void emitBranch(LogicNode node, LabelRef trueSuccessor, LabelRef falseSuccessor, double trueSuccessorProbability) {
             if (node instanceof SafepointCheckNode) {
-                AArch64SafepointCheckOp op = new AArch64SafepointCheckOp();
-                append(op);
-                append(new AArch64ControlFlow.BranchOp(op.getConditionFlag(), trueSuccessor, falseSuccessor, trueSuccessorProbability));
+                if (RecurringCallbackSupport.isEnabled()) {
+                    AArch64SafepointCheckOp op = new AArch64SafepointCheckOp();
+                    append(op);
+                    append(new AArch64ControlFlow.BranchOp(op.getConditionFlag(), trueSuccessor, falseSuccessor, trueSuccessorProbability));
+                } else {
+                    /*
+                     * Without recurring callbacks, safepoint checks only distinguish 0 from
+                     * MAX_VALUE, so the compare and branch can use AArch64's cbz/cbnz form.
+                     */
+                    append(new AArch64SafepointCheckBranchOp(trueSuccessor, falseSuccessor, trueSuccessorProbability));
+                }
             } else {
                 super.emitBranch(node, trueSuccessor, falseSuccessor, trueSuccessorProbability);
             }
@@ -1122,6 +1131,10 @@ public class SubstrateAArch64Backend extends SubstrateBackendWithAssembler<Subst
                 });
             }
 
+            makeFrameWithoutRuntimeCodeOffset(crb, masm, totalFrameSize, frameSize);
+        }
+
+        protected void makeFrameWithoutRuntimeCodeOffset(CompilationResultBuilder crb, AArch64MacroAssembler masm, int totalFrameSize, int frameSize) {
             boolean preserveFramePointer = ((SubstrateAArch64RegisterConfig) crb.frameMap.getRegisterConfig()).shouldPreserveFramePointer();
             // based on HotSpot's macroAssembler_aarch64.cpp MacroAssembler::build_frame
 
@@ -1572,6 +1585,10 @@ public class SubstrateAArch64Backend extends SubstrateBackendWithAssembler<Subst
                 assert InterpreterSupport.isEnabled();
                 yield new AArch64InterpreterStubs.InterpreterLeaveStubContext(method);
             }
+            case InterpreterLeaveJNIStub -> {
+                assert InterpreterSupport.isEnabled();
+                yield new AArch64InterpreterStubs.InterpreterLeaveJNIStubContext(method);
+            }
             case InterpreterDeoptEntryPointStub -> {
                 assert InterpreterSupport.isEnabled();
                 assert SubstrateOptions.useRistretto();
@@ -1783,7 +1800,7 @@ public class SubstrateAArch64Backend extends SubstrateBackendWithAssembler<Subst
         if (stubType == Deoptimizer.StubType.InterpreterEnterStub) {
             assert InterpreterSupport.isEnabled();
             frameMap.reserveOutgoing(AArch64InterpreterStubs.additionalFrameSizeEnterStub());
-        } else if (stubType == Deoptimizer.StubType.InterpreterLeaveStub) {
+        } else if (stubType == Deoptimizer.StubType.InterpreterLeaveStub || stubType == Deoptimizer.StubType.InterpreterLeaveJNIStub) {
             assert InterpreterSupport.isEnabled();
             frameMap.reserveOutgoing(AArch64InterpreterStubs.additionalFrameSizeLeaveStub());
         }

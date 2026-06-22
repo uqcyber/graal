@@ -84,8 +84,13 @@ public final class AccessAdvisor {
         internalCallerFilter.addOrGetChildren("java.lang.Module", ConfigurationFilter.Inclusion.Include);
         internalCallerFilter.addOrGetChildren("java.math.**", ConfigurationFilter.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("java.net.**", ConfigurationFilter.Inclusion.Exclude);
-        // URLConnection.lookupContentHandlerClassFor calls Class.forName
+
+        // Calls Class.forName
         internalCallerFilter.addOrGetChildren("java.net.URLConnection", ConfigurationFilter.Inclusion.Include);
+        internalCallerFilter.addOrGetChildren("java.net.URL$DefaultFactory", ConfigurationFilter.Inclusion.Include);
+        // URL calls java.net.URL.DefaultFactory.createURLStreamHandler
+        internalCallerFilter.addOrGetChildren("java.net.URL", ConfigurationFilter.Inclusion.Include);
+
         internalCallerFilter.addOrGetChildren("java.nio.**", ConfigurationFilter.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("java.text.**", ConfigurationFilter.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("java.time.**", ConfigurationFilter.Inclusion.Exclude);
@@ -151,8 +156,7 @@ public final class AccessAdvisor {
 
     /*
      * Exclude selection of packages distributed with GraalVM which are not unconditionally exported
-     * by their module and should not be accessible from application code. Generate all with:
-     * native-image-utils generate-filters --exclude-unexported-packages-from-modules [--reduce]
+     * by their module and should not be accessible from application code.
      */
     private static void excludeInaccessiblePackages(HierarchyFilterNode rootNode) {
         rootNode.addOrGetChildren("com.oracle.graal.**", ConfigurationFilter.Inclusion.Exclude);

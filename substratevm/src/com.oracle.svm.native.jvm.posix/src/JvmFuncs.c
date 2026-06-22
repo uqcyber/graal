@@ -25,6 +25,10 @@
 
 /* JVM_ functions imported from the hotspot sources */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -47,6 +51,12 @@
 
 /* Set by native-image during image build time. Indicates whether the built image is a static binary. */
 extern int __svm_vm_is_static_binary;
+
+__attribute__((weak)) void* __svm_find_builtin_symbol(const char* name) {
+    (void) name;
+    return NULL;
+}
+
 /*
     The way JDK checks IPv6 support on Linux involves checking if inet_pton exists using JVM_FindLibraryEntry. That
     function in turn calls dlsym, which is a bad idea in a static binary.
@@ -162,11 +172,57 @@ JNIEXPORT int JNICALL JVM_ActiveProcessorCount() {
 #endif
 }
 
+/* Used by Java_jdk_internal_loader_NativeLibraries_load. */
+JNIEXPORT jboolean JNICALL JVM_IsSupportedJNIVersion(jint version) {
+    return version == JNI_VERSION_24 ||
+           version == JNI_VERSION_21 ||
+           version == JNI_VERSION_20 ||
+           version == JNI_VERSION_19 ||
+           version == JNI_VERSION_10 ||
+           version == JNI_VERSION_9 ||
+           version == JNI_VERSION_1_8 ||
+           version == JNI_VERSION_1_6 ||
+           version == JNI_VERSION_1_4 ||
+           version == JNI_VERSION_1_2 ||
+           version == JNI_VERSION_1_1;
+}
+
 JNIEXPORT int JNICALL JVM_Connect(int fd, struct sockaddr* him, socklen_t len) {
     RESTARTABLE_RETURN_INT(connect(fd, him, len));
 }
 
-JNIEXPORT void* JNICALL JVM_FindLibraryEntry(void* handle, const char* name) {
+/* Used by Java_jdk_internal_loader_NativeLibraries_load. */
+// TODO GR-76023: add and handle second function parameter throwException
+JNIEXPORT void* JNICALL JVM_LoadLibrary(const char* name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    return dlopen(name, RTLD_LAZY);
+}
+
+/* Used by Java_jdk_internal_loader_NativeLibraries_load. */
+JNIEXPORT void JNICALL JVM_UnloadLibrary(void* handle) {
+    if (handle != NULL) {
+        dlclose(handle);
+    }
+}
+
+JNIEXPORT void* JNICALL JVM_FindLibraryEntry(void* handle, const char* name);
+
+static void* find_library_entry(void* handle, const char* name) {
+    void* result = NULL;
+    /*
+     * Native Image shared libraries can include statically linked JDK JNI libraries such as libnet.
+     * The generated built-in symbol table lets us find such symbols without exporting them globally.
+     */
+    result = __svm_find_builtin_symbol == NULL ? NULL : __svm_find_builtin_symbol(name);
+    if (result != NULL) {
+        return result;
+    }
+    return dlsym(handle, name);
+}
+
+void* JVM_FindLibraryEntry(void* handle, const char* name) {
     /*
         Calls to this function from a static binary are inherently unsafe. On some libc implementations, it may result
         in a segfault, while on others, the symbol could be wrongly not found. As of JDK11, this function is invoked in
@@ -179,11 +235,16 @@ JNIEXPORT void* JNICALL JVM_FindLibraryEntry(void* handle, const char* name) {
         if (strcmp(name, "inet_pton") == 0) {
             return inet_pton;
         }
+        void* result = __svm_find_builtin_symbol == NULL ? NULL : __svm_find_builtin_symbol(name);
+        if (result != NULL) {
+            return result;
+        }
         fprintf(stderr, "Internal error: JVM_FindLibraryEntry called from a static native image with symbol: %s. Results may be unpredictable. Please report this issue to the SubstrateVM team.", name);
         fflush(stderr);
         exit(1);
     } else {
-        return dlsym(handle, name);
+        /* Java_jdk_internal_loader_NativeLibraries_findBuiltinLib calls findJniFunction which uses JVM_FindLibraryEntry. */
+        return find_library_entry(handle, name);
     }
 }
 

@@ -24,11 +24,15 @@
  */
 package com.oracle.svm.core.jdk;
 
+import static com.oracle.svm.core.jdk.resources.NativeImageResourceFileSystemProvider.RESOURCE_PROTOCOL;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.net.URLConnection;
+import java.net.URLStreamHandler;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -54,17 +58,15 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
 
-import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.ClassLoaderSupport.ConditionWithOrigin;
 import com.oracle.svm.core.MissingRegistrationUtils;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.configure.ConditionalRuntimeValue;
 import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.encoder.SymbolEncoder;
-import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.resources.MissingResourceRegistrationUtils;
 import com.oracle.svm.core.jdk.resources.ResourceExceptionEntry;
@@ -75,20 +77,21 @@ import com.oracle.svm.core.jdk.resources.CompressedGlobTrie.CompressedGlobTrie;
 import com.oracle.svm.core.jdk.resources.CompressedGlobTrie.GlobTrieNode;
 import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.util.ImageHeapMap;
+import com.oracle.svm.shared.AlwaysInline;
+import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.ImageSingletonLoader;
 import com.oracle.svm.shared.singletons.ImageSingletonWriter;
 import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
 import com.oracle.svm.shared.singletons.LayeredPersistFlags;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.LayeredCallbacksSingletonTrait;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.MultiLayer;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
+import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GlobUtils;
 import com.oracle.svm.util.NativeImageResourcePathRepresentation;
@@ -108,6 +111,12 @@ public final class Resources {
     private static final String RESOURCE_KEYS = "resourceKeys";
     private static final String RESOURCE_REGISTRATION_STATES = "resourceRegistrationStates";
     private static final String PATTERNS = "patterns";
+    private static final URLStreamHandler RESOURCE_URL_STREAM_HANDLER = new URLStreamHandler() {
+        @Override
+        protected URLConnection openConnection(URL url) {
+            return new ResourceURLConnection(url);
+        }
+    };
 
     @Platforms(Platform.HOSTED_ONLY.class) //
     private SymbolEncoder encoder;
@@ -131,26 +140,25 @@ public final class Resources {
     }
 
     /**
-     * The hosted map used to collect registered resources. Using a {@link ModuleResourceKey} of
-     * (module, resourceName) provides implementations for {@code hashCode()} and {@code equals()}
-     * needed for the map keys. Hosted module instances differ to runtime instances, so the map that
-     * ends up in the image heap is computed after the runtime module instances have been computed
-     * {see com.oracle.svm.hosted.ModuleLayerFeature}.
+     * The hosted map used to collect registered resources. The key contains the module identity and
+     * resource path, and, when class-loader-aware lookup is enabled, the loader identity. Hosted
+     * module instances differ to runtime instances, so the map that ends up in the image heap is
+     * computed after the runtime module instances have been computed {see
+     * com.oracle.svm.hosted.ModuleLayerFeature}.
      */
     private final EconomicMap<ModuleResourceKey, ConditionalRuntimeValue<ResourceStorageEntryBase>> resources = ImageHeapMap.createNonLayeredMap();
     /** Regexp patterns used to match names of resources to be included in the image. */
     private final EconomicMap<RequestedPattern, RuntimeDynamicAccessMetadata> requestedPatterns = ImageHeapMap.createNonLayeredMap();
 
     /**
-     * The string representation of {@link ModuleNameResourceKey} that are already registered in
-     * previous layers. Since the {@link ModuleInstanceResourceKey} contains a reference to a
-     * {@link Module}, the {@link Module} name is used instead of the object itself in the string
-     * representation. This works under the assumption (enforced by
-     * LayeredModuleSingleton.setPackages) that all modules have a different unique name in Layered
-     * Images.
+     * The string representation of {@link ModuleResourceKey} that are already registered in
+     * previous layers. Since standalone resource keys contain a reference to a {@link Module}, the
+     * {@link Module} name is used instead of the object itself in the string representation. This
+     * works under the assumption (enforced by LayeredModuleSingleton.setPackages) that all modules
+     * have a different unique name in Layered Images.
      *
-     * The boolean associated to each {@link ModuleNameResourceKey} is true if the registered value
-     * is complete and false in the case of a negative query.
+     * The boolean associated to each {@link ModuleResourceKey} is true if the registered value is
+     * complete and false in the case of a negative query.
      */
     @Platforms(Platform.HOSTED_ONLY.class) //
     private final Map<String, Boolean> previousLayerResources;
@@ -166,6 +174,12 @@ public final class Resources {
     }
 
     public interface ModuleResourceKey {
+        /**
+         * Returns the stable resource-owner key associated with this resource entry, or
+         * {@code null} if no concrete owner was resolved for this legacy flat key.
+         */
+        String loaderKey();
+
         Module getModule();
 
         String getModuleName();
@@ -175,17 +189,23 @@ public final class Resources {
         String resource();
     }
 
-    /**
-     * In standalone images, the module object is the {@link Module} reference itself.
-     */
-    public record ModuleInstanceResourceKey(Module module, String resource) implements ModuleResourceKey {
-        public ModuleInstanceResourceKey {
-            assert !ImageLayerBuildingSupport.buildingImageLayer() : "The ModuleInstanceResourceKey should only be used in standalone images.";
+    public record FlatModuleResourceKey(Object module, String resource) implements ModuleResourceKey {
+        public FlatModuleResourceKey {
+            module = normalizeModuleForResourceKey(module);
+        }
+
+        @Override
+        public String loaderKey() {
+            return null;
         }
 
         @Override
         public Module getModule() {
-            return module;
+            if (module instanceof Module) {
+                assert !ImageLayerBuildingSupport.buildingImageLayer() : "Layered images store resource key modules by name.";
+                return (Module) module;
+            }
+            throw VMError.shouldNotReachHere("Accessing the module instance of the ModuleResourceKey is not supported in layered images.");
         }
 
         @Override
@@ -193,37 +213,64 @@ public final class Resources {
             if (module == null) {
                 return null;
             }
-            return module.getName();
+            if (module instanceof Module) {
+                return ((Module) module).getName();
+            }
+            assert ImageLayerBuildingSupport.buildingImageLayer() : "Only layered images store resource key modules by name.";
+            return (String) module;
         }
     }
 
-    /**
-     * In Layered Image, only the module name is stored in the record.
-     */
-    public record ModuleNameResourceKey(Object module, String resource) implements ModuleResourceKey {
-        public ModuleNameResourceKey {
-            /*
-             * A null module in the ModuleResourceKey represents any unnamed module, meaning that
-             * only one marker (null) is needed for all of them and that if the module is not null,
-             * it is named (see Resources.createStorageKey). This string representation relies on
-             * the assumption (enforced by LayeredModuleSingleton.setPackages) that a layered image
-             * build cannot contain two modules with the same name, so Module#getName() is
-             * guaranteed to be unique for layered images.
-             */
-            assert module == null || module instanceof Module : "The ModuleNameResourceKey constructor should only be called with a Module as first argument";
-            assert ImageLayerBuildingSupport.buildingImageLayer() : "The ModuleNameResourceKey should only be used in layered images.";
-            module = (module != null) ? ((Module) module).getName() : module;
+    public record LoaderModuleResourceKey(String loaderKey, Object module, String resource) implements ModuleResourceKey {
+
+        private static final String LOADER_INDEPENDENT_NEGATIVE_QUERY = "ClassLoader#LoaderIndependentNegativeQuery";
+
+        public LoaderModuleResourceKey {
+            VMError.guarantee(loaderKey != null, "Resource loader key must not be null.");
+            VMError.guarantee(!loaderKey.isEmpty(), "Resource loader key must not be empty.");
+            module = normalizeModuleForResourceKey(module);
+        }
+
+        static LoaderModuleResourceKey loaderIndependentNegativeQuery(Object module, String resourceName) {
+            return new LoaderModuleResourceKey(LOADER_INDEPENDENT_NEGATIVE_QUERY, module, resourceName);
         }
 
         @Override
         public Module getModule() {
+            if (module instanceof Module) {
+                assert !ImageLayerBuildingSupport.buildingImageLayer() : "Layered images store resource key modules by name.";
+                return (Module) module;
+            }
             throw VMError.shouldNotReachHere("Accessing the module instance of the ModuleResourceKey is not supported in layered images.");
         }
 
         @Override
         public String getModuleName() {
+            if (module == null) {
+                return null;
+            }
+            if (module instanceof Module) {
+                return ((Module) module).getName();
+            }
+            assert ImageLayerBuildingSupport.buildingImageLayer() : "Only layered images store resource key modules by name.";
             return (String) module;
         }
+    }
+
+    private static Object normalizeModuleForResourceKey(Object module) {
+        /*
+         * A null module in the ModuleResourceKey represents any unnamed module, meaning that only
+         * one marker (null) is needed for all of them and that if the module is not null, it is
+         * named (see Resources.createStorageKey). This string representation relies on the
+         * assumption (enforced by LayeredModuleSingleton.setPackages) that a layered image build
+         * cannot contain two modules with the same name, so Module#getName() is guaranteed to be
+         * unique for layered images.
+         */
+        assert module == null || module instanceof Module : "The ModuleResourceKey constructor should only be called with a Module as first argument";
+        if (module != null && ImageLayerBuildingSupport.buildingImageLayer()) {
+            return ((Module) module).getName();
+        }
+        return module;
     }
 
     /**
@@ -253,6 +300,8 @@ public final class Resources {
 
     @Platforms(Platform.HOSTED_ONLY.class) //
     private Function<Module, Module> hostedToRuntimeModuleMapper;
+    @Platforms(Platform.HOSTED_ONLY.class) //
+    private Function<ClassLoader, String> hostedToRuntimeLoaderKeyMapper;
 
     Resources() {
         this(Map.of(), Set.of());
@@ -289,6 +338,24 @@ public final class Resources {
         return resources;
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void addResourceCondition(Module module, String resourceName, AccessCondition condition, boolean preserved) {
+        addResourceMetadata(module, resourceName, RuntimeDynamicAccessMetadata.createHosted(condition, preserved));
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void addResourceMetadata(Module module, String resourceName, RuntimeDynamicAccessMetadata dynamicAccessMetadata) {
+        synchronized (resources) {
+            MapCursor<ModuleResourceKey, ConditionalRuntimeValue<ResourceStorageEntryBase>> cursor = resources.getEntries();
+            while (cursor.advance()) {
+                ModuleResourceKey key = cursor.getKey();
+                if (resourceName.equals(key.resource()) && Objects.equals(moduleName(module), key.getModuleName())) {
+                    cursor.setValue(mergeResourceMetadata(cursor.getValue(), dynamicAccessMetadata));
+                }
+            }
+        }
+    }
+
     public static long getLastModifiedTime() {
         var singletons = layeredSingletons();
         return singletons[singletons.length - 1].lastModifiedTime;
@@ -298,19 +365,51 @@ public final class Resources {
         return module == null ? null : module.getName();
     }
 
-    public static ModuleResourceKey createStorageKey(Module module, String resourceName) {
+    private static ModuleResourceKey createLoaderIndependentNegativeQueryKey(Module module, String resourceName) {
+        Module m = runtimeModuleForStorageKey(module);
+        return ClassRegistries.respectClassLoader() ? LoaderModuleResourceKey.loaderIndependentNegativeQuery(m, resourceName) : new FlatModuleResourceKey(m, resourceName);
+    }
+
+    public static ModuleResourceKey createStorageKey(String loaderKey, Module module, String resourceName) {
+        VMError.guarantee(loaderKey != null, "Resource loader key must not be null.");
+        VMError.guarantee(!loaderKey.isEmpty(), "Resource loader key must not be empty.");
+        return createStorageKeyImpl(loaderKey, module, resourceName);
+    }
+
+    private static ModuleResourceKey createStorageKeyImpl(String loaderKey, Module module, String resourceName) {
+        Module m = runtimeModuleForStorageKey(module);
+        return ClassRegistries.respectClassLoader() ? new LoaderModuleResourceKey(loaderKey, m, resourceName) : new FlatModuleResourceKey(m, resourceName);
+    }
+
+    private static Module runtimeModuleForStorageKey(Module module) {
         Module m = module != null && module.isNamed() ? module : null;
         if (ImageInfo.inImageBuildtimeCode()) {
             if (m != null) {
                 m = currentLayer().hostedToRuntimeModuleMapper.apply(m);
             }
         }
-        return ImageLayerBuildingSupport.buildingImageLayer() ? new ModuleNameResourceKey(m, resourceName) : new ModuleInstanceResourceKey(m, resourceName);
+        return m;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static ModuleResourceKey createStorageKey(ClassLoader owner, Module module, String resourceName) {
+        if (!ClassRegistries.respectClassLoader()) {
+            return createStorageKeyImpl(null, module, resourceName);
+        }
+        String loaderKey = currentLayer().hostedToRuntimeLoaderKeyMapper.apply(owner);
+        VMError.guarantee(loaderKey != null, "Resource loader key must not be null.");
+        VMError.guarantee(!loaderKey.isEmpty(), "Resource loader key must not be empty.");
+        return createStorageKeyImpl(loaderKey, module, resourceName);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class) //
     public void setHostedToRuntimeModuleMapper(Function<Module, Module> hostedToRuntimeModuleMapper) {
         this.hostedToRuntimeModuleMapper = hostedToRuntimeModuleMapper;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class) //
+    public void setHostedToRuntimeLoaderKeyMapper(Function<ClassLoader, String> hostedToRuntimeLoaderKeyMapper) {
+        this.hostedToRuntimeLoaderKeyMapper = hostedToRuntimeLoaderKeyMapper;
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -321,6 +420,7 @@ public final class Resources {
                         .collect(Collectors.toSet());
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     public static byte[] inputStreamToByteArray(InputStream is) {
         try {
             return is.readAllBytes();
@@ -329,12 +429,14 @@ public final class Resources {
         }
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     private void updateTimeStamp() {
         if (lastModifiedTime == INVALID_TIMESTAMP) {
             lastModifiedTime = new Date().getTime();
         }
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     private void addResource(ModuleResourceKey key, ConditionalRuntimeValue<ResourceStorageEntryBase> entry) {
         Boolean previousLayerData = ImageLayerBuildingSupport.buildingImageLayer() ? previousLayerResources.get(key.toString()) : null;
         /* GR-66387: The runtime condition should be combined across layers. */
@@ -344,33 +446,54 @@ public final class Resources {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    private void addEntry(Module module, String resourceName, boolean isDirectory, byte[] data, boolean fromJar, boolean isNegativeQuery) {
+    private void addEntry(String loaderKey, Module module, String resourceName, RuntimeDynamicAccessMetadata dynamicAccessMetadata, boolean isDirectory, byte[] data, boolean fromJar,
+                    boolean isNegativeQuery) {
         VMError.guarantee(!BuildPhaseProvider.isAnalysisFinished(), "Trying to add a resource entry after analysis.");
         Module m = module != null && module.isNamed() ? module : null;
         synchronized (resources) {
-            ModuleResourceKey key = createStorageKey(m, resourceName);
-            RuntimeDynamicAccessMetadata dynamicAccessMetadata = RuntimeDynamicAccessMetadata.emptySet(false);
-            ConditionalRuntimeValue<ResourceStorageEntryBase> entry = resources.get(key);
+            ModuleResourceKey key = isNegativeQuery ? createLoaderIndependentNegativeQueryKey(m, resourceName) : createStorageKeyImpl(loaderKey, m, resourceName);
             if (isNegativeQuery) {
+                ConditionalRuntimeValue<ResourceStorageEntryBase> entry = resources.get(key);
                 if (entry == null) {
                     addResource(key, new ConditionalRuntimeValue<>(dynamicAccessMetadata, NEGATIVE_QUERY_MARKER));
                 }
                 return;
             }
 
-            if (entry == null || entry.getValueUnconditionally() == NEGATIVE_QUERY_MARKER) {
-                updateTimeStamp();
-                entry = new ConditionalRuntimeValue<>(dynamicAccessMetadata, new ResourceStorageEntry(isDirectory, fromJar));
-                addResource(key, entry);
-            } else {
-                if (key.module() != null) {
-                    // if the entry already exists, and it comes from a module, it is the same entry
-                    // that we registered at some point before
-                    return;
-                }
-            }
-            entry.getValueUnconditionally().addData(data);
+            addPositiveEntry(key, dynamicAccessMetadata, isDirectory, data, fromJar);
         }
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private void addPositiveEntry(ModuleResourceKey key, RuntimeDynamicAccessMetadata dynamicAccessMetadata, boolean isDirectory, byte[] data, boolean fromJar) {
+        ConditionalRuntimeValue<ResourceStorageEntryBase> entry = resources.get(key);
+        if (entry == null || entry.getValueUnconditionally() == NEGATIVE_QUERY_MARKER) {
+            updateTimeStamp();
+            entry = new ConditionalRuntimeValue<>(dynamicAccessMetadata, new ResourceStorageEntry(isDirectory, fromJar));
+            addResource(key, entry);
+        } else if (key.module() != null) {
+            /*
+             * If the entry already exists and it comes from a named module, it is the same entry
+             * that we registered at some point before. Keep the first storage entry, but merge the
+             * dynamic access metadata from this registration so duplicate conditional
+             * registrations remain available when any of their conditions is satisfied.
+             */
+            resources.put(key, mergeResourceMetadata(entry, dynamicAccessMetadata));
+            return;
+        }
+        entry.getValueUnconditionally().addData(data);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private static ConditionalRuntimeValue<ResourceStorageEntryBase> mergeResourceMetadata(ConditionalRuntimeValue<ResourceStorageEntryBase> current,
+                    RuntimeDynamicAccessMetadata dynamicAccessMetadata) {
+        RuntimeDynamicAccessMetadata newMetadata = RuntimeDynamicAccessMetadata.merge(current.getDynamicAccessMetadata(), dynamicAccessMetadata);
+        return new ConditionalRuntimeValue<>(newMetadata, current.getValueUnconditionally());
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private static String injectedResourceLoaderKey() {
+        return ResourceLoaderKeys.APP;
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -378,16 +501,64 @@ public final class Resources {
         currentLayer().registerResource(null, resourceName, is, true);
     }
 
+    /**
+     * Registers a classpath resource without preserving owner loader provenance.
+     */
     @Platforms(Platform.HOSTED_ONLY.class)
     public void registerResource(Module module, String resourceName, byte[] resourceContent) {
-        addEntry(module, resourceName, false, resourceContent, true, false);
+        addEntry(injectedResourceLoaderKey(), module, resourceName, RuntimeDynamicAccessMetadata.emptySet(false), false, resourceContent, true, false);
+    }
+
+    /**
+     * Registers a classpath or module resource without preserving owner loader provenance.
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerResource(Module module, String resourceName, InputStream is, boolean fromJar) {
+        registerResource(RuntimeDynamicAccessMetadata.emptySet(false), module, resourceName, is, fromJar);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void registerResource(Module module, String resourceName, InputStream is, boolean fromJar) {
-        addEntry(module, resourceName, false, inputStreamToByteArray(is), fromJar, false);
+    public void registerResource(RuntimeDynamicAccessMetadata dynamicAccessMetadata, Module module, String resourceName, InputStream is, boolean fromJar) {
+        addEntry(injectedResourceLoaderKey(), module, resourceName, dynamicAccessMetadata, false, inputStreamToByteArray(is), fromJar, false);
     }
 
+    /**
+     * Registers resource data while preserving the hosted owner loader identity in the primary
+     * resource store.
+     *
+     * @param owner the hosted loader that owns the resource; {@code null} denotes the boot loader
+     * @param module the module that contains the resource, or {@code null} for classpath resources
+     * @param resourceName the resource path in canonical resource form
+     * @param resourceContent the resource bytes
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerResource(ClassLoader owner, Module module, String resourceName, byte[] resourceContent) {
+        addEntry(createStorageKey(owner, module, resourceName).loaderKey(), module, resourceName, RuntimeDynamicAccessMetadata.emptySet(false), false, resourceContent, true, false);
+    }
+
+    /**
+     * Registers resource data while preserving the hosted owner loader identity in the primary
+     * resource store.
+     *
+     * @param owner the hosted loader that owns the resource; {@code null} denotes the boot loader
+     * @param module the module that contains the resource, or {@code null} for classpath resources
+     * @param resourceName the resource path in canonical resource form
+     * @param is the resource content stream
+     * @param fromJar whether the resource originated from a jar entry
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerResource(ClassLoader owner, Module module, String resourceName, InputStream is, boolean fromJar) {
+        addEntry(createStorageKey(owner, module, resourceName).loaderKey(), module, resourceName, RuntimeDynamicAccessMetadata.emptySet(false), false, inputStreamToByteArray(is), fromJar, false);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerResource(RuntimeDynamicAccessMetadata dynamicAccessMetadata, ClassLoader owner, Module module, String resourceName, InputStream is, boolean fromJar) {
+        addEntry(createStorageKey(owner, module, resourceName).loaderKey(), module, resourceName, dynamicAccessMetadata, false, inputStreamToByteArray(is), fromJar, false);
+    }
+
+    /**
+     * Registers a directory resource without preserving owner loader provenance.
+     */
     @Platforms(Platform.HOSTED_ONLY.class)
     public void registerDirectoryResource(Module module, String resourceDirName, String content, boolean fromJar) {
         /*
@@ -395,9 +566,43 @@ public final class Resources {
          * specified directory, separated with new line delimiter and joined into one string which
          * is later converted into a byte array and placed into the resources map.
          */
-        addEntry(module, resourceDirName, true, content.getBytes(), fromJar, false);
+        registerDirectoryResource(RuntimeDynamicAccessMetadata.emptySet(false), module, resourceDirName, content, fromJar);
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerDirectoryResource(RuntimeDynamicAccessMetadata dynamicAccessMetadata, Module module, String resourceDirName, String content, boolean fromJar) {
+        /*
+         * A directory content represents the names of all files and subdirectories located in the
+         * specified directory, separated with new line delimiter and joined into one string which
+         * is later converted into a byte array and placed into the resources map.
+         */
+        addEntry(injectedResourceLoaderKey(), module, resourceDirName, dynamicAccessMetadata, true, content.getBytes(), fromJar, false);
+    }
+
+    /**
+     * Registers a directory resource while preserving the hosted owner loader identity in the
+     * primary resource store.
+     *
+     * @param owner the hosted loader that owns the directory resource; {@code null} denotes the
+     *            boot loader
+     * @param module the module that contains the resource, or {@code null} for classpath resources
+     * @param resourceDirName the canonical resource directory path
+     * @param content the newline-separated directory listing stored for this directory resource
+     * @param fromJar whether the directory resource originated from a jar entry
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerDirectoryResource(ClassLoader owner, Module module, String resourceDirName, String content, boolean fromJar) {
+        addEntry(createStorageKey(owner, module, resourceDirName).loaderKey(), module, resourceDirName, RuntimeDynamicAccessMetadata.emptySet(false), true, content.getBytes(), fromJar, false);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerDirectoryResource(RuntimeDynamicAccessMetadata dynamicAccessMetadata, ClassLoader owner, Module module, String resourceDirName, String content, boolean fromJar) {
+        addEntry(createStorageKey(owner, module, resourceDirName).loaderKey(), module, resourceDirName, dynamicAccessMetadata, true, content.getBytes(), fromJar, false);
+    }
+
+    /**
+     * Registers an I/O exception without preserving owner loader provenance.
+     */
     @Platforms(Platform.HOSTED_ONLY.class)
     public void registerIOException(Module module, String resourceName, IOException e, boolean linkAtBuildTime) {
         if (linkAtBuildTime) {
@@ -407,10 +612,38 @@ public final class Resources {
                 LogUtils.warning("Resource " + resourceName + " from module " + moduleName(module) + " produced the following IOException: " + e.getClass().getTypeName() + ": " + e.getMessage());
             }
         }
-        ModuleResourceKey key = createStorageKey(module, resourceName);
         synchronized (resources) {
             updateTimeStamp();
-            addResource(key, new ConditionalRuntimeValue<>(RuntimeDynamicAccessMetadata.emptySet(false), new ResourceExceptionEntry(e)));
+            ConditionalRuntimeValue<ResourceStorageEntryBase> resourceEntry = new ConditionalRuntimeValue<>(RuntimeDynamicAccessMetadata.emptySet(false), new ResourceExceptionEntry(e));
+            addResource(createStorageKey(injectedResourceLoaderKey(), module, resourceName), resourceEntry);
+        }
+    }
+
+    /**
+     * Registers an I/O exception while preserving the hosted owner loader identity in the primary
+     * resource store.
+     *
+     * @param owner the hosted loader that owned the resource lookup; {@code null} denotes the boot
+     *            loader
+     * @param module the module that contains the resource, or {@code null} for classpath resources
+     * @param resourceName the canonical resource path
+     * @param e the exception raised while reading the resource during image build
+     * @param linkAtBuildTime whether the exception should be treated according to
+     *            link-at-build-time rules
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerIOException(ClassLoader owner, Module module, String resourceName, IOException e, boolean linkAtBuildTime) {
+        if (linkAtBuildTime) {
+            if (SubstrateOptions.ThrowLinkAtBuildTimeIOExceptions.getValue()) {
+                throw new RuntimeException("Resource " + resourceName + " from module " + moduleName(module) + " produced an IOException.", e);
+            } else {
+                LogUtils.warning("Resource " + resourceName + " from module " + moduleName(module) + " produced the following IOException: " + e.getClass().getTypeName() + ": " + e.getMessage());
+            }
+        }
+        synchronized (resources) {
+            updateTimeStamp();
+            ConditionalRuntimeValue<ResourceStorageEntryBase> resourceEntry = new ConditionalRuntimeValue<>(RuntimeDynamicAccessMetadata.emptySet(false), new ResourceExceptionEntry(e));
+            addResource(createStorageKey(owner, module, resourceName), resourceEntry);
         }
     }
 
@@ -419,9 +652,26 @@ public final class Resources {
         registerNegativeQuery(null, resourceName);
     }
 
+    /**
+     * Registers a missing resource lookup without preserving owner loader provenance.
+     */
     @Platforms(Platform.HOSTED_ONLY.class)
     public void registerNegativeQuery(Module module, String resourceName) {
-        addEntry(module, resourceName, false, null, false, true);
+        addEntry(null, module, resourceName, RuntimeDynamicAccessMetadata.emptySet(false), false, null, false, true);
+    }
+
+    /**
+     * Registers a missing resource lookup while preserving the hosted owner loader identity in the
+     * primary resource store.
+     *
+     * @param owner the hosted loader that owned the failed lookup; {@code null} denotes the boot
+     *            loader
+     * @param module the module that contains the resource, or {@code null} for classpath resources
+     * @param resourceName the canonical resource path
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerNegativeQuery(ClassLoader owner, Module module, String resourceName) {
+        addEntry(createStorageKey(owner, module, resourceName).loaderKey(), module, resourceName, RuntimeDynamicAccessMetadata.emptySet(false), false, null, false, true);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -471,7 +721,19 @@ public final class Resources {
     }
 
     public static ResourceStorageEntryBase getAtRuntime(String name) {
-        return getAtRuntime(null, name, false);
+        return getAtRuntime((Module) null, name, false);
+    }
+
+    public static ResourceStorageEntryBase getAtRuntime(ClassLoader loader, String name, boolean probe) {
+        String loaderKey = resourceLoaderKey(loader);
+        if (loader != null && loaderKey == null) {
+            return missingMetadata(null, name, probe);
+        }
+        return getAtRuntime(loaderKey, null, name, probe);
+    }
+
+    public static ResourceStorageEntryBase getAtRuntime(String loaderKey, Module module, String resourceName, boolean probe) {
+        return getAtRuntimeImpl(loaderKey, module, resourceName, probe);
     }
 
     /**
@@ -486,10 +748,14 @@ public final class Resources {
      * trace the missing metadata.
      */
     public static ResourceStorageEntryBase getAtRuntime(Module module, String resourceName, boolean probe) {
+        return getAtRuntimeImpl(null, module, resourceName, probe);
+    }
+
+    private static ResourceStorageEntryBase getAtRuntimeImpl(String loaderKey, Module module, String resourceName, boolean probe) {
         VMError.guarantee(ImageInfo.inImageRuntimeCode(), "This function should be used only at runtime.");
         String canonicalResourceName = NativeImageResourcePathRepresentation.toCanonicalForm(resourceName);
         String moduleName = moduleName(module);
-        ConditionalRuntimeValue<ResourceStorageEntryBase> entry = getEntry(module, canonicalResourceName);
+        ConditionalRuntimeValue<ResourceStorageEntryBase> entry = loaderKey == null ? getEntry(module, canonicalResourceName) : getEntry(loaderKey, module, canonicalResourceName);
         if (entry == null) {
             if (MissingRegistrationUtils.throwMissingRegistrationErrors()) {
                 if (missingResourceMatchesIncludePattern(resourceName, moduleName) || missingResourceMatchesIncludePattern(canonicalResourceName, moduleName)) {
@@ -538,6 +804,21 @@ public final class Resources {
         return unconditionalEntry;
     }
 
+    static String resourceLoaderKey(ClassLoader loader) {
+        if (loader == null) {
+            return ResourceLoaderKeys.BOOT;
+        }
+        if (loader == Target_java_lang_ClassLoader.getBuiltinAppClassLoader()) {
+            return ResourceLoaderKeys.APP;
+        } else if (loader == Target_jdk_internal_loader_ClassLoaders.platformClassLoader()) {
+            return ResourceLoaderKeys.PLATFORM;
+        } else if (loader == SubstrateUtil.cast(Target_jdk_internal_loader_ClassLoaders.bootLoader(), ClassLoader.class)) {
+            return ResourceLoaderKeys.BOOT;
+        }
+        int loaderId = SubstrateUtil.cast(loader, Target_java_lang_ClassLoader.class).resourceLoaderId;
+        return loaderId != 0 ? ResourceLoaderKeys.synthetic(loaderId) : null;
+    }
+
     @AlwaysInline("tracing should fold away when disabled")
     private static void traceResource(String resourceName, String moduleName) {
         if (MetadataTracer.enabled()) {
@@ -584,13 +865,38 @@ public final class Resources {
     }
 
     private static ConditionalRuntimeValue<ResourceStorageEntryBase> getEntry(Module module, String canonicalResourceName) {
+        if (ClassRegistries.respectClassLoader()) {
+            if (module == null) {
+                assert false : "Loader-aware resource lookup must use a concrete module or loader key.";
+                return null;
+            }
+            String loaderKey = resourceLoaderKey(module.getClassLoader());
+            if (loaderKey == null) {
+                return null;
+            }
+            return getEntry(loaderKey, module, canonicalResourceName);
+        }
+        return getEntry(ResourceLoaderKeys.APP, module, canonicalResourceName);
+    }
+
+    private static ConditionalRuntimeValue<ResourceStorageEntryBase> getEntry(String loaderKey, Module module, String canonicalResourceName) {
+        ConditionalRuntimeValue<ResourceStorageEntryBase> negativeQuery = null;
         for (var r : layeredSingletons()) {
-            ConditionalRuntimeValue<ResourceStorageEntryBase> entry = r.resources.get(createStorageKey(module, canonicalResourceName));
+            ConditionalRuntimeValue<ResourceStorageEntryBase> entry = r.resources.get(createStorageKey(loaderKey, module, canonicalResourceName));
             if (entry != null) {
+                if (entry.getValue() == NEGATIVE_QUERY_MARKER) {
+                    negativeQuery = entry;
+                    continue;
+                }
                 return entry;
             }
+
+            ConditionalRuntimeValue<ResourceStorageEntryBase> ownerlessEntry = r.resources.get(createLoaderIndependentNegativeQueryKey(module, canonicalResourceName));
+            if (ownerlessEntry != null && ownerlessEntry.getValue() == NEGATIVE_QUERY_MARKER) {
+                negativeQuery = ownerlessEntry;
+            }
         }
-        return null;
+        return negativeQuery;
     }
 
     private static ResourceStorageEntryBase missingMetadata(Module module, String resourceName, boolean probe) {
@@ -601,18 +907,34 @@ public final class Resources {
     }
 
     @SuppressWarnings("deprecation")
-    private static URL createURL(Module module, String resourceName, int index) {
+    private static URL createURL(String loaderKey, Module module, String resourceName, int index) {
+        if (JavaNetSubstitutions.isDisabledURLProtocol(RESOURCE_PROTOCOL)) {
+            return null;
+        }
         try {
             String refPart = index != 0 ? '#' + Integer.toString(index) : "";
-            String moduleName = moduleName(module);
-            return new URL(JavaNetSubstitutions.RESOURCE_PROTOCOL, moduleName, -1, '/' + resourceName + refPart);
+            String host;
+            String userInfo = null;
+            if (ClassRegistries.respectClassLoader()) {
+                if (loaderKey != null) {
+                    host = loaderKey;
+                } else {
+                    VMError.guarantee(module != null, "Loader-aware resource URLs require a concrete module or loader key.");
+                    host = resourceLoaderKey(module.getClassLoader());
+                }
+                userInfo = moduleName(module);
+            } else {
+                host = moduleName(module);
+            }
+            String authority = host != null ? "//" + (userInfo != null ? userInfo + '@' : "") + host : "";
+            return new URL(null, RESOURCE_PROTOCOL + ':' + authority + '/' + resourceName + refPart, RESOURCE_URL_STREAM_HANDLER);
         } catch (MalformedURLException ex) {
             throw new IllegalStateException(ex);
         }
     }
 
     public static URL createURL(String resourceName) {
-        return createURL(null, resourceName);
+        return createURL((Module) null, resourceName);
     }
 
     public static URL createURL(Module module, String resourceName) {
@@ -621,6 +943,15 @@ public final class Resources {
         }
 
         Enumeration<URL> urls = createURLs(module, resourceName);
+        return urls.hasMoreElements() ? urls.nextElement() : null;
+    }
+
+    public static URL createURL(ClassLoader loader, String resourceName) {
+        if (resourceName == null) {
+            return null;
+        }
+
+        Enumeration<URL> urls = createURLs(loader, resourceName);
         return urls.hasMoreElements() ? urls.nextElement() : null;
     }
 
@@ -666,7 +997,7 @@ public final class Resources {
     }
 
     public static Enumeration<URL> createURLs(String resourceName) {
-        return createURLs(null, resourceName);
+        return createURLs((Module) null, resourceName);
     }
 
     public static Enumeration<URL> createURLs(Module module, String resourceName) {
@@ -708,12 +1039,44 @@ public final class Resources {
         return Collections.enumeration(resourcesURLs);
     }
 
+    public static Enumeration<URL> createURLs(ClassLoader loader, String resourceName) {
+        if (resourceName == null) {
+            return null;
+        }
+
+        String loaderKey = resourceLoaderKey(loader);
+        if (loaderKey == null) {
+            return Collections.emptyEnumeration();
+        }
+
+        String canonicalResourceName = NativeImageResourcePathRepresentation.toCanonicalForm(resourceName);
+        if (hasTrailingSlash(resourceName)) {
+            canonicalResourceName += "/";
+        }
+
+        ResourceStorageEntryBase entry = getAtRuntime(loaderKey, null, resourceName, true);
+        if (entry == MISSING_METADATA_MARKER || entry == null) {
+            return Collections.emptyEnumeration();
+        }
+
+        List<URL> resourcesURLs = new ArrayList<>();
+        addURLEntries(resourcesURLs, (ResourceStorageEntry) entry, loaderKey, null, canonicalResourceName);
+        return Collections.enumeration(resourcesURLs);
+    }
+
     private static void addURLEntries(List<URL> resourcesURLs, ResourceStorageEntry entry, Module module, String canonicalResourceName) {
+        addURLEntries(resourcesURLs, entry, null, module, canonicalResourceName);
+    }
+
+    private static void addURLEntries(List<URL> resourcesURLs, ResourceStorageEntry entry, String loaderKey, Module module, String canonicalResourceName) {
         if (entry == null) {
             return;
         }
         for (int index = 0; index < entry.getData().length; index++) {
-            resourcesURLs.add(createURL(module, canonicalResourceName, index));
+            URL url = createURL(loaderKey, module, canonicalResourceName, index);
+            if (url != null) {
+                resourcesURLs.add(url);
+            }
         }
     }
 
@@ -817,7 +1180,6 @@ public final class Resources {
 }
 
 @AutomaticallyRegisteredFeature
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class)
 final class ResourcesFeature implements InternalFeature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {

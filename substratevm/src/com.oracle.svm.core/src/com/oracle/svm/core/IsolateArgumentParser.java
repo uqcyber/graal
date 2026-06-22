@@ -55,13 +55,14 @@ import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.imagelayer.BuildingImageLayerPredicate;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.memory.UntrackedNullableNativeMemory;
 import com.oracle.svm.core.option.RuntimeOptionKey;
 import com.oracle.svm.core.option.RuntimeOptionParser;
 import com.oracle.svm.core.util.ImageHeapList;
 import com.oracle.svm.guest.staging.c.CGlobalData;
 import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.guest.staging.c.function.CEntryPointCreateIsolateParameters;
+import com.oracle.svm.guest.staging.core.UnmanagedMemoryUtil;
+import com.oracle.svm.guest.staging.core.memory.UntrackedNullableNativeMemory;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.ImageSingletonLoader;
@@ -407,12 +408,8 @@ public class IsolateArgumentParser {
     /// [RuntimeOptionParser#parseAndConsumeAllOptions].
     @Uninterruptible(reason = "Thread state not yet set up.")
     public static boolean shouldParseArguments(IsolateArguments arguments) {
-        if (SubstrateOptions.ParseRuntimeOptions.getValue()) {
-            return true;
-        } else if (RuntimeCompilation.isEnabled() && SubstrateOptions.supportCompileInIsolates()) {
-            return isCompilationIsolate(arguments);
-        }
-        return false;
+        return SubstrateOptions.ParseRuntimeOptions.getValue() ||
+                        RuntimeCompilation.isEnabled() && SubstrateOptions.supportCompileInIsolates() && isCompilationIsolate(arguments);
     }
 
     @Uninterruptible(reason = "Thread state not yet set up.")

@@ -1470,11 +1470,15 @@ class PolybenchBenchmarkSuite(
         java_distributions = _get_java_distributions(resolved_benchmark)
         vm_args = mx.get_runtime_jvm_args(names=java_distributions) + self.vmArgs(bmSuiteArgs)
         mx_truffle.enable_truffle_native_access(vm_args)
-        polybench_args = (
-            ["--path=" + resolved_benchmark.absolute_path]
-            + self.runArgs(bmSuiteArgs)
-            + resolved_benchmark.suite.additional_polybench_args
-        )
+        run_args = self.runArgs(bmSuiteArgs)
+        vm = self.get_vm_registry().get_vm_from_suite_args(bmSuiteArgs, quiet=True)
+        if hasattr(vm, "polybench_staging_run_args"):
+            # Some guest VMs have launcher-only run args that should not be passed to the Java process that only
+            # emits the staged PolyBench program.
+            run_args = vm.polybench_staging_run_args(run_args)
+        polybench_args = ["--path=" + resolved_benchmark.absolute_path]
+        polybench_args += run_args
+        polybench_args += resolved_benchmark.suite.additional_polybench_args
         return vm_args + [PolybenchBenchmarkSuite.POLYBENCH_MAIN] + polybench_args
 
     def parserNames(self) -> List[str]:
@@ -1734,7 +1738,20 @@ class PolybenchBenchmarkSuite(
             # so they are available for final-dispatch aggregation.
             post_processors.append(ContextStorePostProcessor())
 
+        post_processors += super().post_processors()
         return post_processors
+
+    def get_metric_name_filters(self) -> Tuple[List[str], List[str]]:
+        """Implicitly exclude 'warmup' and 'time-sample' metrics for peak benchmarks to avoid generating excessive datapoints."""
+        include_metrics, exclude_metrics = super().get_metric_name_filters()
+        benchmark_name = bm_exec_context().get("benchmark")
+        if not benchmark_name or re.fullmatch(r"peak/.*\.py", benchmark_name) is None:
+            return include_metrics, exclude_metrics
+        if "warmup" not in include_metrics and "warmup" not in exclude_metrics:
+            exclude_metrics.append("warmup")
+        if "time-sample" not in include_metrics and "time-sample" not in exclude_metrics:
+            exclude_metrics.append("time-sample")
+        return include_metrics, exclude_metrics
 
     @staticmethod
     def _get_metric_name(bench_output) -> Optional[str]:

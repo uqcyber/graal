@@ -24,6 +24,7 @@
  */
 package jdk.graal.compiler.hotspot;
 
+import static jdk.graal.compiler.serviceprovider.GraalServices.getSavedProperties;
 import static jdk.graal.compiler.serviceprovider.GraalServices.getSavedProperty;
 
 import java.util.ArrayList;
@@ -57,6 +58,7 @@ public class GraalHotSpotVMConfigAccess {
         this.vmFields = store.getFields();
         this.osName = platform.osName();
         this.osArch = platform.archName();
+        this.isOracleVmVendor = JVMCIVersionCheck.isOracleJDK(getSavedProperties());
     }
 
     public HotSpotVMConfigStore getStore() {
@@ -72,6 +74,11 @@ public class GraalHotSpotVMConfigAccess {
      * Name for current CPU architecture. Will be a value in {@link Platform#KNOWN_ARCHITECTURES}.
      */
     public final String osArch;
+
+    /**
+     * Specifies whether the current VM vendor is Oracle.
+     */
+    public final boolean isOracleVmVendor;
 
     private final List<String> missing = new ArrayList<>();
     private final List<String> unexpected = new ArrayList<>();
