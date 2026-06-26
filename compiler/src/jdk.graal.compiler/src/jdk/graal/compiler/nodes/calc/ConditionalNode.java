@@ -295,13 +295,13 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
                 }
 
                 if (isTruncate) {
+                    // veriopt: FloatTruncateTernary1: x < 0.0 ? ceil(x) : floor(x) |-> RoundNode(x, TRUNCATE)
+                    // veriopt: FloatTruncateTernary2: 0.0 < x ? floor(x) : ceil(x) |-> RoundNode(x, TRUNCATE)
                     return new RoundNode(roundInput, RoundingMode.TRUNCATE);
                 }
             }
         }
 
-        // veriopt: FloatTruncateTernary1: x < 0.0 ? ceil(x) : floor(x) |-> RoundNode(x, TRUNCATE)
-        // veriopt: FloatTruncateTernary2: 0.0 < x ? floor(x) : ceil(x) |-> RoundNode(x, TRUNCATE)
         if (condition instanceof IsNullNode && trueValue.isJavaConstant() && trueValue.asJavaConstant().isDefaultForKind() &&
                         falseValue == ((IsNullNode) condition).getValue()) {
             return falseValue;
