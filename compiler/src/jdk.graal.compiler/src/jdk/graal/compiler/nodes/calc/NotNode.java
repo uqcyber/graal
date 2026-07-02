@@ -73,11 +73,12 @@ public final class NotNode extends UnaryArithmeticNode<Not> implements Arithmeti
 
     private static ValueNode canonicalize(NotNode node, ValueNode x) {
         if (x instanceof NotNode) {
-            // veriopt: NotCancel: Not(Not(e)) |-> e
+            // veriopt: NotCancel: ~(~(e)) |-> e
             return ((NotNode) x).getValue();
         }
         if (x instanceof NegateNode negateNode) {
             // ~(-x) == x - 1
+            // veriopt: NotNegate: ~(-(x)) |-> (x - 1)
             ValueNode one = BinaryArithmeticNode.createIntegerConstant(x.stamp(NodeView.DEFAULT), 1);
             return SubNode.create(negateNode.getValue(), one, NodeView.DEFAULT);
         }
