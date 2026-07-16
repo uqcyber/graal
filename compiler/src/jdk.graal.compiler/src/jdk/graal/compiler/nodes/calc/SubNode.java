@@ -150,7 +150,8 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
                     // commutative, so prefer add when it fits.
 
                     // todo not sure about encoding
-                    // veriopt: SubNegativeConstant: x - y |-> x + (-y) when (is_Constant y && (y < 0 || todo))
+                    // veriopt: SubNegativeConstant: x - (const (new_int b yv)) |-> x + (const (new_int b (-yv)))
+                    //                               when (yv < 0 || todo)
                     return BinaryArithmeticNode.add(forX, ConstantNode.forIntegerStamp(stamp, -i), view);
                 }
             }
@@ -163,7 +164,7 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
                  * transformation: 0 - x == (-x) + 0 == -x.
                  */
 
-                // veriopt: ZeroSubtractValue: (0 - x) |-> (-x)
+                // veriopt: ZeroSubtractValue: (0 - y) |-> (-y) when (~is_ConstantExpr y)
                 return NegateNode.create(forY, view);
             }
             if (mayReassociate && self != null) {
