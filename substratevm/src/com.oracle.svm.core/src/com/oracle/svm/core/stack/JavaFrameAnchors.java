@@ -37,7 +37,7 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
-import com.oracle.svm.core.log.Log;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
@@ -109,7 +109,7 @@ public class JavaFrameAnchors {
      */
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static JavaFrameAnchor getFrameAnchor(IsolateThread thread) {
-        assert thread == CurrentIsolate.getCurrentThread() || VMOperation.isInProgressAtSafepoint();
+        assert thread == CurrentIsolate.getCurrentThread() || VMOperation.isInProgressAtSafepoint() || SubstrateDiagnostics.canUnsafelyWalkOtherThreadStacks();
         return lastAnchorTL.get(thread);
     }
 

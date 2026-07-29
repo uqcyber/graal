@@ -70,10 +70,13 @@ import com.oracle.truffle.api.bytecode.BytecodeRootNode;
 import com.oracle.truffle.api.bytecode.BytecodeRootNodes;
 import com.oracle.truffle.api.bytecode.EpilogExceptional;
 import com.oracle.truffle.api.bytecode.EpilogReturn;
+import com.oracle.truffle.api.bytecode.ForceQuickening;
 import com.oracle.truffle.api.bytecode.GenerateBytecode;
 import com.oracle.truffle.api.bytecode.Instruction;
+import com.oracle.truffle.api.bytecode.InstructionDescriptor;
 import com.oracle.truffle.api.bytecode.Operation;
 import com.oracle.truffle.api.bytecode.Prolog;
+import com.oracle.truffle.api.bytecode.Return;
 import com.oracle.truffle.api.bytecode.serialization.BytecodeDeserializer;
 import com.oracle.truffle.api.bytecode.serialization.BytecodeSerializer;
 import com.oracle.truffle.api.bytecode.serialization.SerializationUtils;
@@ -91,6 +94,7 @@ import com.oracle.truffle.api.instrumentation.StandardTags.ExpressionTag;
 import com.oracle.truffle.api.instrumentation.StandardTags.RootBodyTag;
 import com.oracle.truffle.api.instrumentation.StandardTags.RootTag;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
 
@@ -163,6 +167,23 @@ public class PrologEpilogTest extends AbstractInstructionTest {
             }
         } else {
             nodes = EpilogReturnExceptionHandlerNodeGen.create(null, BytecodeConfig.DEFAULT, builder);
+        }
+        return nodes.getNode(0);
+    }
+
+    private CustomReturnEpilogBytecodeNode parseCustomReturnEpilogNode(BytecodeParser<CustomReturnEpilogBytecodeNodeGen.Builder> builder) {
+        BytecodeRootNodes<CustomReturnEpilogBytecodeNode> nodes;
+        if (testSerialize) {
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            try {
+                CustomReturnEpilogBytecodeNodeGen.serialize(new DataOutputStream(output), SERIALIZER, builder);
+                Supplier<DataInput> input = () -> SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(output.toByteArray()));
+                nodes = CustomReturnEpilogBytecodeNodeGen.deserialize(null, BytecodeConfig.DEFAULT, input, DESERIALIZER);
+            } catch (IOException ex) {
+                throw new AssertionError(ex);
+            }
+        } else {
+            nodes = CustomReturnEpilogBytecodeNodeGen.create(null, BytecodeConfig.DEFAULT, builder);
         }
         return nodes.getNode(0);
     }
@@ -401,6 +422,101 @@ public class PrologEpilogTest extends AbstractInstructionTest {
         assertQuickenings(root, 5, 2);
         assertEquals(42, root.getCallTarget().call(42));
         assertQuickenings(root, 5, 2); // no change
+    }
+
+    @Test
+    public void testDuplicateQuickeningForEpilogVariants() {
+        List<String> instructionNames = DuplicateQuickeningEpilogRootNodeGen.BYTECODE.getInstructionDescriptors().stream().map(InstructionDescriptor::getName).toList();
+        assertTrue(instructionNames.contains("c.StoreReturnValue_offset1$Object"));
+        assertTrue(instructionNames.contains("c.StoreReturnValue_offset2$Object"));
+    }
+
+    @Test
+    public void testCustomReturnEpilogUsesResultOperand() {
+        CustomReturnEpilogBytecodeNode firstOperandRoot = parseCustomReturnEpilogNode(b -> {
+            b.beginRoot();
+            b.beginFirstOperandCustomReturn();
+            b.emitLoadConstant("left");
+            b.emitLoadConstant("right");
+            b.endFirstOperandCustomReturn();
+            b.endRoot();
+        });
+
+        assertEquals("epilog(left):right", firstOperandRoot.getCallTarget().call());
+        assertEquals("left", firstOperandRoot.returnValue);
+        assertInstructions(firstOperandRoot,
+                        "load.constant",
+                        "load.constant",
+                        "c.StoreReturnValue_offset2",
+                        "c.FirstOperandCustomReturn");
+
+        CustomReturnEpilogBytecodeNode secondOperandRoot = parseCustomReturnEpilogNode(b -> {
+            b.beginRoot();
+            b.beginSecondOperandCustomReturn();
+            b.emitLoadConstant("left");
+            b.emitLoadConstant("right");
+            b.endSecondOperandCustomReturn();
+            b.endRoot();
+        });
+
+        assertEquals("left:epilog(right)", secondOperandRoot.getCallTarget().call());
+        assertEquals("right", secondOperandRoot.returnValue);
+        assertInstructions(secondOperandRoot,
+                        "load.constant",
+                        "load.constant",
+                        "c.StoreReturnValue_offset1",
+                        "c.SecondOperandCustomReturn");
+    }
+
+    @Test
+    public void testCustomReturnEpilogResultOperandQuickenings() {
+        CustomReturnEpilogBytecodeNode firstOperandRoot = parseCustomReturnEpilogNode(b -> {
+            b.beginRoot();
+            b.beginFirstOperandCustomReturn();
+            b.emitLoadArgument(0);
+            b.emitLoadConstant("right");
+            b.endFirstOperandCustomReturn();
+            b.endRoot();
+        });
+
+        assertEquals("42:right", firstOperandRoot.getCallTarget().call(42));
+        assertEquals(42, firstOperandRoot.returnValue);
+        assertInstructions(firstOperandRoot,
+                        "load.argument$Int",
+                        "load.constant",
+                        "c.StoreReturnValue_offset2$StoreReturnValueBoxingEliminated$unboxed",
+                        "c.FirstOperandCustomReturn$IntReturn");
+        assertEquals("epilog(left):right", firstOperandRoot.getCallTarget().call("left"));
+        assertEquals("left", firstOperandRoot.returnValue);
+        assertInstructions(firstOperandRoot,
+                        "load.argument",
+                        "load.constant",
+                        "c.StoreReturnValue_offset2",
+                        "c.FirstOperandCustomReturn");
+
+        CustomReturnEpilogBytecodeNode secondOperandRoot = parseCustomReturnEpilogNode(b -> {
+            b.beginRoot();
+            b.beginSecondOperandCustomReturn();
+            b.emitLoadConstant("left");
+            b.emitLoadArgument(0);
+            b.endSecondOperandCustomReturn();
+            b.endRoot();
+        });
+
+        assertEquals("left:42", secondOperandRoot.getCallTarget().call(42));
+        assertEquals(42, secondOperandRoot.returnValue);
+        assertInstructions(secondOperandRoot,
+                        "load.constant",
+                        "load.argument$Int",
+                        "c.StoreReturnValue_offset1$StoreReturnValueBoxingEliminated$unboxed",
+                        "c.SecondOperandCustomReturn$IntReturn");
+        assertEquals("left:epilog(right)", secondOperandRoot.getCallTarget().call("right"));
+        assertEquals("right", secondOperandRoot.returnValue);
+        assertInstructions(secondOperandRoot,
+                        "load.constant",
+                        "load.argument",
+                        "c.StoreReturnValue_offset1",
+                        "c.SecondOperandCustomReturn");
     }
 
     @Test
@@ -955,6 +1071,103 @@ public class PrologEpilogTest extends AbstractInstructionTest {
             }
         }
         return false;
+    }
+}
+
+@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, boxingEliminationTypes = {int.class})
+abstract class DuplicateQuickeningEpilogRootNode extends DebugBytecodeRootNode implements BytecodeRootNode {
+
+    protected DuplicateQuickeningEpilogRootNode(BytecodeDSLTestLanguage language, FrameDescriptor frameDescriptor) {
+        super(language, frameDescriptor);
+    }
+
+    @EpilogReturn
+    static final class StoreReturnValue {
+        @Specialization(rewriteOn = UnexpectedResultException.class)
+        static int doInt(@SuppressWarnings("unused") Object value) throws UnexpectedResultException {
+            throw new UnexpectedResultException(value);
+        }
+
+        @ForceQuickening
+        @Specialization(replaces = "doInt")
+        static Object doObject(Object value) {
+            return value;
+        }
+    }
+
+    @Return(resultOperandIndex = 0)
+    static final class FirstOperandReturn {
+        @Specialization
+        static Object doReturn(Object value, @SuppressWarnings("unused") Object ignored) {
+            return value;
+        }
+    }
+
+    @Return(resultOperandIndex = 1)
+    static final class SecondOperandReturn {
+        @Specialization
+        static Object doReturn(@SuppressWarnings("unused") Object ignored, Object value) {
+            return value;
+        }
+    }
+}
+
+@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, enableSerialization = true, boxingEliminationTypes = {int.class})
+abstract class CustomReturnEpilogBytecodeNode extends DebugBytecodeRootNode implements BytecodeRootNode {
+    transient Object returnValue = null;
+
+    protected CustomReturnEpilogBytecodeNode(BytecodeDSLTestLanguage language, FrameDescriptor frameDescriptor) {
+        super(language, frameDescriptor);
+    }
+
+    @EpilogReturn
+    public static final class StoreReturnValue {
+        @Specialization
+        public static int doStoreReturnValueBoxingEliminated(int returnValue, @Bind CustomReturnEpilogBytecodeNode root) {
+            root.returnValue = returnValue;
+            return returnValue;
+        }
+
+        @Specialization
+        public static Object doStoreReturnValue(Object returnValue, @Bind CustomReturnEpilogBytecodeNode root) {
+            root.returnValue = returnValue;
+            return "epilog(" + returnValue + ")";
+        }
+    }
+
+    // Checks for a name collision with c.StoreReturnValue_offset1.
+    @Operation
+    public static final class StoreReturnValueOffset1 {
+        @Specialization
+        public static Object doStoreReturnValueOffset1(Object value) {
+            return value;
+        }
+    }
+
+    @Return(resultOperandIndex = 0)
+    public static final class FirstOperandCustomReturn {
+        @Specialization
+        public static Object doIntReturn(int value, Object ignored) {
+            return value + ":" + ignored;
+        }
+
+        @Specialization
+        public static Object doReturn(Object value, Object ignored) {
+            return value + ":" + ignored;
+        }
+    }
+
+    @Return(resultOperandIndex = 1)
+    public static final class SecondOperandCustomReturn {
+        @Specialization
+        public static Object doIntReturn(Object ignored, int value) {
+            return ignored + ":" + value;
+        }
+
+        @Specialization
+        public static Object doReturn(Object ignored, Object value) {
+            return ignored + ":" + value;
+        }
     }
 }
 

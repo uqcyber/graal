@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,7 +36,7 @@ import com.oracle.svm.core.debug.SubstrateDebugInfoProvider;
 import com.oracle.svm.core.debug.SubstrateDebugInfoWriter;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
-import com.oracle.svm.core.jdk.RuntimeSupport;
+import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
 import com.oracle.svm.core.posix.debug.jitdump.JitdumpProvider;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
@@ -46,6 +46,10 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import jdk.graal.compiler.debug.DebugContext;
 
 public class PosixPerfSubstrateDebugInfoWriter implements SubstrateDebugInfoWriter {
+    @Override
+    public boolean isEnabled() {
+        return JitdumpProvider.canWriteRecords();
+    }
 
     /**
      * Add a debug info record and a code load record to a jitdump file. Returns a
@@ -87,6 +91,6 @@ class PosixPerfSubstrateDebugInfoFeature implements InternalFeature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
         RuntimeSupport.getRuntimeSupport().addStartupHook(JitdumpProvider.startupHook());
-        RuntimeSupport.getRuntimeSupport().addShutdownHook(JitdumpProvider.shutdownHook());
+        RuntimeSupport.getRuntimeSupport().addTearDownHook(JitdumpProvider.teardownHook());
     }
 }

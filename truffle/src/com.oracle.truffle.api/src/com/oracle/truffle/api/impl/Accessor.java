@@ -153,10 +153,6 @@ import com.oracle.truffle.api.source.SourceSection;
 @SuppressWarnings({"deprecation", "static-method"})
 public abstract class Accessor {
 
-    protected void initializeNativeImageTruffleLocator() {
-        TruffleLocator.initializeNativeImageTruffleLocator();
-    }
-
     abstract static class Support {
 
         Support(String onlyAllowedClassName) {
@@ -720,6 +716,8 @@ public abstract class Accessor {
 
         public abstract boolean areStaticObjectSafetyChecksRelaxed(Object polyglotLanguageInstance);
 
+        public abstract boolean areStaticObjectSafetyChecksForced(Object polyglotLanguageInstance);
+
         public abstract String getStaticObjectStorageStrategy(Object polyglotLanguageInstance);
 
         public abstract Object getHostContext(Object valueContext);
@@ -874,6 +872,8 @@ public abstract class Accessor {
 
         public abstract OptionKey<OptionMap<String>> getIsolateOptionOption();
 
+        public abstract OptionKey<Boolean> getWarnMethodScopingOption();
+
         public abstract boolean isIsolateMemoryProtection(OptionValues optionValues);
 
         public abstract boolean isUntrustedCodeMitigationPolicySoftware(Enum<?> policy);
@@ -881,6 +881,8 @@ public abstract class Accessor {
         public abstract void collectNativeImagePresetOptions();
 
         public abstract Source getSourceReceiver(org.graalvm.polyglot.Source source);
+
+        public abstract TruffleLogger getEngineLogger(Object polyglotEngine);
     }
 
     public abstract static class LanguageSupport extends Support {

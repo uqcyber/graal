@@ -38,7 +38,7 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.InterpreterExecutionOffsets;
 import com.oracle.svm.core.hub.DynamicHubCompanion;
-import com.oracle.svm.core.jdk.RuntimeSupport;
+import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
 import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.graal.hosted.DeoptimizationFeature;
 import com.oracle.svm.graal.hosted.runtimecompilation.RuntimeCompilationFeature;
@@ -56,7 +56,7 @@ import com.oracle.svm.interpreter.ristretto.meta.RistrettoMethod;
 import com.oracle.svm.interpreter.ristretto.profile.RistrettoCompilationManager;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.DisallowLayered;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ReflectionUtil;
@@ -84,7 +84,7 @@ import jdk.vm.ci.code.InstalledCode;
  * @see RistrettoDirectives
  */
 @AutomaticallyRegisteredFeature
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = DisallowLayered.class)
 public final class RistrettoFeature implements InternalFeature {
     private static final String DYNAMIC_HUB_COMPANION_INTERPRETER_TYPE_FIELD = "interpreterType";
     private static final String INTERPRETER_RESOLVED_OBJECT_TYPE_VTABLE_HOLDER_FIELD = "vtableHolder";

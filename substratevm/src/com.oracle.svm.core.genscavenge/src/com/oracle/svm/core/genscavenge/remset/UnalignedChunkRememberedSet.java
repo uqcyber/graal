@@ -41,7 +41,6 @@ import com.oracle.svm.core.genscavenge.ObjectHeaderImpl;
 import com.oracle.svm.core.genscavenge.UnalignedHeapChunk;
 import com.oracle.svm.core.genscavenge.UnalignedHeapChunk.UnalignedHeader;
 import com.oracle.svm.core.heap.ObjectHeader;
-import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.heap.StoredContinuation;
 import com.oracle.svm.core.heap.StoredContinuationAccess;
 import com.oracle.svm.core.heap.UninterruptibleObjectReferenceVisitor;
@@ -51,7 +50,7 @@ import com.oracle.svm.core.hub.InteriorObjRefWalker;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.thread.ContinuationSupport;
-import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.util.UnsignedUtils;
 import com.oracle.svm.guest.staging.util.HostedByteBufferPointer;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
@@ -250,7 +249,6 @@ final class UnalignedChunkRememberedSet {
     @Uninterruptible(reason = CORE_GC_CODE)
     private static void walkObjectArrayPrecise(Object obj, Pointer cardTableStart, UnsignedWord cardTableLimitIdx, UninterruptibleObjectReferenceVisitor refVisitor, boolean clean) {
         int referenceSize = ObjectLayout.singleton().getReferenceSize();
-        boolean isCompressed = ReferenceAccess.singleton().haveCompressedReferences();
 
         DynamicHub objHub = ObjectHeader.readDynamicHubFromObject(obj);
         int length = ArrayLengthNode.arrayLength(obj);
@@ -282,7 +280,7 @@ final class UnalignedChunkRememberedSet {
 
             Pointer refPtr = Word.objectToUntrackedPointer(obj).add(startOffset);
             UnsignedWord nReferences = (endOffset.subtract(startOffset)).unsignedDivide(referenceSize);
-            refVisitor.visitObjectReferences(refPtr, isCompressed, referenceSize, obj, UnsignedUtils.safeToInt(nReferences));
+            refVisitor.visitObjectReferences(refPtr, true, referenceSize, obj, UnsignedUtils.safeToInt(nReferences));
 
             iOffset = dirtyEndOffset;
         }

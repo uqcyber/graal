@@ -24,8 +24,9 @@
  */
 package jdk.graal.compiler.hostvmaccess;
 
-import static jdk.graal.compiler.hostvmaccess.HostCallbackHandler.computeMethodMap;
+import static jdk.graal.compiler.hostvmaccess.HostProxyHandler.computeMethodMap;
 
+import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -40,28 +41,30 @@ import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
+import java.lang.reflect.RecordComponent;
 import java.net.URL;
 import java.security.CodeSource;
 import java.security.ProtectionDomain;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Stream;
+import java.util.function.Function;
 
+import jdk.graal.compiler.annotation.AnnotationValue;
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.api.runtime.GraalJVMCICompiler;
 import jdk.graal.compiler.api.runtime.GraalRuntime;
 import jdk.graal.compiler.core.target.Backend;
-import jdk.graal.compiler.hostvmaccess.HostCallbackHandler.CallbackHandlerMethodHandles;
+import jdk.graal.compiler.hostvmaccess.HostProxyHandler.HostProxyHandlerMethodHandles;
 import jdk.graal.compiler.phases.util.Providers;
 import jdk.graal.compiler.runtime.RuntimeProvider;
+import jdk.graal.compiler.vmaccess.HostAnnotationValueConverter;
 import jdk.graal.compiler.vmaccess.InvocationException;
 import jdk.graal.compiler.vmaccess.ModuleSupport;
 import jdk.graal.compiler.vmaccess.ResolvedJavaModule;
 import jdk.graal.compiler.vmaccess.ResolvedJavaModuleLayer;
 import jdk.graal.compiler.vmaccess.ResolvedJavaPackage;
 import jdk.graal.compiler.vmaccess.VMAccess;
-import jdk.internal.loader.BootLoader;
 import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
@@ -70,6 +73,7 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaRecordComponent;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 import jdk.vm.ci.runtime.JVMCI;
@@ -88,8 +92,8 @@ final class HostVMAccess implements VMAccess {
     private final ClassLoader appClassLoader;
     private final Providers providers;
     private final Module hostImplModule;
-    private final Map<CallbackMethodMapKey, Map<Method, MethodHandle>> callbackMethodMap = new ConcurrentHashMap<>();
-    private final CallbackHandlerMethodHandles callbackMethodHandles;
+    private final Map<HostProxyMethodMapKey, Map<Method, MethodHandle>> hostProxyMethodMap = new ConcurrentHashMap<>();
+    private final HostProxyHandlerMethodHandles hostProxyMethodHandles;
 
     HostVMAccess(ClassLoader appClassLoader) {
         this.appClassLoader = appClassLoader;
@@ -98,7 +102,7 @@ final class HostVMAccess implements VMAccess {
         GraalRuntime graalRuntime = ((GraalJVMCICompiler) runtime.getCompiler()).getGraalRuntime();
         Backend hostBackend = graalRuntime.getCapability(RuntimeProvider.class).getHostBackend();
         providers = hostBackend.getProviders();
-        callbackMethodHandles = getCallbackMethodHandles(providers);
+        hostProxyMethodHandles = getHostProxyMethodHandles(providers);
     }
 
     @Override
@@ -202,7 +206,7 @@ final class HostVMAccess implements VMAccess {
             throw new IllegalArgumentException(e);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause();
-            if (cause instanceof HostCallbackException) {
+            if (cause instanceof HostProxyExceptionImpl) {
                 throw new InvocationException(cause.getCause());
             }
             throw new InvocationException(snippetReflection.forObject(cause), cause);
@@ -402,6 +406,18 @@ final class HostVMAccess implements VMAccess {
     }
 
     @Override
+    public ResolvedJavaPackage asResolvedJavaPackage(Constant constant) {
+        Package pkg = providers.getSnippetReflection().asObject(Package.class, (JavaConstant) constant);
+        return pkg == null ? null : new HostVMResolvedJavaPackageImpl(providers.getMetaAccess(), pkg);
+    }
+
+    @Override
+    public ResolvedJavaRecordComponent asResolvedJavaRecordComponent(Constant constant) {
+        RecordComponent recordComponent = providers.getSnippetReflection().asObject(RecordComponent.class, (JavaConstant) constant);
+        return recordComponent == null ? null : providers.getMetaAccess().lookupJavaRecordComponent(recordComponent);
+    }
+
+    @Override
     public ResolvedJavaType lookupBootClassLoaderType(String name) {
         return lookupType(name, null);
     }
@@ -426,11 +442,6 @@ final class HostVMAccess implements VMAccess {
             throw new RuntimeException("No original class for type " + type);
         }
         return originalClass;
-    }
-
-    @Override
-    public Stream<ResolvedJavaPackage> bootLoaderPackages() {
-        return BootLoader.packages().map(p -> new HostVMResolvedJavaPackageImpl(providers.getMetaAccess(), p));
     }
 
     @Override
@@ -534,43 +545,43 @@ final class HostVMAccess implements VMAccess {
     }
 
     @Override
-    public JavaConstant createCallback(Object hostTarget, ResolvedJavaType guestType) {
+    public JavaConstant createHostProxy(Object hostTarget, ResolvedJavaType guestType) {
         Objects.requireNonNull(hostTarget);
         Class<?> guestClass = providers.getSnippetReflection().originalClass(Objects.requireNonNull(guestType));
         if (guestClass == null || !guestClass.isInterface()) {
             throw new IllegalArgumentException("Invalid guest type");
         }
         /* There is no fast-path for guestClass == hostClass due to exception handling */
-        HostCallbackHandler handler = new HostCallbackHandler(hostTarget, getCallbackMethodMap(hostTarget.getClass(), guestClass));
-        Object guestCallback = Proxy.newProxyInstance(guestClass.getClassLoader(), new Class<?>[]{guestClass}, handler);
-        return providers.getSnippetReflection().forObject(guestCallback);
+        HostProxyHandler handler = new HostProxyHandler(hostTarget, getHostProxyMethodMap(hostTarget.getClass(), guestClass));
+        Object guestHostProxy = Proxy.newProxyInstance(guestClass.getClassLoader(), new Class<?>[]{guestClass}, handler);
+        return providers.getSnippetReflection().forObject(guestHostProxy);
     }
 
     @Override
-    public Throwable unwrapCallbackException(JavaConstant guestWrapper) {
+    public Throwable unwrapHostProxyException(JavaConstant guestWrapper) {
         Objects.requireNonNull(guestWrapper);
-        HostCallbackException e = providers.getSnippetReflection().asObject(HostCallbackException.class, guestWrapper);
+        HostProxyExceptionImpl e = providers.getSnippetReflection().asObject(HostProxyExceptionImpl.class, guestWrapper);
         if (e == null) {
             return null;
         }
         return e.getCause();
     }
 
-    private Map<Method, MethodHandle> getCallbackMethodMap(Class<?> hostClass, Class<?> guestClass) {
-        CallbackMethodMapKey key = new CallbackMethodMapKey(hostClass, guestClass);
-        Map<Method, MethodHandle> methodMap = callbackMethodMap.get(key);
+    private Map<Method, MethodHandle> getHostProxyMethodMap(Class<?> hostClass, Class<?> guestClass) {
+        HostProxyMethodMapKey key = new HostProxyMethodMapKey(hostClass, guestClass);
+        Map<Method, MethodHandle> methodMap = hostProxyMethodMap.get(key);
         if (methodMap != null) {
             return methodMap;
         }
-        methodMap = computeMethodMap(hostClass, guestClass, callbackMethodHandles);
-        Map<Method, MethodHandle> previous = callbackMethodMap.putIfAbsent(key, methodMap);
+        methodMap = computeMethodMap(hostClass, guestClass, hostProxyMethodHandles);
+        Map<Method, MethodHandle> previous = hostProxyMethodMap.putIfAbsent(key, methodMap);
         return previous == null ? methodMap : previous;
     }
 
-    private record CallbackMethodMapKey(Class<?> hostClass, Class<?> guestClass) {
+    private record HostProxyMethodMapKey(Class<?> hostClass, Class<?> guestClass) {
     }
 
-    private static CallbackHandlerMethodHandles getCallbackMethodHandles(Providers providers) {
+    private static HostProxyHandlerMethodHandles getHostProxyMethodHandles(Providers providers) {
         MethodHandles.Lookup lookup = MethodHandles.lookup();
         try {
             // (SnippetReflectionProvider, Object) -> JavaConstant
@@ -650,18 +661,33 @@ final class HostVMAccess implements VMAccess {
             // (ResolvedJavaType) -> Class
             originalClass = originalClass.bindTo(providers.getSnippetReflection());
 
+            // (Annotation, Function<Class<?>, ResolvedJavaType>) -> AnnotationValue
+            MethodHandle annotationAsAnnotationValue = lookup.findStatic(HostAnnotationValueConverter.class, "toAnnotationValue",
+                            MethodType.methodType(AnnotationValue.class, Annotation.class, Function.class));
+            // (Annotation) -> AnnotationValue
+            annotationAsAnnotationValue = MethodHandles.insertArguments(annotationAsAnnotationValue, 1, (Function<Class<?>, ResolvedJavaType>) providers.getMetaAccess()::lookupJavaType);
+
+            // (AnnotationValue, Class, Function<ResolvedJavaType, Class<?>>) -> Annotation
+            MethodHandle annotationValueAsAnnotation = lookup.findStatic(HostAnnotationValueConverter.class, "toAnnotation",
+                            MethodType.methodType(Annotation.class, AnnotationValue.class, Class.class, Function.class));
+            // (AnnotationValue, Class) -> Annotation
+            annotationValueAsAnnotation = MethodHandles.insertArguments(annotationValueAsAnnotation, 2,
+                            (Function<ResolvedJavaType, Class<?>>) providers.getSnippetReflection()::originalClass);
+
             // (SnippetReflectionProvider, Throwable) -> Object
-            MethodHandle filterException = lookup.findStatic(HostCallbackHandler.class, "filterException", MethodType.methodType(Object.class, SnippetReflectionProvider.class, Throwable.class));
+            MethodHandle filterException = lookup.findStatic(HostProxyHandler.class, "filterException", MethodType.methodType(Object.class, SnippetReflectionProvider.class, Throwable.class));
             // (Throwable) -> Object
             filterException = filterException.bindTo(providers.getSnippetReflection());
 
-            return new CallbackHandlerMethodHandles(
+            return new HostProxyHandlerMethodHandles(
                             forObject, asObject,
                             javaConstantForBoolean, javaConstantForByte, javaConstantForShort, javaConstantForChar, javaConstantForInt, javaConstantForLong, javaConstantForFloat,
                             javaConstantForDouble,
                             javaConstantAsBoolean, javaConstantAsByte, javaConstantAsShort, javaConstantAsChar, javaConstantAsInt, javaConstantAsLong, javaConstantAsFloat, javaConstantAsDouble,
                             lookupJavaField, lookupJavaMethod, lookupJavaType,
                             originalField, originalMethod, originalClass,
+                            annotationAsAnnotationValue,
+                            annotationValueAsAnnotation,
                             filterException);
         } catch (NoSuchMethodException | IllegalAccessException e) {
             throw new RuntimeException(e);

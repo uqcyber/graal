@@ -24,11 +24,6 @@
  */
 package jdk.graal.compiler.hotspot.test;
 
-import static jdk.graal.compiler.hotspot.HotSpotBackend.SHA2_IMPL_COMPRESS_MB;
-import static jdk.graal.compiler.hotspot.HotSpotBackend.SHA3_IMPL_COMPRESS_MB;
-import static jdk.graal.compiler.hotspot.HotSpotBackend.SHA5_IMPL_COMPRESS_MB;
-import static jdk.graal.compiler.hotspot.HotSpotBackend.SHA_IMPL_COMPRESS_MB;
-
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -66,6 +61,7 @@ import jdk.graal.compiler.replacements.nodes.CipherBlockChainingAESNode;
 import jdk.graal.compiler.replacements.nodes.ChaCha20Node;
 import jdk.graal.compiler.replacements.nodes.CounterModeAESNode;
 import jdk.graal.compiler.replacements.nodes.DilithiumNode;
+import jdk.graal.compiler.replacements.nodes.DoubleKeccakNode;
 import jdk.graal.compiler.replacements.nodes.ElectronicCodeBookAESNode;
 import jdk.graal.compiler.replacements.nodes.GaloisCounterModeAESNode;
 import jdk.graal.compiler.replacements.nodes.Poly1305ProcessBlocksNode;
@@ -82,9 +78,14 @@ import jdk.graal.compiler.replacements.nodes.KyberNode.KyberBarrettReduceNode;
 import jdk.graal.compiler.replacements.nodes.KyberNode.KyberInverseNttNode;
 import jdk.graal.compiler.replacements.nodes.KyberNode.KyberNttMultNode;
 import jdk.graal.compiler.replacements.nodes.KyberNode.KyberNttNode;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.MD5MultiBlockNode;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA1MultiBlockNode;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA1Node;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA256MultiBlockNode;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA256Node;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA3MultiBlockNode;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA3Node;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA512MultiBlockNode;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA512Node;
 import jdk.vm.ci.code.BailoutException;
 import jdk.vm.ci.code.InstalledCode;
@@ -343,74 +344,73 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
     @Test
     public void testDigestBaseSHA() throws Exception {
         Assume.assumeTrue("SHA1 not supported", runtime().getVMConfig().sha1ImplCompressMultiBlock != 0L);
-        testDigestBase("sun.security.provider.DigestBase", "implCompressMultiBlock", "SHA-1", SHA_IMPL_COMPRESS_MB);
+        testDigestBase("sun.security.provider.DigestBase", "implCompressMultiBlock", "SHA-1", SHA1MultiBlockNode.class, SHA1MultiBlockNode.STUB);
     }
 
     @Test
     public void testDigestBaseSHA2() throws Exception {
         Assume.assumeTrue("SHA256 not supported", runtime().getVMConfig().sha256ImplCompressMultiBlock != 0L);
-        testDigestBase("sun.security.provider.DigestBase", "implCompressMultiBlock", "SHA-256", SHA2_IMPL_COMPRESS_MB);
+        testDigestBase("sun.security.provider.DigestBase", "implCompressMultiBlock", "SHA-256", SHA256MultiBlockNode.class, SHA256MultiBlockNode.STUB);
     }
 
     @Test
     public void testDigestBaseSHA5() throws Exception {
         Assume.assumeTrue("SHA512 not supported", runtime().getVMConfig().sha512ImplCompressMultiBlock != 0L);
-        testDigestBase("sun.security.provider.DigestBase", "implCompressMultiBlock", "SHA-512", SHA5_IMPL_COMPRESS_MB);
+        testDigestBase("sun.security.provider.DigestBase", "implCompressMultiBlock", "SHA-512", SHA512MultiBlockNode.class, SHA512MultiBlockNode.STUB);
     }
 
     @Test
     public void testDigestBaseSHA3() throws Exception {
         Assume.assumeTrue("SHA3 not supported", runtime().getVMConfig().sha3ImplCompressMultiBlock != 0L);
-        testDigestBase("sun.security.provider.DigestBase", "implCompressMultiBlock", "SHA3-512", SHA3_IMPL_COMPRESS_MB);
+        testDigestBase("sun.security.provider.DigestBase", "implCompressMultiBlock", "SHA3-512", SHA3MultiBlockNode.class, SHA3MultiBlockNode.STUB);
+    }
+
+    @Test
+    public void testDigestBaseMD5() throws Exception {
+        Assume.assumeTrue("MD5 not supported", runtime().getVMConfig().md5ImplCompressMultiBlock != 0L);
+        testDigestBase("sun.security.provider.DigestBase", "implCompressMultiBlock", "MD5", MD5MultiBlockNode.class, MD5MultiBlockNode.STUB);
     }
 
     @Before
     public void clearExceptionCall() {
-        expectedCall = null;
         expectedNode = null;
     }
 
-    ForeignCallDescriptor expectedCall;
     Class<? extends Node> expectedNode;
 
     @Override
     protected void checkLowTierGraph(StructuredGraph graph) {
-        if (expectedCall != null) {
-            for (ForeignCallNode node : graph.getNodes().filter(ForeignCallNode.class)) {
-                if (node.getDescriptor() == expectedCall) {
-                    return;
-                }
-            }
-            assertTrue("expected call to " + expectedCall, false);
-        }
         if (expectedNode != null && graph.getNodes().filter(expectedNode).isEmpty()) {
             assertTrue("expected node " + expectedNode.getSimpleName(), false);
         }
     }
 
-    private void testDigestBase(String className, String methodName, String algorithm, ForeignCallDescriptor call) throws Exception {
+    private void testDigestBase(String className, String methodName, String algorithm, Class<? extends Node> expectedNodeClass, ForeignCallDescriptor stubDescriptor) throws Exception {
         Class<?> klass = Class.forName(className);
-        expectedCall = call;
+        expectedNode = expectedNodeClass;
         MessageDigest digest = MessageDigest.getInstance(algorithm);
         byte[] expected = digest.digest(input.clone());
         ResolvedJavaMethod method = getResolvedJavaMethod(klass, methodName);
 
         try {
-            testDigestBase(digest, expected, method);
+            testDigestBase(digest, expected, method, stubDescriptor);
         } catch (BailoutException e) {
             // The plugin may cause loading which invalidates assumptions in the graph so retry it
             // once. This normally only occurs when running individual tests.
             if (e.getMessage().contains("Code installation failed: dependencies failed")) {
-                testDigestBase(digest, expected, method);
+                testDigestBase(digest, expected, method, stubDescriptor);
             } else {
                 throw e;
             }
+        } finally {
+            expectedNode = null;
         }
     }
 
-    private void testDigestBase(MessageDigest digest, byte[] expected, ResolvedJavaMethod method) {
+    private void testDigestBase(MessageDigest digest, byte[] expected, ResolvedJavaMethod method, ForeignCallDescriptor stubDescriptor) {
         StructuredGraph graph = parseForCompile(method);
         assertTrue(graph.getNodes().filter(SnippetSubstitutionNode.class).isNotEmpty());
+        getProviders().getForeignCalls().lookupForeignCall(stubDescriptor);
         InstalledCode intrinsic = getCode(method, graph, false, true, GraalCompilerTest.getInitialOptions());
         try {
             Assert.assertNotNull("missing intrinsic", intrinsic);
@@ -601,7 +601,7 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
 
     @Test
     public void testMLDSASigVer() {
-        Assume.assumeTrue("ML_DSA not supported", runtime().getVMConfig().stubDoubleKeccak != 0L);
+        Assume.assumeTrue("ML_DSA not supported", DoubleKeccakNode.isSupported(getArchitecture()));
         Assume.assumeTrue("ML_DSA not supported", DilithiumNode.isSupported(getArchitecture()));
         assertMLDSAGraalNodeInstallations();
         // ML-DSA-44
@@ -629,6 +629,7 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
 
     private void assertMLDSAGraalNodeInstallations() {
         try {
+            assertNodeInstalledWithoutForeignCall("sun.security.provider.SHA3Parallel", "doubleKeccak", DoubleKeccakNode.class, long[].class, long[].class);
             assertNodeInstalledWithoutForeignCall("implDilithiumAlmostNtt", DilithiumAlmostNttNode.class, int[].class, int[].class);
             assertNodeInstalledWithoutForeignCall("implDilithiumAlmostInverseNtt", DilithiumAlmostInverseNttNode.class, int[].class, int[].class);
             assertNodeInstalledWithoutForeignCall("implDilithiumNttMult", DilithiumNttMultNode.class, int[].class, int[].class, int[].class);
@@ -641,7 +642,11 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
     }
 
     private void assertNodeInstalledWithoutForeignCall(String methodName, Class<? extends Node> expectedNodeClass, Class<?>... parameterTypes) throws ClassNotFoundException {
-        ResolvedJavaMethod method = getResolvedJavaMethod("sun.security.provider.ML_DSA", methodName, parameterTypes);
+        assertNodeInstalledWithoutForeignCall("sun.security.provider.ML_DSA", methodName, expectedNodeClass, parameterTypes);
+    }
+
+    private void assertNodeInstalledWithoutForeignCall(String className, String methodName, Class<? extends Node> expectedNodeClass, Class<?>... parameterTypes) throws ClassNotFoundException {
+        ResolvedJavaMethod method = getResolvedJavaMethod(className, methodName, parameterTypes);
         var compilationId = runtime().getHostBackend().getCompilationIdentifier(method);
         StructuredGraph graph = getIntrinsicGraph(method, compilationId, getDebugContext(getInitialOptions()), StructuredGraph.AllowAssumptions.YES, null);
         assertTrue("missing intrinsic graph for " + methodName, graph != null);
@@ -654,7 +659,7 @@ public class HotSpotCryptoSubstitutionTest extends HotSpotGraalCompilerTest {
                 }
                 nodeKinds.append(node.getClass().getSimpleName());
             }
-            throw new AssertionError("expected Dilithium node " + expectedNodeClass.getSimpleName() + " for " + methodName + "; nodes=" + nodeKinds);
+            throw new AssertionError("expected intrinsic node " + expectedNodeClass.getSimpleName() + " for " + methodName + "; nodes=" + nodeKinds);
         }
         for (ForeignCallNode node : graph.getNodes().filter(ForeignCallNode.class)) {
             throw new AssertionError("unexpected ForeignCallNode path for " + methodName + ": " + node.getDescriptor());

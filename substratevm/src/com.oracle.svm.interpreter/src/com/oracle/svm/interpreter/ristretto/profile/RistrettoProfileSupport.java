@@ -29,8 +29,9 @@ import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
-import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.option.RuntimeOptionKey;
+import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.guest.staging.log.Log;
+import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.interpreter.metadata.CremaResolvedJavaMethodImpl;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
@@ -94,6 +95,9 @@ public class RistrettoProfileSupport {
      * @throws AssertionError if iMethod is not a InterpreterResolvedJavaMethod instance
      */
     public static MethodProfile profileMethodEntry(InterpreterResolvedJavaMethod iMethod) {
+        if (!SubstrateOptions.useRistretto()) {
+            return null;
+        }
         if (!RistrettoProfileSupport.isEnabled()) {
             return null;
         }

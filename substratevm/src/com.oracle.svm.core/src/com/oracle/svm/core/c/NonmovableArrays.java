@@ -47,7 +47,7 @@ import com.oracle.svm.core.heap.ObjectReferenceVisitor;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
-import com.oracle.svm.core.jdk.UninterruptibleUtils;
+import com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.memory.NullableNativeMemory;
 import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.snippets.KnownIntrinsics;

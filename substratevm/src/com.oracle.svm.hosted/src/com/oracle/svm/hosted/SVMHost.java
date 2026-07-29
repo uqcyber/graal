@@ -75,9 +75,9 @@ import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisGraphDecoder;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisPolicy;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.svm.common.meta.MethodVariant;
-import com.oracle.svm.core.BuildPhaseProvider;
+import com.oracle.svm.shared.BuildPhaseProvider;
 import com.oracle.svm.core.MissingRegistrationSupport;
-import com.oracle.svm.core.NeverInline;
+import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.core.NeverInlineTrivial;
 import com.oracle.svm.core.NeverStrengthenGraphWithConstants;
 import com.oracle.svm.core.SubstrateOptions;
@@ -103,7 +103,6 @@ import com.oracle.svm.core.hub.ReferenceType;
 import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.interpreter.InterpreterSupport;
-import com.oracle.svm.core.jdk.LambdaFormHiddenMethod;
 import com.oracle.svm.core.reflect.proxy.DynamicProxySupport;
 import com.oracle.svm.core.stringformat.StringFormatPhase;
 import com.oracle.svm.core.thread.ContinuationSupport;
@@ -186,6 +185,7 @@ import jdk.internal.vm.annotation.Stable;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.DeoptimizationReason;
 import jdk.vm.ci.meta.JavaConstant;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -326,14 +326,15 @@ public class SVMHost extends HostVM {
     }
 
     /**
-     * Returns true if the type is part of the {@code svm.core} module. Note that builderModules
-     * also encloses the {@code svm.hosted} classes, but since those classes are not allowed at run
-     * time then they cannot be an {@link AnalysisType}.
+     * Returns true if the type is part of a module in
+     * {@link ImageClassLoader#getCoreGuestModules()} and is not annotated with
+     * {@link FactoryMethodMarker}. During the Terminus migration, non-isolated builds also treat
+     * host-side SVM modules that still own runtime code as core modules.
      */
     @Override
     public boolean isCoreType(ResolvedJavaType type) {
         ResolvedJavaType originalType = OriginalClassProvider.getOriginalType(type);
-        if (!loader.getCoreModules().contains(GuestAccess.get().getModule(originalType))) {
+        if (!loader.getCoreGuestModules().contains(GuestAccess.get().getModule(originalType))) {
             return false;
         }
         return !AnnotationUtil.isAnnotationPresent(originalType, FactoryMethodMarker.class);
@@ -407,8 +408,8 @@ public class SVMHost extends HostVM {
     }
 
     private void checkForbidden(AnalysisType type, UsageKind kind) {
-        if (SubstrateOptions.VerifyNamingConventions.getValue()) {
-            NativeImageGenerator.checkName(null, type);
+        if (verifyNamingConventions) {
+            NamingConventionVerifier.checkName(null, type);
         }
 
         if (forbiddenTypes == null) {
@@ -445,7 +446,7 @@ public class SVMHost extends HostVM {
 
     @Override
     public void recordActivity() {
-        DeadlockWatchdog.singleton().recordActivity();
+        loader.watchdog.recordActivity();
     }
 
     @Override
@@ -627,7 +628,6 @@ public class SVMHost extends HostVM {
         boolean isRecord = javaClass.isRecord();
         boolean isSealed = javaClass.isSealed();
         boolean isVMInternal = AnnotationUtil.isAnnotationPresent(type, GuestAccess.elements().InternalVMMethod);
-        boolean isLambdaFormHidden = AnnotationUtil.isAnnotationPresent(type, LambdaFormHiddenMethod.class);
         boolean isLinked = type.isLinked();
 
         nestHost = PredefinedClassesSupport.maybeAdjustLambdaNestHost(className, javaClass, classLoader, nestHost);
@@ -639,8 +639,7 @@ public class SVMHost extends HostVM {
         boolean isProxyClass = Proxy.isProxyClass(javaClass);
 
         short flags = DynamicHub.makeFlags(javaClass.isPrimitive(), javaClass.isInterface(), isHidden, isRecord,
-                        type.hasDefaultMethods(), type.declaresDefaultMethods(), isSealed, isVMInternal,
-                        isLambdaFormHidden, isLinked, isProxyClass);
+                        type.hasDefaultMethods(), type.declaresDefaultMethods(), isSealed, isVMInternal, isLinked, isProxyClass);
 
         return new DynamicHub(javaClass, className, computeHubType(type), ReferenceType.computeReferenceType(javaClass),
                         superHub, componentHub, sourceFileName, modifiers, flags, hubClassLoader, nestHost,
@@ -1116,6 +1115,11 @@ public class SVMHost extends HostVM {
             return false;
         }
 
+        /* Remaining types should match the naming conventions. */
+        if (verifyNamingConventions) {
+            NamingConventionVerifier.checkName(bb, type);
+        }
+
         return super.isSupportedOriginalType(bb, type);
     }
 
@@ -1136,6 +1140,12 @@ public class SVMHost extends HostVM {
         if (method.isGuaranteeFolded()) {
             return false;
         }
+
+        /* Remaining methods should match the naming conventions. */
+        if (verifyNamingConventions) {
+            NamingConventionVerifier.checkName(bb, method);
+        }
+
         return super.isSupportedAnalysisMethod(bb, method);
     }
 
@@ -1157,12 +1167,53 @@ public class SVMHost extends HostVM {
             return false;
         }
 
-        /* If the method is substituted we need to check the substitution layer for @Fold. */
-        ResolvedJavaMethod substitutionMethod = bb.getUniverse().getSubstitutions().lookup(method);
-        if (!isSupportedMethod(bb, method) || !isSupportedMethod(bb, substitutionMethod)) {
+        if (!isSupportedMethod(bb, method)) {
             return false;
         }
+        if (!hasSupportedOriginalSignatureTypes(bb, method)) {
+            return false;
+        }
+        /* If the method is substituted we need to check the substitution layer for @Fold. */
+        ResolvedJavaMethod substitutionMethod = bb.getUniverse().getSubstitutions().lookup(method);
+        if (!isSupportedMethod(bb, substitutionMethod)) {
+            return false;
+        }
+
+        /* Remaining methods should match the naming conventions. */
+        if (verifyNamingConventions) {
+            NamingConventionVerifier.checkName(bb, method);
+        }
+
         return super.isSupportedOriginalMethod(bb, method);
+    }
+
+    /**
+     * Checks whether an original method's signature only references types that can be represented in
+     * the shared layer. This runs before substitution lookup so speculatively included base-layer
+     * methods do not create JNI wrappers or analysis methods whose signatures contain deleted types.
+     */
+    private boolean hasSupportedOriginalSignatureTypes(BigBang bb, ResolvedJavaMethod method) {
+        ResolvedJavaType accessingClass = method.getDeclaringClass();
+        if (!isSupportedOriginalDeclaredType(bb, method.getSignature().getReturnType(accessingClass), accessingClass)) {
+            return false;
+        }
+        for (int i = 0; i < method.getSignature().getParameterCount(false); i++) {
+            if (!isSupportedOriginalDeclaredType(bb, method.getSignature().getParameterType(i, accessingClass), accessingClass)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isSupportedOriginalDeclaredType(BigBang bb, JavaType type, ResolvedJavaType accessingClass) {
+        ResolvedJavaType resolvedType;
+        try {
+            resolvedType = type instanceof ResolvedJavaType ? (ResolvedJavaType) type : type.resolve(accessingClass);
+        } catch (LinkageError e) {
+            return false;
+        }
+        ResolvedJavaType elementalType = resolvedType.getElementalType();
+        return elementalType.isPrimitive() || isSupportedOriginalType(bb, elementalType);
     }
 
     private boolean isSupportedMethod(BigBang bb, ResolvedJavaMethod method) {
@@ -1181,7 +1232,7 @@ public class SVMHost extends HostVM {
         }
 
         /* Deleted methods should not be included in the image. */
-        if (AnnotationUtil.isAnnotationPresent(method, Delete.class)) {
+        if (annotationSubstitutions.isDeleted(method)) {
             return false;
         }
 
@@ -1256,7 +1307,7 @@ public class SVMHost extends HostVM {
 
         /* Remaining fields should match the naming conventions. */
         if (verifyNamingConventions) {
-            NativeImageGenerator.checkName(bb, field);
+            NamingConventionVerifier.checkName(bb, field);
         }
 
         return super.isSupportedAnalysisField(bb, field);
@@ -1294,12 +1345,30 @@ public class SVMHost extends HostVM {
         if (annotationSubstitutions.isDeleted(field) || annotationSubstitutions.hasInjectAccessors(field)) {
             return false;
         }
+
+        if (!isSupportedOriginalDeclaredType(bb, field.getType(), field.getDeclaringClass())) {
+            return false;
+        }
+
         /* Remaining fields should match the naming conventions. */
         if (verifyNamingConventions) {
-            NativeImageGenerator.checkName(bb, field);
+            NamingConventionVerifier.checkName(bb, field);
         }
 
         return super.isSupportedOriginalField(bb, field);
+    }
+
+    /**
+     * Determine if a type should be included in the shared layer.
+     */
+    @Override
+    public boolean isTypeIncludedInSharedLayer(ResolvedJavaType type) {
+        // GR-71702 will prevent batch registering svm.core elements as roots
+        return !isJDKGraalCompilerType(type);
+    }
+
+    private static boolean isJDKGraalCompilerType(ResolvedJavaType type) {
+        return type.toJavaName().startsWith("jdk.graal.compiler");
     }
 
     /**
@@ -1310,8 +1379,7 @@ public class SVMHost extends HostVM {
         if (isAlwaysClosedField(field)) {
             return false;
         }
-        // GR-71702 will prevent batch registering svm.core fields as roots
-        return !field.getDeclaringClass().toJavaName().startsWith("jdk.graal.compiler");
+        return super.isFieldIncludedInSharedLayer(field);
     }
 
     @Override

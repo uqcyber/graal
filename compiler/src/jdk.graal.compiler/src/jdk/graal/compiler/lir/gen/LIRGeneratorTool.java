@@ -545,6 +545,78 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
          */
         Table,
         /**
+         * Find index {@code i} where
+         *
+         * <pre>
+         * {@code
+         * RawBytePointer lut = searchValues[0];
+         * int v0 = array[i] & 0xff;
+         * int v1 = array[i + 1] & 0xff;
+         * array[i] == v0 && array[i + 1] == v1 &&
+         * (((lut[       v0 >> 4] & lut[16 + (v0 & 0xf)]) &
+         *   (lut[32 + (v1 >> 4)] & lut[48 + (v1 & 0xf)])) != 0)
+         * }
+         * </pre>
+         *
+         * Returns a packed {@code long} containing the start index in the low 32 bits and the
+         * candidate bit set in the high 32 bits.
+         */
+        FindTwoConsecutiveTables,
+        /**
+         * Variant of {@link #FindTwoConsecutiveTables} for arrays in non-native endian.
+         */
+        FindTwoConsecutiveTablesForeignEndian,
+        /**
+         * Find index {@code i} where
+         *
+         * <pre>
+         * {@code
+         * RawBytePointer lut = searchValues[0];
+         * int v0 = array[i] & 0xff;
+         * int v1 = array[i + 1] & 0xff;
+         * int v2 = array[i + 2] & 0xff;
+         * array[i] == v0 && array[i + 1] == v1 && array[i + 2] == v2 &&
+         * (((lut[       v0 >> 4] & lut[16 + (v0 & 0xf)]) &
+         *   (lut[32 + (v1 >> 4)] & lut[48 + (v1 & 0xf)]) &
+         *   (lut[64 + (v2 >> 4)] & lut[80 + (v2 & 0xf)])) != 0)
+         * }
+         * </pre>
+         *
+         * Returns a packed {@code long} containing the start index in the low 32 bits and the
+         * candidate bit set in the high 32 bits.
+         */
+        FindThreeConsecutiveTables,
+        /**
+         * Variant of {@link #FindThreeConsecutiveTables} for arrays in non-native endian.
+         */
+        FindThreeConsecutiveTablesForeignEndian,
+        /**
+         * Find index {@code i} where
+         *
+         * <pre>
+         * {@code
+         * RawBytePointer lut = searchValues[0];
+         * int v0 = array[i] & 0xff;
+         * int v1 = array[i + 1] & 0xff;
+         * int v2 = array[i + 2] & 0xff;
+         * int v3 = array[i + 3] & 0xff;
+         * array[i] == v0 && array[i + 1] == v1 && array[i + 2] == v2 && array[i + 3] == v3 &&
+         * (((lut[       v0 >> 4] & lut[ 16 + (v0 & 0xf)]) &
+         *   (lut[32 + (v1 >> 4)] & lut[ 48 + (v1 & 0xf)]) &
+         *   (lut[64 + (v2 >> 4)] & lut[ 80 + (v2 & 0xf)]) &
+         *   (lut[96 + (v3 >> 4)] & lut[112 + (v3 & 0xf)])) != 0)
+         * }
+         * </pre>
+         *
+         * Returns a packed {@code long} containing the start index in the low 32 bits and the
+         * candidate bit set in the high 32 bits.
+         */
+        FindFourConsecutiveTables,
+        /**
+         * Variant of {@link #FindFourConsecutiveTables} for arrays in non-native endian.
+         */
+        FindFourConsecutiveTablesForeignEndian,
+        /**
          * Variant of {@link #Table} for arrays in non-native endian.
          */
         TableForeignEndian;
@@ -554,11 +626,46 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
         }
 
         public boolean isTable() {
-            return this == Table || this == TableForeignEndian;
+            return switch (this) {
+                case Table, TableForeignEndian,
+                                FindTwoConsecutiveTables, FindTwoConsecutiveTablesForeignEndian,
+                                FindThreeConsecutiveTables, FindThreeConsecutiveTablesForeignEndian,
+                                FindFourConsecutiveTables, FindFourConsecutiveTablesForeignEndian ->
+                    true;
+                default -> false;
+            };
         }
 
         public boolean isForeignEndian() {
-            return this == MatchRangeForeignEndian || this == TableForeignEndian;
+            return switch (this) {
+                case MatchRangeForeignEndian,
+                                TableForeignEndian,
+                                FindTwoConsecutiveTablesForeignEndian,
+                                FindThreeConsecutiveTablesForeignEndian,
+                                FindFourConsecutiveTablesForeignEndian ->
+                    true;
+                default -> false;
+            };
+        }
+
+        public boolean returnsLong() {
+            return switch (this) {
+                case FindTwoConsecutiveTables, FindTwoConsecutiveTablesForeignEndian,
+                                FindThreeConsecutiveTables, FindThreeConsecutiveTablesForeignEndian,
+                                FindFourConsecutiveTables, FindFourConsecutiveTablesForeignEndian ->
+                    true;
+                default -> false;
+            };
+        }
+
+        public int tableCount() {
+            return switch (this) {
+                case Table, TableForeignEndian -> 1;
+                case FindTwoConsecutiveTables, FindTwoConsecutiveTablesForeignEndian -> 2;
+                case FindThreeConsecutiveTables, FindThreeConsecutiveTablesForeignEndian -> 3;
+                case FindFourConsecutiveTables, FindFourConsecutiveTablesForeignEndian -> 4;
+                default -> 0;
+            };
         }
     }
 
@@ -676,6 +783,16 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
+    default void emitIntegerPolynomialAssign(Value set, Value a, Value b, Value length) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
+    default void emitIntegerPolynomialP256MontgomeryMult(EnumSet<?> runtimeCheckedCPUFeatures, Value a, Value b, Value r) {
+        throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
+    }
+
+    @SuppressWarnings("unused")
     default Variable emitChaCha20Block(Value state, Value result) {
         throw GraalError.unimplemented("No specialized implementation available"); // ExcludeFromJacocoGeneratedReport
     }
@@ -721,7 +838,17 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
+    default Variable emitSha1ImplCompressMB(EnumSet<?> runtimeCheckedCPUFeatures, Value buf, Value state, Value ofs, Value limit) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
     default void emitSha256ImplCompress(EnumSet<?> runtimeCheckedCPUFeatures, Value buf, Value state) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitSha256ImplCompressMB(EnumSet<?> runtimeCheckedCPUFeatures, Value buf, Value state, Value ofs, Value limit) {
         throw GraalError.unimplemented("No specialized implementation available");
     }
 
@@ -731,12 +858,32 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
     }
 
     @SuppressWarnings("unused")
+    default Variable emitDoubleKeccak(Value state0, Value state1) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitSha3ImplCompressMB(Value buf, Value state, Value blockSize, Value ofs, Value limit) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
     default void emitSha512ImplCompress(Value buf, Value state) {
         throw GraalError.unimplemented("No specialized implementation available");
     }
 
     @SuppressWarnings("unused")
+    default Variable emitSha512ImplCompressMB(Value buf, Value state, Value ofs, Value limit) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
     default void emitMD5ImplCompress(Value buf, Value state) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitMD5ImplCompressMB(Value buf, Value state, Value ofs, Value limit) {
         throw GraalError.unimplemented("No specialized implementation available");
     }
 
@@ -757,6 +904,11 @@ public interface LIRGeneratorTool extends CoreProviders, DiagnosticLIRGeneratorT
 
     @SuppressWarnings("unused")
     default Variable emitCRC32CUpdateBytes(EnumSet<?> runtimeCheckedCPUFeatures, Value crc, Value bufferAddress, Value length) {
+        throw GraalError.unimplemented("No specialized implementation available");
+    }
+
+    @SuppressWarnings("unused")
+    default Variable emitDoubleMod(Value x, Value y) {
         throw GraalError.unimplemented("No specialized implementation available");
     }
 

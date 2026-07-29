@@ -60,7 +60,7 @@ import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.BuildPhaseProvider;
+import com.oracle.svm.shared.BuildPhaseProvider;
 import com.oracle.svm.core.ForeignSupport;
 import com.oracle.svm.core.FunctionPointerHolder;
 import com.oracle.svm.core.MissingRegistrationUtils;
@@ -76,7 +76,7 @@ import com.oracle.svm.core.image.DisallowedImageHeapObjects.DisallowedObjectRepo
 import com.oracle.svm.core.methodhandles.Target_java_lang_invoke_BoundMethodHandle;
 import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
-import com.oracle.svm.core.util.ImageHeapMap;
+import com.oracle.svm.guest.staging.util.ImageHeapMap;
 import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;

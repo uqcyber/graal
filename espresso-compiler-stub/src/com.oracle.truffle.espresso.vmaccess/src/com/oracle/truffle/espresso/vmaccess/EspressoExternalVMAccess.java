@@ -24,6 +24,7 @@ package com.oracle.truffle.espresso.vmaccess;
 
 import static com.oracle.truffle.espresso.vmaccess.EspressoExternalConstantReflectionProvider.safeGetClass;
 
+import java.lang.annotation.Annotation;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -31,8 +32,9 @@ import java.net.URL;
 import java.nio.ByteOrder;
 import java.security.CodeSource;
 import java.security.ProtectionDomain;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
-import java.util.stream.Stream;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotException;
@@ -75,6 +77,7 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaRecordComponent;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 import jdk.vm.ci.meta.UnresolvedJavaType;
@@ -84,7 +87,7 @@ import jdk.vm.ci.meta.UnresolvedJavaType;
  * {@link Context}.
  */
 final class EspressoExternalVMAccess implements VMAccess {
-    private final EspressoExternalCallbacks callbacks;
+    private final EspressoExternalHostProxies hostProxies;
     private final Context context;
     private final EspressoExternalResolvedPrimitiveType[] primitives;
     private final EspressoExternalMetaAccessProvider metaAccess;
@@ -107,6 +110,8 @@ final class EspressoExternalVMAccess implements VMAccess {
     final EspressoExternalResolvedJavaMethod java_lang_Class_arrayType;
     private final EspressoExternalResolvedJavaMethod java_lang_Class_getModule;
     private final EspressoExternalResolvedJavaMethod java_lang_Class_getPackage;
+    // j.l.a.Annotation
+    final ResolvedJavaType java_lang_annotation_Annotation;
     // j.l.ClassNotFoundException
     private final EspressoExternalResolvedInstanceType java_lang_ClassNotFoundException;
     // j.l.Module
@@ -133,11 +138,17 @@ final class EspressoExternalVMAccess implements VMAccess {
     // jdk.internal.misc.Unsafe
     private final EspressoExternalResolvedJavaMethod jdk_internal_misc_Unsafe_allocateInstance_Class;
 
-    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestCallbackHandler_createProxy;
-    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestCallbackHandler_computeMethodMap;
+    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestHostProxyHandler_createProxy;
+    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestHostProxyHandler_computeMethodMap;
+    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_annotationForMap;
+    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_annotationMemberValue;
+    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_missingTypeProxy;
+    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_elementTypeMismatchProxy;
+    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_enumValue;
+    final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_enumArray;
 
-    private final EspressoExternalResolvedInstanceType com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException;
-    private final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException_getHostException;
+    private final EspressoExternalResolvedInstanceType com_oracle_truffle_espresso_vmaccess_guest_EspressoHostProxyException;
+    private final EspressoExternalResolvedJavaMethod com_oracle_truffle_espresso_vmaccess_guest_EspressoHostProxyException_getHostException;
 
     // Boxes
     final EspressoExternalResolvedInstanceType java_lang_Boolean;
@@ -166,6 +177,9 @@ final class EspressoExternalVMAccess implements VMAccess {
     final EspressoExternalResolvedJavaMethod java_lang_Long_longValue;
     final EspressoExternalResolvedJavaMethod java_lang_Float_floatValue;
     final EspressoExternalResolvedJavaMethod java_lang_Double_doubleValue;
+
+    final EspressoExternalResolvedJavaMethod java_util_HashMap_init;
+    final EspressoExternalResolvedJavaMethod java_util_Map_put;
 
     final Value java_lang_String_class;
     final Value byte_array_class;
@@ -214,6 +228,7 @@ final class EspressoExternalVMAccess implements VMAccess {
         java_lang_Class_getModule = requireMethod(classType, "getModule", "()Ljava/lang/Module;", providers);
         java_lang_Class_getPackage = requireMethod(classType, "getPackage", "()Ljava/lang/Package;", providers);
         java_lang_Class_arrayType = requireMethod(classType, "arrayType", "()Ljava/lang/Class;", providers);
+        java_lang_annotation_Annotation = providers.getMetaAccess().lookupJavaType(Annotation.class);
 
         java_lang_String_class = constantReflection.asJavaClass(metaAccess.lookupJavaType(String.class)).getValue();
         byte_array_class = constantReflection.asJavaClass(metaAccess.lookupJavaType(byte[].class)).getValue();
@@ -263,18 +278,36 @@ final class EspressoExternalVMAccess implements VMAccess {
         java_lang_Float_floatValue = requireMethod(java_lang_Float, "floatValue", "()F", providers);
         java_lang_Double_doubleValue = requireMethod(java_lang_Double, "doubleValue", "()D", providers);
 
-        ResolvedJavaType callbackHandlerType = lookupPlatformClassLoaderType("com.oracle.truffle.espresso.vmaccess.guest.GuestCallbackHandler");
-        com_oracle_truffle_espresso_vmaccess_guest_GuestCallbackHandler_createProxy = requireMethod(callbackHandlerType, "createProxy",
-                        "(Ljava/lang/Object;Ljava/util/Map;Ljava/lang/Class;)Ljava/lang/Object;", providers);
-        com_oracle_truffle_espresso_vmaccess_guest_GuestCallbackHandler_computeMethodMap = requireMethod(callbackHandlerType, "computeMethodMap",
-                        "(Ljava/lang/Class;Ljava/lang/Object;)Ljava/util/Map;", providers);
+        java_util_HashMap_init = requireZeroArgumentConstructor(providers.getMetaAccess().lookupJavaType(HashMap.class));
+        java_util_Map_put = requireMethod(providers.getMetaAccess().lookupJavaType(Map.class), "put",
+                        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", providers);
 
-        com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException = (EspressoExternalResolvedInstanceType) lookupPlatformClassLoaderType(
-                        "com.oracle.truffle.espresso.vmaccess.guest.EspressoCallbackException");
-        com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException_getHostException = requireMethod(com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException, "getHostException",
+        ResolvedJavaType hostProxyHandlerType = lookupPlatformClassLoaderType("com.oracle.truffle.espresso.vmaccess.guest.GuestHostProxyHandler");
+        com_oracle_truffle_espresso_vmaccess_guest_GuestHostProxyHandler_createProxy = requireMethod(hostProxyHandlerType, "createProxy",
+                        "(Ljava/lang/Object;Ljava/util/Map;Ljava/lang/Class;)Ljava/lang/Object;", providers);
+        com_oracle_truffle_espresso_vmaccess_guest_GuestHostProxyHandler_computeMethodMap = requireMethod(hostProxyHandlerType, "computeMethodMap",
+                        "(Ljava/lang/Class;Ljava/lang/Object;)Ljava/util/Map;", providers);
+        ResolvedJavaType annotationProxyBuilderType = lookupPlatformClassLoaderType("com.oracle.truffle.espresso.vmaccess.guest.GuestAnnotationProxyBuilder");
+        com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_annotationForMap = requireMethod(annotationProxyBuilderType, "annotationForMap",
+                        "(Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/annotation/Annotation;", providers);
+        com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_annotationMemberValue = requireMethod(annotationProxyBuilderType, "annotationMemberValue",
+                        "(Ljava/lang/annotation/Annotation;Ljava/lang/String;)Ljava/lang/Object;", providers);
+        com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_missingTypeProxy = requireMethod(annotationProxyBuilderType, "missingTypeProxy",
+                        "(Ljava/lang/String;)Ljava/lang/Object;", providers);
+        com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_elementTypeMismatchProxy = requireMethod(annotationProxyBuilderType, "elementTypeMismatchProxy",
+                        "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", providers);
+        com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_enumValue = requireMethod(annotationProxyBuilderType, "enumValue",
+                        "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Object;", providers);
+        com_oracle_truffle_espresso_vmaccess_guest_GuestAnnotationProxyBuilder_enumArray = requireMethod(annotationProxyBuilderType, "enumArray",
+                        "(Ljava/lang/Class;[Ljava/lang/String;)Ljava/lang/Object;", providers);
+
+        com_oracle_truffle_espresso_vmaccess_guest_EspressoHostProxyException = (EspressoExternalResolvedInstanceType) lookupPlatformClassLoaderType(
+                        "com.oracle.truffle.espresso.vmaccess.guest.EspressoHostProxyException");
+        com_oracle_truffle_espresso_vmaccess_guest_EspressoHostProxyException_getHostException = requireMethod(com_oracle_truffle_espresso_vmaccess_guest_EspressoHostProxyException,
+                        "getHostException",
                         "()Ljava/lang/Object;", providers);
 
-        callbacks = new EspressoExternalCallbacks(this);
+        hostProxies = new EspressoExternalHostProxies(this);
     }
 
     @Override
@@ -289,6 +322,18 @@ final class EspressoExternalVMAccess implements VMAccess {
             throw JVMCIError.shouldNotReachHere("Could not find required method:  " + type + "." + name + " " + methodDescriptor);
         }
         return method;
+    }
+
+    /**
+     * Finds the zero-argument constructor used to instantiate a guest collection through JVMCI.
+     */
+    private static EspressoExternalResolvedJavaMethod requireZeroArgumentConstructor(ResolvedJavaType type) {
+        for (ResolvedJavaMethod method : type.getDeclaredConstructors()) {
+            if (method.getSignature().getParameterCount(false) == 0) {
+                return (EspressoExternalResolvedJavaMethod) method;
+            }
+        }
+        throw JVMCIError.shouldNotReachHere("Could not find required zero-argument constructor: " + type);
     }
 
     private static EspressoExternalResolvedJavaField requireField(ResolvedJavaType type, String fieldName) {
@@ -386,30 +431,6 @@ final class EspressoExternalVMAccess implements VMAccess {
         }
         Value value = espressoConstant.getValue();
         return new EspressoExternalResolvedJavaPackage(this, value);
-    }
-
-    @Override
-    public Stream<ResolvedJavaPackage> bootLoaderPackages() {
-        /*
-         * Obtain jdk.internal.loader.BootLoader.packages() from the guest and materialize it to an
-         * array to bridge into a Java Stream on the host.
-         */
-        Value bootLoaderMeta = requireMetaObject("jdk.internal.loader.BootLoader");
-        Value stream = bootLoaderMeta.getMember("packages").execute();
-        // Stream#toArray() -> Object[]
-        Value array = stream.invokeMember("toArray");
-        if (array == null || array.isNull()) {
-            return Stream.empty();
-        }
-        long size = array.getArraySize();
-        Stream.Builder<ResolvedJavaPackage> builder = Stream.builder();
-        for (long i = 0; i < size; i++) {
-            Value pkg = array.getArrayElement(i);
-            if (pkg != null && !pkg.isNull()) {
-                builder.add(new EspressoExternalResolvedJavaPackage(this, pkg));
-            }
-        }
-        return builder.build();
     }
 
     @Override
@@ -664,6 +685,39 @@ final class EspressoExternalVMAccess implements VMAccess {
             if ("java.lang.reflect.Field".equals(value.getMetaObject().getMetaQualifiedName())) {
                 return EspressoExternalConstantReflectionProvider.fieldAsJavaResolvedField(value, this);
             }
+        }
+        return null;
+    }
+
+    @Override
+    public ResolvedJavaPackage asResolvedJavaPackage(Constant constant) {
+        if (constant instanceof EspressoExternalObjectConstant espressoConstant) {
+            Value value = espressoConstant.getValue();
+            if ("java.lang.Package".equals(value.getMetaObject().getMetaQualifiedName())) {
+                return new EspressoExternalResolvedJavaPackage(this, value);
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public ResolvedJavaRecordComponent asResolvedJavaRecordComponent(Constant constant) {
+        if (constant instanceof EspressoExternalObjectConstant espressoConstant &&
+                        "java.lang.reflect.RecordComponent".equals(espressoConstant.getValue().getMetaObject().getMetaQualifiedName())) {
+            Value value = espressoConstant.getValue();
+            /*
+             * The default JVMCI lookup accepts a host RecordComponent. Mirror its matching logic for
+             * this guest reflection object.
+             */
+            ResolvedJavaType declaringRecord = EspressoExternalConstantReflectionProvider.classAsType(value.invokeMember("getDeclaringRecord"), this);
+            String name = value.invokeMember("getName").asString();
+            ResolvedJavaType type = EspressoExternalConstantReflectionProvider.classAsType(value.invokeMember("getType"), this);
+            for (ResolvedJavaRecordComponent component : declaringRecord.getRecordComponents()) {
+                if (component.getName().equals(name) && component.getType().equals(type)) {
+                    return component;
+                }
+            }
+            throw new JVMCIError("unresolved RecordComponent %s", value);
         }
         return null;
     }
@@ -1015,17 +1069,17 @@ final class EspressoExternalVMAccess implements VMAccess {
     }
 
     @Override
-    public JavaConstant createCallback(Object hostTarget, ResolvedJavaType guestType) {
+    public JavaConstant createHostProxy(Object hostTarget, ResolvedJavaType guestType) {
         Objects.requireNonNull(hostTarget);
         if (!(Objects.requireNonNull(guestType) instanceof EspressoExternalResolvedInstanceType espressoGuestType) || !espressoGuestType.isInterface()) {
             throw new IllegalArgumentException("Invalid guest type");
         }
-        Value callback = callbacks.createCallback(hostTarget, espressoGuestType);
-        return new EspressoExternalObjectConstant(this, callback);
+        Value hostProxy = hostProxies.createHostProxy(hostTarget, espressoGuestType);
+        return new EspressoExternalObjectConstant(this, hostProxy);
     }
 
     @Override
-    public Throwable unwrapCallbackException(JavaConstant guestWrapper) {
+    public Throwable unwrapHostProxyException(JavaConstant guestWrapper) {
         Objects.requireNonNull(guestWrapper);
         if (!(guestWrapper instanceof EspressoExternalObjectConstant espressoWrapper)) {
             return null;
@@ -1038,11 +1092,11 @@ final class EspressoExternalVMAccess implements VMAccess {
     }
 
     Throwable maybeUnwrapHostException(Value guestWrapper) {
-        Value hostExceptionClass = com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException.getMetaObject().getMember("class");
+        Value hostExceptionClass = com_oracle_truffle_espresso_vmaccess_guest_EspressoHostProxyException.getMetaObject().getMember("class");
         if (!guestWrapper.getMetaObject().equals(hostExceptionClass)) {
             return null;
         }
-        Value hostExceptionValue = com_oracle_truffle_espresso_vmaccess_guest_EspressoCallbackException_getHostException.getMirror().execute(guestWrapper);
+        Value hostExceptionValue = com_oracle_truffle_espresso_vmaccess_guest_EspressoHostProxyException_getHostException.getMirror().execute(guestWrapper);
         return hostExceptionValue.asHostObject();
     }
 }

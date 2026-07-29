@@ -273,6 +273,7 @@ GraalTags = Tags([
     'truffle_unittests',
     'check_libcontainer_annotations',
     'check_libcontainer_namespace',
+    'check_svm_invariants',
     'java_agent'
 ])
 
@@ -545,6 +546,10 @@ def svm_gate_body(args, tasks):
             with native_image_context(IMAGE_ASSERTION_FLAGS):
                 native_unittests_task(args.extra_image_builder_arguments, include_custom_test_groups=True)
 
+    with Task('SVM invariants', tasks, tags=[GraalTags.check_svm_invariants]) as t:
+        if t:
+            jvm_unittest(["-Dsvm.invariants.VerifyReflectionUsage.mode=check_exclude_list", "CheckSVMInvariants"])
+
     with Task('java.desktop integration tests', tasks, tags=[GraalTags.java_desktop_integration]) as t:
         if t:
             if '--static' in args.extra_image_builder_arguments:
@@ -651,12 +656,19 @@ def svm_gate_body(args, tasks):
 # THIS IS THE EXPECTED FAILURE STACK TRACE FOR TERMINUS HELLO WORLD MVP (GR-72797).
 # Whitespaces are stripped and line numbers are replaced with a placeholder to account for line changes.
 TERMINUS_HELLO_WORLD_EXPECTED_FAILURE = """
-    at jdk.graal.compiler.espresso.vmaccess/com.oracle.truffle.espresso.vmaccess.EspressoExternalSnippetReflectionProvider.originalMethod(EspressoExternalSnippetReflectionProvider.java:104)
-    at org.graalvm.nativeimage.base/com.oracle.svm.util.OriginalMethodProvider.getJavaMethod(OriginalMethodProvider.java:68)
-    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGeneratorRunner.buildImage(NativeImageGeneratorRunner.java:579)
-    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGeneratorRunner.build(NativeImageGeneratorRunner.java:768)
-    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGeneratorRunner.start(NativeImageGeneratorRunner.java:183)
-    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGeneratorRunner.main(NativeImageGeneratorRunner.java:131)
+    at org.graalvm.nativeimage.shared/com.oracle.svm.shared.util.VMError.shouldNotReachHere(VMError.java:121)
+    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport.validateSingletonRegistration(HostedImageLayerBuildingSupport.java:291)
+    at org.graalvm.nativeimage.shared/com.oracle.svm.shared.singletons.ImageSingletonsSupportImpl$HostedManagement.addSingleton(ImageSingletonsSupportImpl.java:399)
+    at org.graalvm.nativeimage.shared/com.oracle.svm.shared.singletons.ImageSingletonsSupportImpl$HostedManagement.doAdd(ImageSingletonsSupportImpl.java:384)
+    at org.graalvm.nativeimage.shared/com.oracle.svm.shared.singletons.ImageSingletonsSupportImpl.add(ImageSingletonsSupportImpl.java:74)
+    at org.graalvm.nativeimage/org.graalvm.nativeimage.ImageSingletons.add(ImageSingletons.java:73)
+    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGenerator.loadAndInstallLayeredSingletons(NativeImageGenerator.java:493)
+    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGenerator.installSingletonRegistries(NativeImageGenerator.java:1336)
+    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGenerator.run(NativeImageGenerator.java:582)
+    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGeneratorRunner.buildImage(NativeImageGeneratorRunner.java:613)
+    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGeneratorRunner.build(NativeImageGeneratorRunner.java:801)
+    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGeneratorRunner.start(NativeImageGeneratorRunner.java:185)
+    at org.graalvm.nativeimage.builder/com.oracle.svm.hosted.NativeImageGeneratorRunner.main(NativeImageGeneratorRunner.java:133)
 """
 
 
@@ -737,6 +749,9 @@ def _compute_native_unittest_args(extra_build_args=None, include_svm_test_featur
     cp_entry_name = join(svmbuild_dir(), 'cpEntryDir')
     resources_from_dir = join(cp_entry_name, 'resourcesFromDir')
     simple_dir = join(cp_entry_name, 'simpleDir')
+    micronaut_style_cp_entry_a = join(svmbuild_dir(), 'micronautStyleServicesA')
+    micronaut_style_cp_entry_b = join(svmbuild_dir(), 'micronautStyleServicesB')
+    micronaut_style_service_root = join('META-INF', 'native-image-resource-test')
 
     mx_util.ensure_dir_exists(resources_from_dir)
     mx_util.ensure_dir_exists(simple_dir)
@@ -753,9 +768,31 @@ def _compute_native_unittest_args(extra_build_args=None, include_svm_test_featur
     # same late exports and would also need extra reflection metadata for the test plumbing.
     mx_unittest.add_global_ignore_glob('com.oracle.svm.configure.test.config.URLProtocolTraceProcessorTest')
 
+    def write_micronaut_style_service_entries(cp_entry, service_name, implementation_names):
+        service_dir = join(cp_entry, micronaut_style_service_root, service_name)
+        mx_util.ensure_dir_exists(service_dir)
+        for implementation_name in implementation_names:
+            with open(join(service_dir, implementation_name), 'w', encoding='utf-8') as out:
+                out.write(implementation_name + '\n')
+
+    write_micronaut_style_service_entries(micronaut_style_cp_entry_a, 'com.oracle.svm.test.ServiceA', [
+        'com.oracle.svm.test.impl.ServiceAImpl1',
+        'com.oracle.svm.test.impl.ServiceAImplShared',
+    ])
+    write_micronaut_style_service_entries(micronaut_style_cp_entry_a, 'com.oracle.svm.test.ServiceB', [
+        'com.oracle.svm.test.impl.ServiceBImpl',
+    ])
+    write_micronaut_style_service_entries(micronaut_style_cp_entry_b, 'com.oracle.svm.test.ServiceA', [
+        'com.oracle.svm.test.impl.ServiceAImpl2',
+        'com.oracle.svm.test.impl.ServiceAImplShared',
+    ])
+    write_micronaut_style_service_entries(micronaut_style_cp_entry_b, 'com.oracle.svm.test.ServiceC', [
+        'com.oracle.svm.test.impl.ServiceCImpl',
+    ])
+
     # Always add our extra classpath entry with resources
     additional_build_args += svm_experimental_options([
-        '-cp', cp_entry_name
+        '-cp', os.pathsep.join([cp_entry_name, micronaut_style_cp_entry_a, micronaut_style_cp_entry_b])
     ])
     # Only add SVM test-specific security provider/service overrides when running the SVM tests.
     # Truffle/native unittests (and others) don't have com.oracle.svm.test on the classpath.
@@ -1402,6 +1439,9 @@ def _helloworld(native_image, javac_command, path, build_only, args, variant=lis
             # If helloword got built into a shared library we use python to load the shared library
             # and call its `run_main`. We are capturing the stdout during the call into an unnamed
             # pipe so that we can use it in the actual vs. expected check below.
+            stdout = None
+            pout = None
+            pin = None
             try:
                 import ctypes
                 so_name = mx.add_lib_suffix('helloworld')
@@ -1419,9 +1459,17 @@ def _helloworld(native_image, javac_command, path, build_only, args, variant=lis
                 mx.log(f'Stdout from calling run_main in shared object {so_name}:')
                 mx.log(call_stdout)
             finally:
-                del os.environ[envkey]
-                os.close(pin)
-                os.close(pout)
+                # Clean up defensively: any of the steps above (e.g. loading the shared library)
+                # may fail before 'envkey' or the pipe fds were set up. Unconditional cleanup here
+                # would raise a secondary KeyError/NameError that masks the real failure.
+                if stdout is not None:
+                    os.dup2(stdout, 1)  # ensure original stdout is restored
+                    os.close(stdout)
+                os.environ.pop(envkey, None)
+                if pin is not None:
+                    os.close(pin)
+                if pout is not None:
+                    os.close(pout)
         else:
             env = os.environ.copy()
             env[envkey] = output
@@ -1433,7 +1481,7 @@ def _helloworld(native_image, javac_command, path, build_only, args, variant=lis
         if actual_output != expected_output:
             raise RuntimeError('Unexpected output: ' + str(actual_output) + "  !=  " + str(expected_output))
 
-def _debuginfotest(native_image, path, build_only, with_isolates_only, args):
+def _debuginfotest(native_image, path, build_only, args):
     sourcepath = mx.project('com.oracle.svm.test.debug').source_dirs()[0]
     # the header file for foreign types resides at the root of the
     # com.oracle.svm.test.debug source tree
@@ -1457,7 +1505,6 @@ def _debuginfotest(native_image, path, build_only, with_isolates_only, args):
         return native_image(build_args)
 
     env = os.environ.copy()
-    # build with and without Isolates and check both work
     if '--libc=musl' in args:
         env['debuginfotest_musl'] = 'yes'
 
@@ -1473,19 +1520,12 @@ def _debuginfotest(native_image, path, build_only, with_isolates_only, args):
     if mx.get_os() == 'linux' and not build_only:
         env['debuginfotest_arch'] = mx.get_arch()
 
-    if not with_isolates_only:
-        hello_binary = build_debug_test('isolates_off', 'hello_image', testhello_args + svm_experimental_options(['-H:-SpawnIsolates']))
-        if mx.get_os() == 'linux' and not build_only:
-            env['debuginfotest_isolates'] = 'no'
-            mx.run(gdb_base_command() + ['-x', testhello_py, hello_binary], env=env)
-
-    hello_binary = build_debug_test('isolates_on', 'hello_image', testhello_args + svm_experimental_options(['-H:+SpawnIsolates']))
+    hello_binary = build_debug_test('default', 'hello_image', testhello_args)
     if mx.get_os() == 'linux' and not build_only:
-        env['debuginfotest_isolates'] = 'yes'
         mx.run(gdb_base_command() + ['-x', testhello_py, hello_binary], env=env)
 
 
-def _layereddebuginfotest(native_image, output_path, skip_base_layer, with_isolates_only, args):
+def _layereddebuginfotest(native_image, output_path, skip_base_layer, args):
     sourcepath = mx.project('com.oracle.svm.test.debug').source_dirs()[0]
     cincludepath = sourcepath
 
@@ -1528,7 +1568,6 @@ def _layereddebuginfotest(native_image, output_path, skip_base_layer, with_isola
 
     # prepare environment
     env = os.environ.copy()
-    env['debuginfotest_isolates'] = 'yes'
     env['debuginfotest_layered'] = 'yes'
 
     # fetch python test file
@@ -1570,7 +1609,7 @@ def testhello_ni_args(cincludepath, sourcepath):
         '-H:DebugInfoSourceSearchPath=' + sourcepath,
     ])
 
-def _gdbdebughelperstest(native_image, path, with_isolates_only, args):
+def _gdbdebughelperstest(native_image, path, args):
 
     # ====== check gdb version ======
     # gdb-debughelperstests are designed for GDB 14 and higher with the GDB Python API enabled
@@ -1619,11 +1658,10 @@ def _gdbdebughelperstest(native_image, path, with_isolates_only, args):
         'com.oracle.svm.test.debug.helper.ClassLoaderTest'
     ]
 
-    def run_debug_test(image_name: str, testfile: str, source_path: str, with_isolates: bool = True,
-                       build_cinterfacetutorial: bool = False, extra_args: list = None,
+    def run_debug_test(image_name: str, testfile: str, source_path: str, build_cinterfacetutorial: bool = False, extra_args: list = None,
                        skip_build: bool = False) -> int:
         extra_args = [] if extra_args is None else extra_args
-        build_dir = join(path, image_name + ("" if with_isolates else "_no_isolates"))
+        build_dir = join(path, image_name)
 
         if not skip_build:
             # clean / create output directory
@@ -1646,9 +1684,6 @@ def _gdbdebughelperstest(native_image, path, with_isolates_only, args):
             if '--shared' in extra_args:
                 build_args = [arg for arg in build_args if arg not in ['--libc=musl', '--static']]
 
-            if not with_isolates:
-                build_args += svm_experimental_options(['-H:-SpawnIsolates'])
-
             if build_cinterfacetutorial:
                 build_args += ['-o', join(build_dir, 'lib' + image_name)]
             else:
@@ -1669,7 +1704,7 @@ def _gdbdebughelperstest(native_image, path, with_isolates_only, args):
                                  'libcinterfacetutorial.lib']
                 mx.run(c_command, cwd=build_dir)
         if mx.get_os() == 'linux':
-            logfile = join(path, pathlib.Path(testfile).stem + ('' if with_isolates else '_no_isolates') + '.log')
+            logfile = join(path, pathlib.Path(testfile).stem + '.log')
             os.environ.update({'gdb_logfile': logfile})
             gdb_command = gdb_logging_command(logfile, join(build_dir, 'gdb-debughelpers.py')) + [
                 '-x', testfile, join(build_dir, image_name)
@@ -1679,9 +1714,6 @@ def _gdbdebughelperstest(native_image, path, with_isolates_only, args):
         return 0
 
     status = 0
-    if not with_isolates_only:
-        status |= run_debug_test('prettyPrinterTest', test_pretty_printer_py, test_source_path, False,
-                                 extra_args=test_pretty_printer_args)
     status |= run_debug_test('prettyPrinterTest', test_pretty_printer_py, test_source_path,
                              extra_args=test_pretty_printer_args)
     status |= run_debug_test('prettyPrinterTest', test_settings_py, test_source_path,
@@ -1700,7 +1732,7 @@ def _gdbdebughelperstest(native_image, path, with_isolates_only, args):
         mx.abort(status)
 
 
-def _runtimedebuginfotest(native_image, output_path, with_isolates_only, args=None):
+def _runtimedebuginfotest(native_image, output_path, args=None):
     """Build and run the runtimedebuginfotest"""
 
     args = [] if args is None else args
@@ -1771,8 +1803,8 @@ def _runtimedebuginfotest(native_image, output_path, with_isolates_only, args=No
         return mx.run(gdb_command, cwd=output_path, nonZeroIsFatal=False)
 
     # G1 does not work for the jsvm library
-    # avoid complications with '-H:+ProtectionKeys' which is not compatible with '-H:-SpawnIsolates' and '-H:-UseCompressedReferences'
-    if '--gc=G1' not in args and '-H:-UseCompressedReferences' not in args and '-H:-SpawnIsolates' not in args:
+    # avoid complications with '-H:+ProtectionKeys' which is not compatible with '-H:-UseCompressedReferences'
+    if '--gc=G1' not in args and '-H:-UseCompressedReferences' not in args:
         status |= run_js_test()
         status |= run_js_test(True)
 
@@ -1787,7 +1819,7 @@ def _javac_image(native_image, path, args=None):
     # Build an image for the javac compiler, so that we test and gate-check javac all the time.
     # Dynamic class loading code is reachable (used by the annotation processor), so -H:+ReportUnsupportedElementsAtRuntime is a necessary option
     native_image(["-o", join(path, "javac"), "com.sun.tools.javac.Main", "javac"] + svm_experimental_options([
-                  "-H:+ReportUnsupportedElementsAtRuntime", "-H:+AllowIncompleteClasspath",
+                  "-H:+ReportUnsupportedElementsAtRuntime",
                   "-H:IncludeResourceBundles=com.sun.tools.javac.resources.compiler,com.sun.tools.javac.resources.javac,com.sun.tools.javac.resources.version"]) + args)
 
 
@@ -2356,6 +2388,21 @@ lib_jvm_preserved_modules = [
     'jdk.charsets',
 ]
 
+lib_jvm_build_args = svm_experimental_options(['-H:Preserve=module=' + module for module in lib_jvm_preserved_modules] +
+                                              ['-H:Preserve=package=' + pkg for pkg in lib_jvm_preserved_packages])
+if mx.is_linux():
+    lib_jvm_build_args += [
+        '-H:NativeLinkerOption=-Wl,-soname=libjvm.so'
+    ]
+elif mx.is_darwin():
+    lib_jvm_build_args += [
+        '-H:NativeLinkerOption=-Wl,-install_name,@rpath/libjvm.dylib',
+        '-H:NativeLinkerOption=-Wl,-rpath,@loader_path/.',
+        '-H:NativeLinkerOption=-Wl,-rpath,@loader_path/..',
+        '-H:NativeLinkerOption=-Wl,-current_version,1.0.0',
+        '-H:NativeLinkerOption=-Wl,-compatibility_version,1.0.0',
+    ]
+
 # Keep libjvm -H:Preserve selectors with the image builder metadata instead of
 # native-image.properties so they use the same origin path as explicit builder arguments.
 mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
@@ -2375,8 +2422,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
             use_modules='image',
             destination='<lib:jvm>',
             jar_distributions=['substratevm:SVM_LIBJVM'],
-            build_args=svm_experimental_options(['-H:Preserve=module=' + module for module in lib_jvm_preserved_modules] +
-                                                ['-H:Preserve=package=' + pkg for pkg in lib_jvm_preserved_packages]),
+            build_args=lib_jvm_build_args,
             headers=False,
             home_finder=False,
         ),
@@ -2481,19 +2527,17 @@ def debuginfotest(args, config=None):
     builds a debuginfo Hello native image and tests it with gdb.
     """
     parser = ArgumentParser(prog='mx debuginfotest')
-    all_args = ['--output-path', '--build-only', '--with-isolates-only']
+    all_args = ['--output-path', '--build-only']
     masked_args = [_mask(arg, all_args) for arg in args]
     parser.add_argument(all_args[0], metavar='<output-path>', nargs=1, help='Path of the generated image', default=[svmbuild_dir()])
     parser.add_argument(all_args[1], action='store_true', help='Only build the native image')
-    parser.add_argument(all_args[2], action='store_true', help='Only build and test the native image with isolates')
     parser.add_argument('image_args', nargs='*', default=[])
     parsed = parser.parse_args(masked_args)
     output_path = unmask(parsed.output_path)[0]
     build_only = parsed.build_only
-    with_isolates_only = parsed.with_isolates_only
     native_image_context_run(
         lambda native_image, a:
-            _debuginfotest(native_image, output_path, build_only, with_isolates_only, a), unmask(parsed.image_args),
+            _debuginfotest(native_image, output_path, build_only, a), unmask(parsed.image_args),
         config=config
     )
 
@@ -2505,19 +2549,17 @@ def layereddebuginfotest(args, config=None):
     App Layer: hello.Hello
     """
     parser = ArgumentParser(prog='mx layereddebuginfotest')
-    all_args = ['--output-path', '--skip-base-layer', '--with-isolates-only']
+    all_args = ['--output-path', '--skip-base-layer']
     masked_args = [_mask(arg, all_args) for arg in args]
     parser.add_argument(all_args[0], metavar='<output-path>', nargs=1, help='Path of the generated image', default=[join(svmbuild_dir(), "layereddebuginfotest")])
     parser.add_argument(all_args[1], action='store_true', help='Skip building the base layer if it already exists')
-    parser.add_argument(all_args[2], action='store_true', help='Only build and test the native image with isolates')
     parser.add_argument('image_args', nargs='*', default=[])
     parsed = parser.parse_args(masked_args)
     output_path = unmask(parsed.output_path)[0]
     skip_base_layer = parsed.skip_base_layer
-    with_isolates_only = parsed.with_isolates_only
     native_image_context_run(
         lambda native_image, a:
-        _layereddebuginfotest(native_image, output_path, skip_base_layer, with_isolates_only, a), unmask(parsed.image_args),
+        _layereddebuginfotest(native_image, output_path, skip_base_layer, a), unmask(parsed.image_args),
         config=config
     )
 
@@ -2539,17 +2581,15 @@ def gdbdebughelperstest(args, config=None):
     builds and tests gdb-debughelpers.py with multiple native images with debuginfo
     """
     parser = ArgumentParser(prog='mx gdbdebughelperstest')
-    all_args = ['--output-path', '--with-isolates-only']
+    all_args = ['--output-path']
     masked_args = [_mask(arg, all_args) for arg in args]
     parser.add_argument(all_args[0], metavar='<output-path>', nargs=1, help='Path of the generated image', default=[join(svmbuild_dir(), "gdbdebughelperstest")])
-    parser.add_argument(all_args[1], action='store_true', help='Only build and test the native image with isolates')
     parser.add_argument('image_args', nargs='*', default=[])
     parsed = parser.parse_args(masked_args)
     output_path = unmask(parsed.output_path)[0]
-    with_isolates_only = parsed.with_isolates_only
     native_image_context_run(
         lambda native_image, a:
-            _gdbdebughelperstest(native_image, output_path, with_isolates_only, a), unmask(parsed.image_args),
+            _gdbdebughelperstest(native_image, output_path, a), unmask(parsed.image_args),
         config=config
     )
 
@@ -2560,17 +2600,15 @@ def runtimedebuginfotest(args, config=None):
     runs a native image that compiles code and creates debug info at runtime.
     """
     parser = ArgumentParser(prog='mx runtimedebuginfotest')
-    all_args = ['--output-path', '--with-isolates-only']
+    all_args = ['--output-path']
     masked_args = [_mask(arg, all_args) for arg in args]
     parser.add_argument(all_args[0], metavar='<output-path>', nargs=1, help='Path of the generated image', default=[join(svmbuild_dir(), "runtimedebuginfotest")])
-    parser.add_argument(all_args[1], action='store_true', help='Only build and test the native image with isolates')
     parser.add_argument('image_args', nargs='*', default=[])
     parsed = parser.parse_args(masked_args)
     output_path = unmask(parsed.output_path)[0]
-    with_isolates_only = parsed.with_isolates_only
     native_image_context_run(
         lambda native_image, a:
-        _runtimedebuginfotest(native_image, output_path, with_isolates_only, a), unmask(parsed.image_args),
+        _runtimedebuginfotest(native_image, output_path, a), unmask(parsed.image_args),
         config=config
     )
 
@@ -3590,6 +3628,31 @@ class StandalonePointstoUnittestsConfig(mx_unittest.MxUnittestConfig):
         return (vmArgs, mainClass, mainClassArgs)
 
 mx_unittest.register_unittest_config(StandalonePointstoUnittestsConfig())
+
+
+class SVMInvariantsUnittestConfig(mx_compiler.GraalUnittestConfig):
+
+    def __init__(self):
+        super().__init__('svm-invariants-tests')
+
+    def apply(self, config):
+        vmArgs, mainClass, mainClassArgs = super().apply(config)
+        mainClassArgs.extend(['-JUnitOpenPackages', 'org.graalvm.espresso.shared.svm/*=ALL-UNNAMED'])
+        mainClassArgs.extend(['-JUnitOpenPackages', 'jdk.internal.vm.ci/jdk.vm.ci.meta.annotation=jdk.graal.compiler.vmaccess'])
+        mainClassArgs.extend(['-JUnitOpenPackages', 'java.base/jdk.internal.module=jdk.graal.compiler.vmaccess'])
+        vmArgs.append('-Dsvm.test.CheckSVMInvariants.jars=' + os.pathsep.join([d.path for d in self._check_svm_invariants_jars()]))
+        return (vmArgs, mainClass, mainClassArgs)
+
+    def processDeps(self, deps):
+        # Add all jars that are to be checked by CheckSVMInvariants to the classpath.
+        deps.update(self._check_svm_invariants_jars())
+        return deps
+
+    def _check_svm_invariants_jars(self):
+        return [d for s in svmSuites for d in s.dists if d.isJARDistribution() and not d.is_test_distribution()]
+
+
+mx_unittest.register_unittest_config(SVMInvariantsUnittestConfig())
 
 
 class SVMDriverUnittestsConfig(mx_unittest.MxUnittestConfig):

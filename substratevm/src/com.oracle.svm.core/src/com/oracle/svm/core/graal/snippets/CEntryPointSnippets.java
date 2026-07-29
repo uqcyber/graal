@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.graal.snippets;
 
-import static com.oracle.svm.core.NeverInline.CALLER_CATCHES_IMPLICIT_EXCEPTIONS;
+import static com.oracle.svm.shared.NeverInline.CALLER_CATCHES_IMPLICIT_EXCEPTIONS;
 import static com.oracle.svm.core.graal.nodes.WriteCodeBaseNode.writeCurrentVMCodeBase;
 import static com.oracle.svm.core.graal.nodes.WriteCurrentVMThreadNode.writeCurrentVMThread;
 import static com.oracle.svm.core.graal.nodes.WriteHeapBaseNode.writeCurrentVMHeapBase;
@@ -56,9 +56,7 @@ import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.IsolateArguments;
 import com.oracle.svm.core.IsolateListenerSupport;
 import com.oracle.svm.core.Isolates;
-import com.oracle.svm.core.JavaMainWrapper.ArgsSupport;
-import com.oracle.svm.core.JavaMainWrapper.JavaMainSupport;
-import com.oracle.svm.core.NeverInline;
+import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.core.RuntimeAssertionsSupport;
 import com.oracle.svm.core.SubstrateDiagnostics;
 import com.oracle.svm.core.SubstrateOptions;
@@ -77,6 +75,8 @@ import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.PhysicalMemory;
 import com.oracle.svm.core.heap.ReferenceHandler;
+import com.oracle.svm.guest.staging.JavaMainSupport;
+import com.oracle.svm.guest.staging.ArgsSupport;
 import com.oracle.svm.core.heap.ReferenceHandlerThread;
 import com.oracle.svm.core.heap.ReferenceInternals;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
@@ -84,11 +84,11 @@ import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.imagelayer.ImageLayerRuntimeSupport;
 import com.oracle.svm.core.imagelayer.ImageLayerSection;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
-import com.oracle.svm.core.jdk.RuntimeSupport;
 import com.oracle.svm.core.jdk.SignalHandlerSupport;
-import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.option.RuntimeOptionParser;
-import com.oracle.svm.core.option.RuntimeOptionValues;
+import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
+import com.oracle.svm.guest.staging.log.Log;
+import com.oracle.svm.guest.staging.option.RuntimeOptionParser;
+import com.oracle.svm.guest.staging.option.RuntimeOptionValues;
 import com.oracle.svm.core.os.CommittedMemoryProvider;
 import com.oracle.svm.core.os.MemoryProtectionProvider;
 import com.oracle.svm.core.os.VirtualMemoryProvider;
@@ -104,7 +104,7 @@ import com.oracle.svm.core.thread.ThreadStatusTransition;
 import com.oracle.svm.core.thread.VMOperationControl;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
-import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.util.UnsignedUtils;
 import com.oracle.svm.guest.staging.SubstrateGuestOptions;
 import com.oracle.svm.guest.staging.c.CGlobalData;
 import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
@@ -118,7 +118,6 @@ import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.api.replacements.Snippet;
-import jdk.graal.compiler.core.common.CompressEncoding;
 import jdk.graal.compiler.core.common.spi.ForeignCallDescriptor;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.Node.ConstantNodeParameter;
@@ -140,7 +139,7 @@ import jdk.internal.misc.Unsafe;
  * later returning to C. This class is the inverse of {@link CFunctionSnippets}.
  *
  * This code transitions thread states, handles when a safepoint is in progress, sets the thread
- * register (if multi-threaded), and sets the heap base register (if enabled).
+ * register (if multi-threaded), and sets the heap base register.
  */
 public final class CEntryPointSnippets extends SubstrateTemplates implements Snippets {
 
@@ -211,11 +210,6 @@ public final class CEntryPointSnippets extends SubstrateTemplates implements Sni
 
     @NodeIntrinsic(value = ForeignCallNode.class)
     public static native void runtimeCallInitCodeBase(@ConstantNodeParameter ForeignCallDescriptor descriptor);
-
-    @Fold
-    static boolean hasHeapBase() {
-        return ImageSingletons.lookup(CompressEncoding.class).hasBase();
-    }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static void setHeapBase(PointerBase heapBase) {
@@ -513,23 +507,26 @@ public final class CEntryPointSnippets extends SubstrateTemplates implements Sni
             String[] initialArgs = ArgsSupport.convertCToJavaArgs(parameters.getArgc(), parameters.getArgv());
             ArgsSupport.singleton().setInitialArgs(initialArgs);
             try {
-                String[] remainingArgs = RuntimeOptionParser.parseAndConsumeAllOptions(initialArgs, ignoreUnrecognized);
                 if (forJavaMainCall) {
                     if (ImageSingletons.contains(JavaMainSupport.class)) {
-                        ImageSingletons.lookup(JavaMainSupport.class).mainArgs = remainingArgs;
+                        JavaMainSupport javaMainSupport = ImageSingletons.lookup(JavaMainSupport.class);
+                        javaMainSupport.mainArgs = RuntimeOptionParser.parseAndConsumeJavaMainOptions(initialArgs, ignoreUnrecognized);
                     } else {
                         throw VMError.shouldNotReachHereAtRuntime();
                     }
-                } else if (!ignoreUnrecognized && remainingArgs.length != 0) {
-                    if (!SubstrateOptions.LegacyJavaOptionMode.getValue()) {
-                        Log.logStream().println("Error: Unrecognized option: " + remainingArgs[0]);
-                        return CEntryPointErrors.ARGUMENT_PARSING_FAILED;
-                    } else {
-                        /*
-                         * GR-73367: Failing here would be disruptive to existing/legacy code.
-                         *
-                         * (Note: such options are passed as args to a Java main method above)
-                         */
+                } else {
+                    String[] remainingArgs = RuntimeOptionParser.parseAndConsumeAllOptions(initialArgs, ignoreUnrecognized);
+                    if (!ignoreUnrecognized && remainingArgs.length != 0) {
+                        if (!SubstrateOptions.LegacyJavaOptionMode.getValue()) {
+                            Log.logStream().println("Error: Unrecognized option: " + remainingArgs[0]);
+                            return CEntryPointErrors.ARGUMENT_PARSING_FAILED;
+                        } else {
+                            /*
+                             * GR-73367: Failing here would be disruptive to existing/legacy code.
+                             *
+                             * (Note: such options are passed as args to a Java main method above)
+                             */
+                        }
                     }
                 }
             } catch (IllegalArgumentException e) {
@@ -852,7 +849,7 @@ public final class CEntryPointSnippets extends SubstrateTemplates implements Sni
          * handler thread are still running.
          */
         if (ReferenceHandler.useDedicatedThread()) {
-            ReferenceHandlerThread.initiateShutdown();
+            ReferenceHandlerThread.initiateStop();
         }
 
         VMThreads.singleton().threadExit();

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,8 +33,8 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.oracle.svm.core.jdk.RuntimeSupport;
-import com.oracle.svm.core.log.Log;
+import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.interpreter.ristretto.RistrettoOptions;
 
 public final class RistrettoCompilationManager {
@@ -99,9 +99,20 @@ public final class RistrettoCompilationManager {
      */
     private final AtomicLong finishedRequests;
 
+    /**
+     * The daemon reporter thread that periodically dumps compiler statistics.
+     */
+    private final Thread statisticsReporterThread;
+
+    /**
+     * Period, in seconds, between statistics dumps.
+     */
+    private final long statisticsReporterPeriodSeconds;
+
     private RistrettoCompilationManager() {
         compilerExceptions = Collections.synchronizedList(new ArrayList<>());
         final int compilerThreadCount = RistrettoOptions.JITCompilerThreadCount.getValue();
+        statisticsReporterPeriodSeconds = RistrettoOptions.JITTraceCompilerStatisticsPeriodSeconds.getValue();
         compilerExecutorService = Executors.newFixedThreadPool(compilerThreadCount, runnable -> {
             Thread t = new Thread(runnable);
             t.setDaemon(true);
@@ -112,6 +123,7 @@ public final class RistrettoCompilationManager {
         submittedRequests = new AtomicLong();
         startedRequests = new AtomicLong();
         finishedRequests = new AtomicLong();
+        statisticsReporterThread = startStatisticsReporterThread();
 
         for (int i = 0; i < compilerThreadCount; i++) {
             compilerExecutorService.submit(() -> {
@@ -120,16 +132,15 @@ public final class RistrettoCompilationManager {
                         var task = compilationQueue.take();
                         startedRequests.incrementAndGet();
                         try {
-                            task.call();
+                            if (task.call() != null) {
+                                RistrettoDiagnostics.SuccessfulCompiles.incrementAndGet();
+                            }
                         } catch (Throwable e) {
-                            /*
-                             * TODO GR-72048 - CompilationExceptionAreFatal support missing at the
-                             * moment
-                             */
                             RistrettoProfileSupport.trace(RistrettoOptions.JITTraceCompilation, "[Ristretto Compiler]Compiler saw exception %s %s", Thread.currentThread(), e.getMessage());
                             if (RistrettoOptions.JITPrintExceptions.getValue()) {
                                 Log.log().exception(e);
                             }
+                            RistrettoDiagnostics.CompilerExceptionsSeen.incrementAndGet();
                             compilerExceptions.add(e);
                         } finally {
                             // even if we fail we want to record the compilation
@@ -148,6 +159,78 @@ public final class RistrettoCompilationManager {
         }
     }
 
+    private Thread startStatisticsReporterThread() {
+        if (!RistrettoOptions.JITTraceCompilerStatistics.getValue()) {
+            return null;
+        }
+        Thread reporter = new Thread(() -> {
+            try {
+                while (!Thread.currentThread().isInterrupted()) {
+                    TimeUnit.SECONDS.sleep(statisticsReporterPeriodSeconds);
+                    if (Thread.currentThread().isInterrupted()) {
+                        break;
+                    }
+                    reportStatistics();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Throwable t) {
+                Log.log().exception(t);
+            }
+        }, "Ristretto Compiler Statistics Reporter");
+        reporter.setDaemon(true);
+        reporter.start();
+        return reporter;
+    }
+
+    private void reportStatistics() {
+        Log.log().string(describeStatistics()).newline();
+    }
+
+    public StatisticsSnapshot snapshotStatistics() {
+        return new StatisticsSnapshot(
+                        submittedRequests.get(),
+                        startedRequests.get(),
+                        finishedRequests.get(),
+                        RistrettoDiagnostics.SuccessfulCompiles.get(),
+                        RistrettoDiagnostics.CompilerExceptionsSeen.get(),
+                        compilationQueue.size(),
+                        RistrettoDiagnostics.DeoptimizationsTaken.get(),
+                        RistrettoDiagnostics.InvalidatedCode.get(),
+                        RistrettoDiagnostics.ReprofileRequested.get());
+    }
+
+    public String describeStatistics() {
+        return snapshotStatistics().format();
+    }
+
+    public record StatisticsSnapshot(long submittedRequests, long startedRequests, long finishedRequests, long successfulCompiles, long compilerExceptionsSeen, int queueSize,
+                    long deoptimizationsTaken, long invalidatedCode, long reprofileRequested) {
+        long nonSuccessfulCompletions() {
+            return Math.max(0L, finishedRequests - successfulCompiles);
+        }
+
+        long inflightRequests() {
+            return Math.max(0L, startedRequests - finishedRequests);
+        }
+
+        String format() {
+            return new StringBuilder(256)
+                            .append("[Ristretto Compiler Stats] submitted=").append(submittedRequests)
+                            .append(" started=").append(startedRequests)
+                            .append(" finished=").append(finishedRequests)
+                            .append(" successful=").append(successfulCompiles)
+                            .append(" failed=").append(nonSuccessfulCompletions())
+                            .append(" queue=").append(queueSize)
+                            .append(" inflight=").append(inflightRequests())
+                            .append(" compilerExceptions=").append(compilerExceptionsSeen)
+                            .append(" deopts=").append(deoptimizationsTaken)
+                            .append(" invalidations=").append(invalidatedCode)
+                            .append(" reprofiles=").append(reprofileRequested)
+                            .toString();
+        }
+    }
+
     public void submitCompilationRequest(RistrettoCompilationRequest request) {
         submittedRequests.incrementAndGet();
         RistrettoProfileSupport.trace(RistrettoOptions.JITTraceCompilationQueuing, "[Ristretto Compile Queue]Submitting compilation request %s %n", request);
@@ -158,9 +241,15 @@ public final class RistrettoCompilationManager {
     public void shutDown() {
         // we want this to be fast, tear down the world
         compilerExecutorService.shutdownNow();
+        if (statisticsReporterThread != null) {
+            statisticsReporterThread.interrupt();
+        }
         try {
             while (!compilerExecutorService.awaitTermination(5, TimeUnit.SECONDS)) {
                 Log.log().string("Termination of JIT Compilation Manager does not work, waiting").newline();
+            }
+            if (statisticsReporterThread != null) {
+                statisticsReporterThread.join(TimeUnit.SECONDS.toMillis(5));
             }
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
@@ -203,6 +292,7 @@ public final class RistrettoCompilationManager {
             m.submittedRequests.set(0);
             m.startedRequests.set(0);
             m.finishedRequests.set(0);
+            RistrettoDiagnostics.reset();
         }
 
         /**

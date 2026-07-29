@@ -27,8 +27,8 @@ package com.oracle.svm.core.windows;
 import static com.oracle.svm.core.heap.RestrictHeapAccess.Access.NO_ALLOCATION;
 import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
-import com.oracle.svm.core.jdk.UninterruptibleUtils;
-import com.oracle.svm.core.util.TimeUtils;
+import com.oracle.svm.shared.util.TimeUtils;
+import com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.windows.headers.WinBase.HANDLE;
 import com.oracle.svm.core.windows.headers.WinBase.LPHANDLE;
 import org.graalvm.nativeimage.ImageSingletons;
@@ -36,10 +36,10 @@ import org.graalvm.nativeimage.LogHandler;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.NeverInline;
+import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.locks.PlatformLockingSupport;
-import com.oracle.svm.core.log.Log;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.core.windows.headers.Process;

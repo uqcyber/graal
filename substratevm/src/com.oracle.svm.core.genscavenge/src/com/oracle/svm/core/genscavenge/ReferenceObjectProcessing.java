@@ -39,7 +39,7 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.shared.AlwaysInline;
-import com.oracle.svm.core.SubstrateGCOptions;
+import com.oracle.svm.guest.staging.SubstrateGCOptions;
 import com.oracle.svm.core.genscavenge.remset.RememberedSet;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.ObjectHeader;
@@ -48,7 +48,7 @@ import com.oracle.svm.core.heap.ReferenceInternals;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.metaspace.Metaspace;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
-import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.util.UnsignedUtils;
 import com.oracle.svm.shared.Uninterruptible;
 
 /** Discovers and handles {@link Reference} objects during garbage collection. */

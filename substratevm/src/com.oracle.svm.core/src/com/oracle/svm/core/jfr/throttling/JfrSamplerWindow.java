@@ -29,7 +29,7 @@ import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_
 
 import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.shared.Uninterruptible;
-import com.oracle.svm.core.jdk.UninterruptibleUtils;
+import com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jfr.JfrTicks;
 
 /**

@@ -179,13 +179,13 @@ suite = {
         },
         "LLVM_LLD_STANDALONE": {
             "license" : "Apache-2.0-LLVM",
-            "version" : "20.1.4-2-gb73e7327e3-bgd1ab043d9b",
+            "version" : "22.1.8-4-g1d96596a53-bg6891668b1e",
             "host" : "https://lafo.ssw.uni-linz.ac.at/pub/llvm",
             "os_arch": {
                 "darwin": {
                     "aarch64": {
                         "urls" : ["{host}/llvm-lldonly-{version}-darwin-aarch64.tar.gz"],
-                        "digest" : "sha512:866a548fe5d76dd3689d73dd478d10a80a5fac2a33d93c276643e33081dd0c677167ea4072c8de349708b37c1ad2379cf9f301ad5d2602be716d4bf121a52538",
+                        "digest" : "sha512:c0ab25d5b090dc1a83105751d9cb447720443925523b793c0547fe20404ac45d9355f9b971f73c6cf5ee73ec401b6a07be0be597183d197b3750dd331c70e64f",
                     },
                     "<others>": {
                         "optional": True,
@@ -232,8 +232,7 @@ suite = {
             "requiresConcealed" : {
                 "java.base" : [
                     "jdk.internal.loader",
-                    "jdk.internal.module",
-                    "sun.reflect.annotation"
+                    "jdk.internal.module"
                 ],
                 "jdk.internal.vm.ci": [
                     "jdk.vm.ci.meta",
@@ -588,6 +587,8 @@ suite = {
                 "com.oracle.svm.hosted",
                 "com.oracle.svm.core.graal.aarch64",
                 "com.oracle.svm.core.graal.riscv64",
+                # GR-73521: Remove once PosixPlatformThreads moves to guest-owned code.
+                "SVM_GUEST_STAGING",
             ],
             "requiresConcealed" : {
                 "java.base" : [
@@ -1155,6 +1156,34 @@ suite = {
             "testProject": True,
         },
 
+        "com.oracle.svm.hosted.test": {
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "mx:JUNIT_TOOL",
+                "SVM",
+                "compiler:GRAAL_TEST",
+            ],
+            "requiresConcealed" : {
+                "java.base" : [
+                    "jdk.internal.module",
+                ],
+                "jdk.internal.vm.ci": [
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
+                ]
+            },
+            "checkstyle": "com.oracle.svm.test",
+            "workingSets": "SVM,Test",
+            "annotationProcessors": [
+                "compiler:GRAAL_PROCESSOR",
+                "SVM_PROCESSOR",
+            ],
+            "javaCompliance": "24+",
+            "jacoco": "exclude",
+            "testProject": True,
+        },
+
         "com.oracle.svm.libjvm": {
             "subDir": "src",
             "sourceDirs": [
@@ -1438,6 +1467,9 @@ suite = {
                 "SVM_SHARED",
             ],
             "requiresConcealed" : {
+                "java.base" : [
+                    "jdk.internal.misc",
+                ],
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.meta",
                     "jdk.vm.ci.meta.annotation",
@@ -2782,6 +2814,21 @@ suite = {
             "mx:JUNIT_TOOL",
             "sdk:NATIVEIMAGE",
             "SVM_DRIVER",
+          ],
+          "testDistribution" : True,
+        },
+
+        "SVM_HOSTED_TESTS" : {
+          "subDir": "src",
+          "relpath" : True,
+          "dependencies" : [
+            "com.oracle.svm.hosted.test",
+          ],
+          "unittestConfig" : "svm-invariants-tests",
+          "distDependencies": [
+            "mx:JUNIT_TOOL",
+            "SVM",
+            "compiler:GRAAL_TEST",
           ],
           "testDistribution" : True,
         },

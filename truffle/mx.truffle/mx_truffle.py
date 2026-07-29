@@ -359,6 +359,8 @@ class TruffleUnittestConfig(mx_unittest.MxUnittestConfig):
 
         # Disable VirtualThread warning
         vmArgs = [*vmArgs, "-Dpolyglot.engine.WarnVirtualThreadSupport=false"]
+        # Disable MethodScoping warning
+        vmArgs = [*vmArgs, "-Dpolyglot.engine.WarnMethodScoping=false"]
         append_unittest_image_build_time_options(vmArgs)
         enable_truffle_native_access(vmArgs)
         enable_sun_misc_unsafe(vmArgs)
@@ -1901,7 +1903,7 @@ def register_polyglot_isolate_distributions(
     :param str maven_group_id: The maven language group id.
     :param str | list | language_license: Language licence(s).
     :param list isolate_build_options: additional options passed to a native image to build the isolate library.
-    :param list platforms: supported platforms, defaults to ['linux-amd64', 'linux-aarch64', 'darwin-amd64', 'darwin-aarch64', 'windows-amd64']
+    :param list platforms: supported platforms, defaults to ['linux-amd64', 'linux-aarch64', 'darwin-aarch64', 'windows-amd64']
     :param list additional_image_path_artifacts: additional artifacts to include in the polyglot isolate library image path
     :param list additional_language_ids: language ids of additional languages added into polyglot isolate library
     """
@@ -1953,7 +1955,6 @@ def register_polyglot_isolate_distributions(
         platforms = [
             "linux-amd64",
             "linux-aarch64",
-            "darwin-amd64",
             "darwin-aarch64",
             "windows-amd64",
         ]
@@ -2384,7 +2385,7 @@ class LibffiBuilderProject(mx_native.MultitargetProject):
             else:
                 assert toolchain.spec.target.os == "linux"
 
-                configure_arch = {"amd64": "x86_64", "aarch64": "aarch64"}.get(toolchain.spec.target.arch)
+                configure_arch = {"amd64": "x86_64", "aarch64": "aarch64", "riscv64": "riscv64"}.get(toolchain.spec.target.arch)
                 assert configure_arch, "translation to configure style arch is not supported yet for " + str(
                     toolchain.spec.target.arch
                 )
@@ -2563,9 +2564,7 @@ mx_sdk_vm.register_graalvm_component(
             "GraalVM Launcher Common",
         ],
         jar_distributions=[],
-        jvmci_parent_jars=[
-            "truffle:LOCATOR",
-        ],
+        jvmci_parent_jars=[],
         stability="supported",
     )
 )

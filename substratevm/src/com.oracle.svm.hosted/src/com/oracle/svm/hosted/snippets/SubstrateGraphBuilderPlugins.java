@@ -54,7 +54,7 @@ import com.oracle.graal.pointsto.AbstractAnalysisEngine;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.ArenaIntrinsics;
 import com.oracle.svm.core.MissingRegistrationSupport;
-import com.oracle.svm.core.NeverInline;
+import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.RuntimeAssertionsSupport;
 import com.oracle.svm.core.StaticFieldsSupport;
@@ -77,15 +77,15 @@ import com.oracle.svm.core.graal.stackvalue.LateStackValueNode;
 import com.oracle.svm.core.graal.stackvalue.StackValueNode;
 import com.oracle.svm.core.graal.stackvalue.UnsafeLateStackValue;
 import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
-import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.heap.ReferenceAccessImpl;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.imagelayer.AccessImageSingletonFactory;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.imagelayer.LoadImageSingletonFactory;
 import com.oracle.svm.core.jdk.proxy.DynamicProxyRegistry;
 import com.oracle.svm.core.nodes.foreign.MemoryArenaValidInScopeNode;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.hosted.AbstractAnalysisMetadataTrackingNode;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.ReachabilityCallbackNode;
@@ -155,9 +155,13 @@ import jdk.graal.compiler.options.LibGraalSupport;
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins;
 import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins.AllocateUninitializedArrayPlugin;
-import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins.ReachabilityFencePlugin;
+import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins.IntegerPolynomialAssignPlugin;
+import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins.IntegerPolynomialP256MontgomeryMultPlugin;
 import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins.Poly1305ProcessBlocksPlugin;
+import jdk.graal.compiler.replacements.StandardGraphBuilderPlugins.ReachabilityFencePlugin;
 import jdk.graal.compiler.replacements.nodes.AESNode;
+import jdk.graal.compiler.replacements.nodes.CountLeadingZerosNode;
+import jdk.graal.compiler.replacements.nodes.CountTrailingZerosNode;
 import jdk.graal.compiler.replacements.nodes.MacroNode.MacroParams;
 import jdk.graal.compiler.word.WordCastNode;
 import jdk.internal.foreign.MemorySessionImpl;
@@ -199,6 +203,7 @@ public class SubstrateGraphBuilderPlugins {
         registerObjectPlugins(plugins);
         registerUnsafePlugins(plugins);
         registerKnownIntrinsicsPlugins(plugins);
+        registerUninterruptibleUtilsPlugins(plugins);
         registerStackValuePlugins(plugins);
         registerArrayPlugins(plugins);
         registerClassPlugins(plugins);
@@ -211,7 +216,28 @@ public class SubstrateGraphBuilderPlugins {
             registerAESPlugins(plugins);
             registerArraysSupportPlugins(plugins);
             registerPoly1305Plugin(plugins);
+            registerIntegerPolynomialPlugins(plugins);
         }
+    }
+
+    private static void registerUninterruptibleUtilsPlugins(InvocationPlugins plugins) {
+        Registration r = new Registration(plugins, UninterruptibleUtils.Integer.class);
+        r.register(new RequiredInlineOnlyInvocationPlugin("numberOfLeadingZeros", int.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
+                b.addPush(JavaKind.Int, CountLeadingZerosNode.create(value));
+                return true;
+            }
+        });
+
+        r = new Registration(plugins, UninterruptibleUtils.Long.class);
+        r.register(new RequiredInlineOnlyInvocationPlugin("countTrailingZeros", long.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
+                b.addPush(JavaKind.Int, CountTrailingZerosNode.create(value));
+                return true;
+            }
+        });
     }
 
     private static void registerArenaPlugins(InvocationPlugins plugins) {
@@ -1149,11 +1175,12 @@ public class SubstrateGraphBuilderPlugins {
                              */
                             if (sharedLayer && installationKind == SingletonLayeredInstallationKind.APP_LAYER_ONLY) {
                                 /*
-                                 * Ensure application only image singleton is marked as being
-                                 * required to be installed in the application layer.
+                                 * Emit a runtime check against the application-layer singleton table.
+                                 * Creating the node also reserves the singleton slot for the application
+                                 * layer.
                                  */
-                                LoadImageSingletonFactory.loadApplicationOnlyImageSingleton(key, b.getMetaAccess());
-                                result = true;
+                                b.addPush(JavaKind.Boolean, AccessImageSingletonFactory.containsApplicationOnlyImageSingleton(key));
+                                return true;
                             }
                             if (!result && extensionLayer) {
                                 /*
@@ -1183,7 +1210,7 @@ public class SubstrateGraphBuilderPlugins {
                              * This singleton is only installed in the application layer heap. All
                              * other layers looks refer to this singleton.
                              */
-                            b.addPush(JavaKind.Object, LoadImageSingletonFactory.loadApplicationOnlyImageSingleton(key, b.getMetaAccess()));
+                            b.addPush(JavaKind.Object, AccessImageSingletonFactory.loadApplicationOnlyImageSingleton(key, b.getMetaAccess()));
                             return true;
                         }
                         if (extensionLayer && installationKind == SingletonLayeredInstallationKind.INITIAL_LAYER_ONLY) {
@@ -1260,14 +1287,10 @@ public class SubstrateGraphBuilderPlugins {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode objectNode) {
                 receiver.get(true);
-                if (ReferenceAccess.singleton().haveCompressedReferences()) {
-                    ValueNode compressedObj = SubstrateCompressionNode.compress(b.getGraph(), objectNode, ImageSingletons.lookup(CompressEncoding.class));
-                    JavaKind compressedIntKind = JavaKind.fromWordSize(ObjectLayout.singleton().getReferenceSize());
-                    ValueNode compressedValue = b.add(WordCastNode.narrowOopToUntrackedWord(compressedObj, compressedIntKind));
-                    b.addPush(JavaKind.Object, ZeroExtendNode.convertUnsigned(compressedValue, SubstrateTarget.getWordStamp(), NodeView.DEFAULT));
-                } else {
-                    b.addPush(JavaKind.Object, WordCastNode.objectToUntrackedPointer(objectNode, SubstrateTarget.getWordKind()));
-                }
+                ValueNode compressedObj = SubstrateCompressionNode.compress(b.getGraph(), objectNode, ImageSingletons.lookup(CompressEncoding.class));
+                JavaKind compressedIntKind = JavaKind.fromWordSize(ObjectLayout.singleton().getReferenceSize());
+                ValueNode compressedValue = b.add(WordCastNode.narrowOopToUntrackedWord(compressedObj, compressedIntKind));
+                b.addPush(JavaKind.Object, ZeroExtendNode.convertUnsigned(compressedValue, SubstrateTarget.getWordStamp(), NodeView.DEFAULT));
                 return true;
             }
         });
@@ -1275,16 +1298,12 @@ public class SubstrateGraphBuilderPlugins {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode wordNode) {
                 receiver.get(true);
-                if (ReferenceAccess.singleton().haveCompressedReferences()) {
-                    CompressEncoding encoding = ImageSingletons.lookup(CompressEncoding.class);
-                    JavaKind compressedIntKind = JavaKind.fromWordSize(ObjectLayout.singleton().getReferenceSize());
-                    NarrowOopStamp compressedStamp = (NarrowOopStamp) SubstrateNarrowOopStamp.compressed((AbstractObjectStamp) StampFactory.object(), encoding);
-                    ValueNode narrowNode = b.add(NarrowNode.convertUnsigned(wordNode, StampFactory.forKind(compressedIntKind), NodeView.DEFAULT));
-                    WordCastNode compressedObj = b.add(WordCastNode.wordToNarrowObject(narrowNode, compressedStamp));
-                    b.addPush(JavaKind.Object, SubstrateCompressionNode.uncompress(b.getGraph(), compressedObj, encoding));
-                } else {
-                    b.addPush(JavaKind.Object, WordCastNode.wordToObject(wordNode, SubstrateTarget.getWordKind()));
-                }
+                CompressEncoding encoding = ImageSingletons.lookup(CompressEncoding.class);
+                JavaKind compressedIntKind = JavaKind.fromWordSize(ObjectLayout.singleton().getReferenceSize());
+                NarrowOopStamp compressedStamp = (NarrowOopStamp) SubstrateNarrowOopStamp.compressed((AbstractObjectStamp) StampFactory.object(), encoding);
+                ValueNode narrowNode = b.add(NarrowNode.convertUnsigned(wordNode, StampFactory.forKind(compressedIntKind), NodeView.DEFAULT));
+                WordCastNode compressedObj = b.add(WordCastNode.wordToNarrowObject(narrowNode, compressedStamp));
+                b.addPush(JavaKind.Object, SubstrateCompressionNode.uncompress(b.getGraph(), compressedObj, encoding));
                 return true;
             }
         });
@@ -1299,6 +1318,14 @@ public class SubstrateGraphBuilderPlugins {
     private static void registerPoly1305Plugin(InvocationPlugins plugins) {
         Registration r = new Registration(plugins, "com.sun.crypto.provider.Poly1305");
         r.register(new Poly1305ProcessBlocksPlugin());
+    }
+
+    private static void registerIntegerPolynomialPlugins(InvocationPlugins plugins) {
+        Registration r = new Registration(plugins, "sun.security.util.math.intpoly.MontgomeryIntegerPolynomialP256");
+        r.register(new IntegerPolynomialP256MontgomeryMultPlugin());
+
+        r = new Registration(plugins, "sun.security.util.math.intpoly.IntegerPolynomial");
+        r.register(new IntegerPolynomialAssignPlugin());
     }
 
     public static class SubstrateCipherBlockChainingCryptPlugin extends StandardGraphBuilderPlugins.CipherBlockChainingCryptPlugin {

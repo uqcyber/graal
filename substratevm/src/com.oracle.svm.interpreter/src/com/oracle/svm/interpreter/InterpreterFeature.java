@@ -57,6 +57,7 @@ import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.stack.ThreadStackPrinter;
 import com.oracle.svm.core.thread.ThreadListenerSupport;
 import com.oracle.svm.espresso.shared.meta.SignaturePolymorphicIntrinsic;
+import com.oracle.svm.hosted.BytecodeHandlerFeature;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.code.SubstrateCompilationDirectives;
 import com.oracle.svm.hosted.image.NativeImageCodeCache;
@@ -65,7 +66,7 @@ import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.interpreter.debug.DebuggerEventsFeature;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
-import com.oracle.svm.shared.singletons.traits.BuiltinTraits.Disallowed;
+import com.oracle.svm.shared.singletons.traits.BuiltinTraits.DisallowLayered;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
@@ -101,7 +102,7 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 
 @Platforms(Platform.HOSTED_ONLY.class)
-@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = Disallowed.class)
+@SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = DisallowLayered.class)
 public class InterpreterFeature implements InternalFeature {
     private AnalysisMethod leaveStub;
     private AnalysisMethod leaveJNIStub;
@@ -174,7 +175,7 @@ public class InterpreterFeature implements InternalFeature {
 
     @Override
     public List<Class<? extends Feature>> getRequiredFeatures() {
-        return Arrays.asList(DebuggerEventsFeature.class);
+        return Arrays.asList(DebuggerEventsFeature.class, BytecodeHandlerFeature.class);
     }
 
     @Override
@@ -262,7 +263,7 @@ public class InterpreterFeature implements InternalFeature {
         int intrinsicMethodSlot = findLocalSlotByName("method", intrinsicVariableTable.getLocalsAt(0)); // parameter
         int intrinsicFrameSlot = findLocalSlotByName("frame", intrinsicVariableTable.getLocalsAt(0)); // parameter
 
-        AnalysisMethod interpreterJNIDowncallRoot = (AnalysisMethod) getLeaveInterpreterJNIMethod(metaAccess);
+        AnalysisMethod interpreterJNIDowncallRoot = (AnalysisMethod) getJNIDowncallMethod(metaAccess);
         assert interpreterJNIDowncallRoot.hasNeverInlineDirective();
         LocalVariableTable interpreterJNIDowncallVariableTable = interpreterJNIDowncallRoot.getLocalVariableTable();
         int interpreterJNIDowncallMethodSlot = findLocalSlotByName("seedMethod", interpreterJNIDowncallVariableTable.getLocalsAt(0)); // parameter
@@ -292,7 +293,6 @@ public class InterpreterFeature implements InternalFeature {
     @Override
     public void beforeCompilation(BeforeCompilationAccess access) {
         FeatureImpl.BeforeCompilationAccessImpl accessImpl = (FeatureImpl.BeforeCompilationAccessImpl) access;
-
         accessImpl.registerAsImmutable(InterpreterSupport.singleton());
     }
 
@@ -343,7 +343,7 @@ public class InterpreterFeature implements InternalFeature {
                         InterpreterFrame.class, InterpreterResolvedJavaMethod.class, SignaturePolymorphicIntrinsic.class, boolean.class);
     }
 
-    private static ResolvedJavaMethod getLeaveInterpreterJNIMethod(MetaAccessProvider metaAccess) {
+    private static ResolvedJavaMethod getJNIDowncallMethod(MetaAccessProvider metaAccess) {
         ResolvedJavaType jniDowncallRootType = metaAccess.lookupJavaType(Interpreter.JNIDowncallRoot.class);
         return JVMCIReflectionUtil.getUniqueDeclaredMethod(metaAccess, jniDowncallRootType, "execute", InterpreterResolvedJavaMethod.class, Object[].class);
     }

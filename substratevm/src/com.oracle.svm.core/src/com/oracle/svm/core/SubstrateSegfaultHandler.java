@@ -25,7 +25,7 @@
 package com.oracle.svm.core;
 
 import static com.oracle.svm.core.heap.RestrictHeapAccess.Access.NO_ALLOCATION;
-import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RegisterForIsolateArgumentParser;
+import static com.oracle.svm.guest.staging.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RegisterForIsolateArgumentParser;
 
 import java.lang.reflect.Field;
 
@@ -42,7 +42,7 @@ import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.BuildPhaseProvider.ReadyForCompilation;
+import com.oracle.svm.shared.BuildPhaseProvider.ReadyForCompilation;
 import com.oracle.svm.core.IsolateListenerSupport.IsolateListener;
 import com.oracle.svm.core.SubstrateSegfaultHandler.SingleIsolateSegfaultSetup;
 import com.oracle.svm.core.feature.InternalFeature;
@@ -52,9 +52,10 @@ import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.UnknownPrimitiveField;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.jdk.RuntimeSupport;
-import com.oracle.svm.core.log.Log;
-import com.oracle.svm.core.option.RuntimeOptionKey;
+import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
+import com.oracle.svm.core.log.CoreLogSupport;
+import com.oracle.svm.guest.staging.log.Log;
+import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
@@ -64,6 +65,7 @@ import com.oracle.svm.guest.staging.c.CGlobalData;
 import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
 import com.oracle.svm.guest.staging.core.UnmanagedMemoryUtil;
+import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
@@ -302,7 +304,7 @@ public abstract class SubstrateSegfaultHandler {
 
     private static void dumpInterruptibly(Pointer sp, CodePointer ip, PointerBase signalInfo, RegisterDumper.Context context, boolean inSVMSegfaultHandler) {
         LogHandler logHandler = ImageSingletons.lookup(LogHandler.class);
-        Log log = Log.enterFatalContext(logHandler, ip, "[ [ SegfaultHandler caught a segfault. ] ]", null);
+        Log log = CoreLogSupport.enterFatalContext(logHandler, ip, "[ [ SegfaultHandler caught a segfault. ] ]", null);
         if (log != null) {
             log.newline();
             log.string("[ [ SegfaultHandler caught a segfault in thread ").zhex(CurrentIsolate.getCurrentThread()).string(" ] ]").newline();

@@ -38,7 +38,7 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.heap.AbstractMXBean;
-import com.oracle.svm.core.jdk.UninterruptibleUtils;
+import com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils;
 
 import org.graalvm.word.impl.Word;
 import sun.management.Util;
