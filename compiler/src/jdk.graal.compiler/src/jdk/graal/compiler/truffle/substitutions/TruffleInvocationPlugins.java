@@ -33,7 +33,6 @@ import static jdk.graal.compiler.lir.gen.LIRGeneratorTool.CalcStringAttributesEn
 import static jdk.graal.compiler.lir.gen.LIRGeneratorTool.CalcStringAttributesEncoding.UTF_8;
 import static jdk.graal.compiler.nodes.NamedLocationIdentity.getArrayLocation;
 
-import jdk.vm.ci.meta.JavaConstant;
 import org.graalvm.word.LocationIdentity;
 
 import jdk.graal.compiler.core.common.Stride;
@@ -62,7 +61,7 @@ import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.OptionalInline
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.OptionalInlineOnlyInvocationPlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.Receiver;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins;
-import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins.OptionalLazySymbol;
+import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins.TypeSymbol;
 import jdk.graal.compiler.nodes.java.LoadFieldNode;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
 import jdk.graal.compiler.replacements.InvocationPluginHelper;
@@ -84,6 +83,7 @@ import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.Architecture;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -412,7 +412,7 @@ public class TruffleInvocationPlugins {
         plugins.registerIntrinsificationPredicate(t -> t.getName().equals("Lcom/oracle/truffle/api/strings/TStringOps;"));
         InvocationPlugins.Registration r = new InvocationPlugins.Registration(plugins, "com.oracle.truffle.api.strings.TStringOps");
 
-        OptionalLazySymbol nodeType = new OptionalLazySymbol("com.oracle.truffle.api.nodes.Node");
+        TypeSymbol nodeType = new TypeSymbol("com.oracle.truffle.api.nodes.Node");
 
         r.register(new OptionalInlineOnlyInvocationPlugin("runIndexOfAny1", nodeType, byte[].class, long.class, int.class, int.class, boolean.class, int.class, int.class) {
             @Override
@@ -486,6 +486,51 @@ public class TruffleInvocationPlugins {
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode location,
                             ValueNode array, ValueNode offset, ValueNode length, ValueNode stride, ValueNode isNative, ValueNode fromIndex, ValueNode tables) {
                 return applyIndexOf(b, targetMethod, ArrayIndexOfVariant.TableForeignEndian, location, array, offset, length, stride, isNative, fromIndex, tables);
+            }
+        });
+        r.register(new OptionalInlineOnlyInvocationPlugin("runIndexOf2ConsecutiveTables", nodeType, byte[].class, long.class, int.class, int.class, boolean.class, int.class, byte[].class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode location,
+                            ValueNode array, ValueNode offset, ValueNode length, ValueNode stride, ValueNode isNative, ValueNode fromIndex, ValueNode tables) {
+                return applyIndexOf(b, targetMethod, ArrayIndexOfVariant.FindTwoConsecutiveTables, location, array, offset, length, stride, isNative, fromIndex, tables);
+            }
+        });
+        r.register(new OptionalInlineOnlyInvocationPlugin("runIndexOf2ConsecutiveTablesForeignEndian", nodeType, byte[].class, long.class, int.class, int.class, boolean.class, int.class,
+                        byte[].class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode location,
+                            ValueNode array, ValueNode offset, ValueNode length, ValueNode stride, ValueNode isNative, ValueNode fromIndex, ValueNode tables) {
+                return applyIndexOf(b, targetMethod, ArrayIndexOfVariant.FindTwoConsecutiveTablesForeignEndian, location, array, offset, length, stride, isNative, fromIndex, tables);
+            }
+        });
+        r.register(new OptionalInlineOnlyInvocationPlugin("runIndexOf3ConsecutiveTables", nodeType, byte[].class, long.class, int.class, int.class, boolean.class, int.class, byte[].class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode location,
+                            ValueNode array, ValueNode offset, ValueNode length, ValueNode stride, ValueNode isNative, ValueNode fromIndex, ValueNode tables) {
+                return applyIndexOf(b, targetMethod, ArrayIndexOfVariant.FindThreeConsecutiveTables, location, array, offset, length, stride, isNative, fromIndex, tables);
+            }
+        });
+        r.register(new OptionalInlineOnlyInvocationPlugin("runIndexOf3ConsecutiveTablesForeignEndian", nodeType, byte[].class, long.class, int.class, int.class, boolean.class, int.class,
+                        byte[].class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode location,
+                            ValueNode array, ValueNode offset, ValueNode length, ValueNode stride, ValueNode isNative, ValueNode fromIndex, ValueNode tables) {
+                return applyIndexOf(b, targetMethod, ArrayIndexOfVariant.FindThreeConsecutiveTablesForeignEndian, location, array, offset, length, stride, isNative, fromIndex, tables);
+            }
+        });
+        r.register(new OptionalInlineOnlyInvocationPlugin("runIndexOf4ConsecutiveTables", nodeType, byte[].class, long.class, int.class, int.class, boolean.class, int.class, byte[].class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode location,
+                            ValueNode array, ValueNode offset, ValueNode length, ValueNode stride, ValueNode isNative, ValueNode fromIndex, ValueNode tables) {
+                return applyIndexOf(b, targetMethod, ArrayIndexOfVariant.FindFourConsecutiveTables, location, array, offset, length, stride, isNative, fromIndex, tables);
+            }
+        });
+        r.register(new OptionalInlineOnlyInvocationPlugin("runIndexOf4ConsecutiveTablesForeignEndian", nodeType, byte[].class, long.class, int.class, int.class, boolean.class, int.class,
+                        byte[].class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode location,
+                            ValueNode array, ValueNode offset, ValueNode length, ValueNode stride, ValueNode isNative, ValueNode fromIndex, ValueNode tables) {
+                return applyIndexOf(b, targetMethod, ArrayIndexOfVariant.FindFourConsecutiveTablesForeignEndian, location, array, offset, length, stride, isNative, fromIndex, tables);
             }
         });
         r.register(new OptionalInlineOnlyInvocationPlugin("runIndexOf2ConsecutiveWithStride", nodeType, byte[].class, long.class, int.class, int.class, boolean.class, int.class, int.class,
@@ -754,6 +799,7 @@ public class TruffleInvocationPlugins {
     public static boolean applyIndexOf(GraphBuilderContext b, ResolvedJavaMethod targetMethod, ArrayIndexOfVariant variant,
                     ValueNode location, ValueNode array, ValueNode offset, ValueNode length, ValueNode stride, ValueNode isNative, ValueNode fromIndex, ValueNode... values) {
         Stride constStride = constantStrideParam(stride);
+        JavaKind resultKind = variant.returnsLong() ? JavaKind.Long : JavaKind.Int;
         LocationIdentity locationIdentity = inferLocationIdentity(isNative);
         if (variant.isMatchRange() || variant.isTable()) {
             // matchRange and table variants require more that just baseline features, so we have to
@@ -768,9 +814,9 @@ public class TruffleInvocationPlugins {
             args[6] = fromIndex;
             System.arraycopy(values, 0, args, 7, values.length);
             MacroNode.MacroParams params = MacroNode.MacroParams.of(b, targetMethod, args);
-            b.addPush(JavaKind.Int, new ArrayIndexOfMacroNode(params, constStride, variant, locationIdentity));
+            b.addPush(resultKind, new ArrayIndexOfMacroNode(params, constStride, variant, locationIdentity));
         } else {
-            b.addPush(JavaKind.Int, new ArrayIndexOfNode(constStride, variant, null, locationIdentity, array, offset, length, fromIndex, values));
+            b.addPush(resultKind, new ArrayIndexOfNode(constStride, variant, null, locationIdentity, array, offset, length, fromIndex, values));
         }
         return true;
     }

@@ -63,6 +63,7 @@ import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateDiagnostics;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.guest.staging.SubstrateGuestOptions;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
@@ -72,13 +73,15 @@ import com.oracle.svm.core.heap.ReferenceHandlerThread;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.VMOperationInfos;
 import com.oracle.svm.core.jdk.StackTraceUtils;
-import com.oracle.svm.core.jdk.UninterruptibleUtils;
-import com.oracle.svm.core.log.Log;
+import com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils;
+import com.oracle.svm.core.jfr.HasJfrSupport;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.monitor.MonitorSupport;
+import com.oracle.svm.core.os.VirtualMemoryProvider;
 import com.oracle.svm.core.stack.StackFrameVisitor;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMThreads.StatusSupport;
-import com.oracle.svm.core.util.TimeUtils;
+import com.oracle.svm.shared.util.TimeUtils;
 import com.oracle.svm.guest.staging.c.CGlobalData;
 import com.oracle.svm.guest.staging.c.CGlobalDataFactory;
 import com.oracle.svm.guest.staging.c.function.CEntryPointActions;
@@ -86,11 +89,15 @@ import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
 import com.oracle.svm.guest.staging.c.function.CEntryPointOptions;
 import com.oracle.svm.guest.staging.c.function.CEntryPointSetup;
 import com.oracle.svm.guest.staging.core.thread.OSThreadHandle;
+import com.oracle.svm.guest.staging.core.thread.ThreadCpuTimeSupport;
+import com.oracle.svm.guest.staging.core.thread.ThreadStatus;
 import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalObject;
+import com.oracle.svm.guest.staging.jdk.InternalVMMethod;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
+import com.oracle.svm.shared.util.NumUtil;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
@@ -105,7 +112,15 @@ import jdk.internal.misc.Unsafe;
  *
  * @see JavaThreads
  */
+@InternalVMMethod
 public abstract class PlatformThreads {
+    /// Using a small stack size, such as 64 KiB, on a machine that has a large page size, such as
+    /// 64 KiB, and address space randomization enabled may result in transient isolate
+    /// initialization failures. A `StackOverflowError` can be thrown early on because there is
+    /// hardly any usable stack space available. Therefore, SVM uses 128 KiB as the minimum usable
+    /// stack size for explicit Java thread stack sizes for now.
+    private static final long USABLE_JAVA_THREAD_MINIMUM_STACK_SIZE = 128L * 1024L;
+
     @Fold
     public static PlatformThreads singleton() {
         return ImageSingletons.lookup(PlatformThreads.class);
@@ -253,6 +268,16 @@ public abstract class PlatformThreads {
     public static Thread fromVMThread(IsolateThread thread) {
         assert CurrentIsolate.getCurrentThread() == thread || VMOperation.isInProgressAtSafepoint() || ThreadsLock.hasReadAccess() ||
                         SubstrateDiagnostics.isFatalErrorHandlingThread() : "must prevent the isolate thread from exiting";
+        return fromVMThreadUnsafe(thread);
+    }
+
+    /**
+     * Similar to {@link #fromVMThread} but without proving that the isolate thread cannot exit
+     * concurrently. If possible, please use {@link #fromVMThread} instead.
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public static Thread fromVMThreadUnsafe(IsolateThread thread) {
+        assert VMThreads.isAttached(thread);
         return currentThread.get(thread);
     }
 
@@ -303,21 +328,21 @@ public abstract class PlatformThreads {
     }
 
     /**
-     * Returns the stack size requested for {@code thread}, or the VM default for isolate-started
-     * threads when no explicit size was requested.
+     * Returns the Java stack size requested for {@code thread}, or the VM default for
+     * isolate-started threads when no explicit size was requested.
      */
-    public static long getRequestedStackSize(Thread thread) {
-        return getRequestedStackSize(thread, VMThreads.wasStartedByCurrentIsolate(CurrentIsolate.getCurrentThread()));
+    public static long getRequestedJavaStackSize(Thread thread) {
+        return getRequestedJavaStackSize(thread, VMThreads.wasStartedByCurrentIsolate(CurrentIsolate.getCurrentThread()));
     }
 
     /**
-     * Returns the stack size requested for {@code thread}.
+     * Returns the Java stack size requested for {@code thread}.
      *
      * @param isolateStartedThread true if {@code thread} is (or will be) started by the isolate, false
      *        if it's an existing native thread that attached to the isolate and already has an OS stack
      * @return 0 if no size was explicitly requested
      */
-    public static long getRequestedStackSize(Thread thread, boolean isolateStartedThread) {
+    public static long getRequestedJavaStackSize(Thread thread, boolean isolateStartedThread) {
         /* Return a stack size based on parameters and command line flags. */
         long stackSize;
         Target_java_lang_Thread tjlt = toTarget(thread);
@@ -329,15 +354,15 @@ public abstract class PlatformThreads {
              * stack for VM-managed entry, stack overflow guards, and ordinary Java execution.
              */
             if (isolateStartedThread) {
-                long defaultStackSize = getDefaultStackSize();
-                if (defaultStackSize > requestedStackSize) {
-                    return defaultStackSize;
+                long minimumStackSize = getJavaThreadMinimumStackSize();
+                if (minimumStackSize > requestedStackSize) {
+                    return minimumStackSize;
                 }
             }
             return requestedStackSize;
         }
         /* If the user set a thread stack size on the command line, then use that. */
-        stackSize = SubstrateOptions.StackSize.getValue();
+        stackSize = SubstrateGuestOptions.StackSize.getValue();
         if (stackSize != 0) {
             return addStackOverflowGuardZones(stackSize);
         }
@@ -365,6 +390,22 @@ public abstract class PlatformThreads {
          * Java code, so explicit stack sizes continue to describe usable Java stack space.
          */
         return stackSize + StackOverflowCheck.singleton().yellowAndRedZoneSize();
+    }
+
+    /// Returns the minimum stack size for Java threads created with an explicit `Thread`
+    /// constructor stack size.
+    ///
+    /// HotSpot keeps `_java_thread_min_stack_allowed` separate from the default Java thread stack
+    /// size. It starts with an os/cpu value for the stack needed to create a Java thread and enter
+    /// user code, then adds HotSpot guard and shadow zones and aligns the result to the page size.
+    ///
+    /// SVM uses a single usable minimum instead of HotSpot's os/cpu table because the stack frames
+    /// and thread start path are specific to SVM. The SVM yellow and red zones are then added so
+    /// the result can be compared with [#addStackOverflowGuardZones].
+    public static long getJavaThreadMinimumStackSize() {
+        long minimumStackSizeWithGuards = addStackOverflowGuardZones(USABLE_JAVA_THREAD_MINIMUM_STACK_SIZE);
+        long pageSize = VirtualMemoryProvider.get().getGranularity().rawValue();
+        return NumUtil.roundUp(minimumStackSizeWithGuards, pageSize);
     }
 
     /**
@@ -444,10 +485,13 @@ public abstract class PlatformThreads {
     }
 
     @Uninterruptible(reason = "Ensure consistency of vthread and cached vthread id.")
-    static void assignThreadObjectToNewlyStartedThread(IsolateThread isolateThread, Thread newThread, Thread parentThread) {
+    static void assignThreadObjectToNewlyStartedThread(IsolateThread isolateThread, Thread newThread) {
         assert VMThreads.wasStartedByCurrentIsolate(isolateThread);
-        assert toTarget(newThread).parentThreadId == 0;
-        toTarget(newThread).parentThreadId = JavaThreads.getThreadId(parentThread);
+
+        if (HasJfrSupport.get()) {
+            assert toTarget(newThread).jfrParentThread == null;
+            toTarget(newThread).jfrParentThread = Thread.currentThread();
+        }
 
         assert getThreadStatus(newThread) == ThreadStatus.NEW : "Started thread must still be NEW.";
         setThreadStatus(newThread, ThreadStatus.RUNNABLE);
@@ -521,16 +565,26 @@ public abstract class PlatformThreads {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public static Thread getMountedVirtualThread(Thread thread) {
         assert thread == currentThread.get() || VMOperation.isInProgressAtSafepoint();
+        return getMountedVirtualThreadUnsafe(thread);
+    }
+
+    /**
+     * Similar to {@link #getMountedVirtualThread} but without safety checks. If possible, please
+     * use {@link #getMountedVirtualThread} instead.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public static Thread getMountedVirtualThreadUnsafe(Thread thread) {
         assert !isVirtual(thread);
         return toTarget(thread).vthread;
     }
 
     /**
-     * Returns the stack size for the launcher-created runner that will execute application main.
+     * Returns the requested Java stack size for the launcher-created runner that will execute
+     * application main.
      */
     @Uninterruptible(reason = "Computes the stack size before the main Thread object is transferred to the runner thread.", calleeMustBe = false)
-    public long getMainThreadRunnerStackSize() {
-        return getRequestedStackSize(mainThread, true);
+    public long getMainThreadRunnerJavaStackSize() {
+        return getRequestedJavaStackSize(mainThread, true);
     }
 
     @Uninterruptible(reason = "Thread is detaching and holds the ThreadsLock with exclusive write access.")
@@ -553,9 +607,16 @@ public abstract class PlatformThreads {
         }
     }
 
+    /**
+     * Starts an unmanaged thread.
+     *
+     * @param stackSize the requested stack size, or zero to select the platform default
+     * @param isJavaStackSize whether {@code stackSize} is a Java stack size before platform-specific
+     *            native adjustments such as alignment and guard regions, or a native stack size
+     */
     @SuppressWarnings("unused")
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-    public OSThreadHandle startThreadUnmanaged(CFunctionPointer threadRoutine, PointerBase userData, long stackSize) {
+    public OSThreadHandle startThreadUnmanaged(CFunctionPointer threadRoutine, PointerBase userData, long stackSize, boolean isJavaStackSize) {
         throw unmanagedThreadUnsupported();
     }
 
@@ -847,10 +908,10 @@ public abstract class PlatformThreads {
         StackOverflowCheck.singleton().makeYellowZoneAvailable();
         try {
             Thread thread = JavaThreads.fromTarget(targetThread);
-            long stackSize = PlatformThreads.getRequestedStackSize(thread, true);
+            long javaStackSize = PlatformThreads.getRequestedJavaStackSize(thread, true);
 
             /* Run the platform-specific code that tries to start the thread. */
-            IsolateThread isolateThread = PlatformThreads.singleton().doStartThread(thread, stackSize);
+            IsolateThread isolateThread = PlatformThreads.singleton().doStartThread(thread, javaStackSize);
             if (isolateThread.isNull()) {
                 return false;
             }
@@ -860,7 +921,7 @@ public abstract class PlatformThreads {
              * visible to the GC.
              */
             ThreadLocalHandshake.waitUntilSuspended(isolateThread);
-            PlatformThreads.assignThreadObjectToNewlyStartedThread(isolateThread, thread, Thread.currentThread());
+            PlatformThreads.assignThreadObjectToNewlyStartedThread(isolateThread, thread);
             ThreadLocalHandshake.releaseHandshake(isolateThread);
             return true;
         } catch (Throwable e) {
@@ -875,11 +936,13 @@ public abstract class PlatformThreads {
      * preparations and before starting the thread. The new OS thread must call
      * {@link #threadStartRoutine}. This method must not throw any exceptions.
      *
+     * @param javaStackSize the requested Java stack size before platform-specific native
+     *        adjustments, or zero to select the platform default
      * @return the {@link IsolateThread} of the new thread, or {@code null} if the thread could not
      *         be started.
      */
     @RestrictHeapAccess(reason = "Simplifies error handling.", access = NO_ALLOCATION)
-    protected abstract IsolateThread doStartThread(Thread thread, long stackSize);
+    protected abstract IsolateThread doStartThread(Thread thread, long javaStackSize);
 
     @CEntryPoint(include = CEntryPoint.NotIncludedAutomatically.class, publishAs = CEntryPoint.Publish.NotPublished)
     @CEntryPointOptions(prologue = ThreadStartRoutinePrologue.class, epilogue = CEntryPointSetup.LeaveDetachThreadEpilogue.class)

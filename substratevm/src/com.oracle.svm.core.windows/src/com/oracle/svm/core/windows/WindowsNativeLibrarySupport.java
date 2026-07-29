@@ -39,7 +39,7 @@ import com.oracle.svm.core.jdk.JNIPlatformNativeLibrarySupport;
 import com.oracle.svm.core.jdk.Jvm;
 import com.oracle.svm.core.jdk.NativeLibrarySupport;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
-import com.oracle.svm.core.log.Log;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.windows.WindowsUtils.WCharPointerHolder;
 import com.oracle.svm.core.windows.headers.FileAPI;
 import com.oracle.svm.core.windows.headers.LibLoaderAPI;
@@ -52,14 +52,6 @@ import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.Duplicable;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
-
-@AutomaticallyRegisteredFeature
-class WindowsNativeLibraryFeature implements InternalFeature {
-    @Override
-    public void duringSetup(DuringSetupAccess access) {
-        NativeLibrarySupport.singleton().preregisterUninitializedBuiltinLibrary("extnet");
-    }
-}
 
 @AutomaticallyRegisteredImageSingleton(PlatformNativeLibrarySupport.class)
 @SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, layeredInstallationKind = Duplicable.class)
@@ -193,6 +185,14 @@ class WindowsNativeLibrarySupport extends JNIPlatformNativeLibrarySupport {
                 return LibLoaderAPI.GetProcAddress(dlhandle, symbol.get());
             }
         }
+    }
+}
+
+@AutomaticallyRegisteredFeature
+class WindowsNativeLibraryFeature implements InternalFeature {
+    @Override
+    public void duringSetup(DuringSetupAccess access) {
+        NativeLibrarySupport.singleton().preregisterUninitializedBuiltinLibrary("extnet");
     }
 }
 

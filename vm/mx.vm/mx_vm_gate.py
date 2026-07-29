@@ -1004,9 +1004,12 @@ def _build_polyglot_isolate_library(target_folder, dist_names, native_image_opti
     image_build_options = list(native_image_options) if native_image_options else []
     optional_mpk_opts = ['-H:+ProtectionKeys'] if mx_sdk_vm_ng.is_enterprise() else []
     image_build_options += [
-        '-ea', '-esa',
+        '-ea',
+        '-esa',
         '--features=com.oracle.svm.truffle.PolyglotIsolateGuestFeature',
-        '-H:APIFunctionPrefix=truffle_isolate_', '-o', os.path.join(target_folder, 'truffle_isolate_test_lib')
+        '-H:APIFunctionPrefix=truffle_isolate_',
+        *mx_sdk_vm_impl.svm_experimental_options(['-H:-InitializeVM']),
+        '-o', os.path.join(target_folder, 'truffle_isolate_test_lib')
     ] + optional_mpk_opts
 
     return build_tests_image(
@@ -1120,6 +1123,7 @@ def _polyglot_isolate_native_unittest(isolate_mode, truffle_runtime_options=None
         *extra_vm_arguments_isolate_library,
         *isolate_mode_vm_options,
         *truffle_runtime_options,
+        '-Dpolyglot.engine.WarnMethodScoping=false'
     ]
     mx_truffle.native_truffle_unittest(args)
 
@@ -1509,7 +1513,7 @@ def run_truffle_maven_tests(use_classpath=False, use_native_image=False, use_iso
 
         additional_image_build_args = []
         if 'wasm' in test.expected_ids:
-            additional_image_build_args += ['-H:+UnlockExperimentalVMOptions', '-H:+VectorAPISupport', '--add-modules=jdk.incubator.vector']
+            additional_image_build_args += ['--add-modules=jdk.incubator.vector']
 
         mx.log(f'{datetime.now():%d %b %Y %H:%M:%S} Creating project for test run {test} in version {test.version}')
 

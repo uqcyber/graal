@@ -24,9 +24,9 @@
  */
 package com.oracle.svm.core;
 
-import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.Immutable;
-import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RegisterForIsolateArgumentParser;
-import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RelevantForCompilationIsolates;
+import static com.oracle.svm.guest.staging.option.RuntimeOptionKey.RuntimeOptionKeyFlag.Immutable;
+import static com.oracle.svm.guest.staging.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RegisterForIsolateArgumentParser;
+import static com.oracle.svm.guest.staging.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RelevantForCompilationIsolates;
 import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static jdk.graal.compiler.core.common.SpectrePHTMitigations.None;
 import static jdk.graal.compiler.core.common.SpectrePHTMitigations.Options.SpectrePHTBarriers;
@@ -57,9 +57,9 @@ import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.VectorAPIEnabled;
 import com.oracle.svm.core.option.GCOptionValue;
-import com.oracle.svm.core.option.RuntimeOptionKey;
+import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
 import com.oracle.svm.core.thread.VMOperationControl;
-import com.oracle.svm.core.util.TimeUtils;
+import com.oracle.svm.shared.util.TimeUtils;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.guest.staging.SubstrateGuestOptions;
 import com.oracle.svm.shared.Uninterruptible;
@@ -220,6 +220,15 @@ public class SubstrateOptions {
             }
             return false;
         };
+    }
+
+    @Fold
+    public static boolean useCompressedReferences() {
+        Boolean value = ConcealedOptions.UseCompressedReferences.getValue();
+        if (value != null) {
+            return value;
+        }
+        return true;
     }
 
     /**
@@ -530,10 +539,9 @@ public class SubstrateOptions {
                         ReplacingLocatableMultiOptionValue.DelimitedString newValue) {
 
             if (newValue.contains(GCOptionValue.G1.getValue())) {
-                SubstrateOptions.SpawnIsolates.update(values, true);
                 SubstrateOptions.AllowVMInternalThreads.update(values, true);
                 SubstrateOptions.ConcealedOptions.UseDedicatedVMOperationThread.update(values, true);
-                SubstrateOptions.ConcealedOptions.SupportCompileInIsolates.update(values, false);
+                SubstrateOptions.SupportCompileInIsolates.update(values, false);
             }
 
             super.onValueUpdate(values, oldValue, newValue);
@@ -610,9 +618,6 @@ public class SubstrateOptions {
     @Option(help = "Enable detection and runtime container configuration support.")//
     public static final HostedOptionKey<Boolean> UseContainerSupport = new HostedOptionKey<>(true);
 
-    @Option(help = "The size of each thread stack at run-time, in bytes.", type = OptionType.User)//
-    public static final RuntimeOptionKey<Long> StackSize = new RuntimeOptionKey<>(0L);
-
     @Option(help = "Deprecated, has no effect.", deprecated = true) //
     public static final HostedOptionKey<Long> InternalThreadStackSize = new HostedOptionKey<>(0L);
 
@@ -648,8 +653,12 @@ public class SubstrateOptions {
     public static final HostedOptionKey<Boolean> NoDirectRelocationsInText = new HostedOptionKey<>(true);
 
     @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error)//
-    @Option(help = "Support multiple isolates.", deprecated = true, deprecationMessage = "This option disables a major feature of GraalVM Native Image and will be removed in a future release") //
-    public static final HostedOptionKey<Boolean> SpawnIsolates = new HostedOptionKey<>(true);
+    @Option(help = "Deprecated. Isolate support is always enabled.", deprecated = true, deprecationMessage = "Isolate support is always enabled.") //
+    public static final HostedOptionKey<Boolean> SpawnIsolates = new HostedOptionKey<>(true, optionKey -> {
+        if (!optionKey.getValue()) {
+            throw UserError.invalidOptionValue(optionKey, false, "Isolate support can no longer be disabled.");
+        }
+    });
 
     @Option(help = "At CEntryPoints check that the passed IsolateThread is valid.") //
     public static final HostedOptionKey<Boolean> CheckIsolateThreadAtEntry = new HostedOptionKey<>(false);
@@ -946,9 +955,29 @@ public class SubstrateOptions {
     @Option(help = "Saves stack base pointer on the stack on method entry.")//
     public static final HostedOptionKey<Boolean> PreserveFramePointer = new HostedOptionKey<>(false);
 
+    /** Whether {@code FramePointerPhase} is enabled in general (not all methods are supported). */
     @Fold
-    public static boolean hasFramePointer() {
-        /* We always push a frame pointer to a stack on AArch64 and RISCV64. */
+    public static boolean useFramePointerPhase() {
+        Boolean value = ConcealedOptions.UseFramePointerPhase.getValue();
+        if (value != null) {
+            return value;
+        }
+        return Platform.includedIn(InternalPlatform.WINDOWS_BASE.class) && Platform.includedIn(Platform.AMD64.class);
+    }
+
+    private static void validateUseFramePointerPhase(HostedOptionKey<Boolean> optionKey) {
+        if (optionKey.hasBeenSet() && optionKey.getValue() && !Platform.includedIn(Platform.AMD64.class)) {
+            throw UserError.invalidOptionValue(optionKey, true, "FramePointerPhase is supported only on AMD64.");
+        }
+    }
+
+    /**
+     * Whether frames have a frame pointer slot. Note that the slot might just contain a spilled
+     * register value and not a valid frame pointer unless {@link #PreserveFramePointer} is enabled.
+     */
+    @Fold
+    public static boolean hasFramePointerSlot() {
+        /* We always push the frame pointer register to the stack on AArch64 and RISCV64. */
         return SubstrateOptions.PreserveFramePointer.getValue() || Platform.includedIn(Platform.AARCH64.class) || Platform.includedIn(Platform.RISCV64.class);
     }
 
@@ -961,7 +990,7 @@ public class SubstrateOptions {
 
     @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error)//
     @Option(help = "Backend used by the compiler", type = OptionType.User)//
-    public static final HostedOptionKey<String> CompilerBackend = new HostedOptionKey<>("lir", SubstrateOptions::validateCompilerBackend) {
+    public static final HostedOptionKey<String> CompilerBackend = new HostedOptionKey<>("lir") {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, String oldValue, String newValue) {
             if ("llvm".equals(newValue)) {
@@ -980,13 +1009,6 @@ public class SubstrateOptions {
             }
         }
     };
-
-    private static void validateCompilerBackend(HostedOptionKey<String> optionKey) {
-        String compilerBackend = optionKey.getValue();
-        if ("llvm".equals(compilerBackend) && !SpawnIsolates.getValue()) {
-            throw UserError.invalidOptionValue(optionKey, compilerBackend, "The LLVM backend requires isolate support. Use -H:+SpawnIsolates or select a different compiler backend.");
-        }
-    }
 
     @Fold
     public static boolean useLLVMBackend() {
@@ -1185,21 +1207,15 @@ public class SubstrateOptions {
         }
     };
 
-    @Fold
-    public static boolean supportCompileInIsolates() {
-        UserError.guarantee(!ConcealedOptions.SupportCompileInIsolates.getValue() || SpawnIsolates.getValue(),
-                        "Option %s must be enabled to support isolated compilations through option %s",
-                        SpawnIsolates.getName(),
-                        ConcealedOptions.SupportCompileInIsolates.getName());
-        return ConcealedOptions.SupportCompileInIsolates.getValue();
-    }
+    @Option(help = "Support runtime compilation in separate isolates (enable at runtime with option CompileInIsolates).") //
+    public static final HostedOptionKey<Boolean> SupportCompileInIsolates = new HostedOptionKey<>(true);
 
     public static boolean shouldCompileInIsolates() {
         /*
-         * If SupportCompileInIsolates is unset, CompileInIsolates becomes unreachable because this
-         * expression is folded, and cannot be used at runtime.
+         * If SupportCompileInIsolates is disabled, CompileInIsolates becomes unreachable because
+         * this expression is folded, and cannot be used at runtime.
          */
-        return supportCompileInIsolates() && ConcealedOptions.CompileInIsolates.getValue();
+        return SupportCompileInIsolates.getValue() && ConcealedOptions.CompileInIsolates.getValue();
     }
 
     @Option(help = "Options that are passed to each compilation isolate. Individual arguments are separated by spaces. Arguments that contain spaces need to be enclosed by single quotes.") //
@@ -1210,17 +1226,6 @@ public class SubstrateOptions {
 
     /** Query these options only through an appropriate method. */
     public static class ConcealedOptions {
-
-        @Option(help = "Support runtime compilation in separate isolates (enable at runtime with option CompileInIsolates).") //
-        public static final HostedOptionKey<Boolean> SupportCompileInIsolates = new HostedOptionKey<>(null) {
-            @Override
-            public Boolean getValue(OptionValues values) {
-                if (hasBeenSet(values)) {
-                    return super.getValue(values);
-                }
-                return SpawnIsolates.getValue(values);
-            }
-        };
 
         @Option(help = "Activate runtime compilation in separate isolates (enable support during image build with option SupportCompileInIsolates).") //
         public static final RuntimeOptionKey<Boolean> CompileInIsolates = new RuntimeOptionKey<>(true, RelevantForCompilationIsolates);
@@ -1246,6 +1251,17 @@ public class SubstrateOptions {
                 maxJavaStackTraceDepth = newValue;
             }
         };
+        @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error) //
+        @Option(help = "Enable FramePointerPhase for methods that modify the stack pointer. Enabled by default for Windows on AMD64.")//
+        public static final HostedOptionKey<Boolean> UseFramePointerPhase = new HostedOptionKey<>(null, SubstrateOptions::validateUseFramePointerPhase);
+
+        @Option(help = "Use compressed references (32-bit instead of 64-bit references to Java objects).", stability = OptionStability.STABLE) //
+        @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error) //
+        public static final HostedOptionKey<Boolean> UseCompressedReferences = new HostedOptionKey<>(null);
+
+        @Option(help = "Use bit-shifting to enlarge the address range with narrow references.") //
+        @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error) //
+        public static final HostedOptionKey<Boolean> UseCompressedReferenceShift = new HostedOptionKey<>(true);
 
         /** Use {@link SubstrateOptions#getPageSize()} instead. */
         @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error)//
@@ -1328,7 +1344,7 @@ public class SubstrateOptions {
             protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Boolean oldValue, Boolean newValue) {
                 super.onValueUpdate(values, oldValue, newValue);
                 if (newValue) {
-                    SupportCompileInIsolates.update(values, false);
+                    SubstrateOptions.SupportCompileInIsolates.update(values, false);
                 }
             }
         };
@@ -1338,7 +1354,7 @@ public class SubstrateOptions {
                 if (!RuntimeClassLoading.Options.RuntimeClassLoading.getValue()) {
                     throw UserError.abort("Cannot enable Ristretto compilation if RuntimeClassLoading is not enabled.");
                 }
-                if (SupportCompileInIsolates.getValue()) {
+                if (SubstrateOptions.SupportCompileInIsolates.getValue()) {
                     throw UserError.abort("Cannot enable Ristretto compilation if SupportCompileInIsolates is enabled.");
                 }
             }
@@ -1357,6 +1373,10 @@ public class SubstrateOptions {
 
     @Option(help = "Overwrites the available number of processors provided by the OS. Any value <= 0 means using the processor count from the OS.")//
     public static final RuntimeOptionKey<Integer> ActiveProcessorCount = new RuntimeOptionKey<>(-1, RegisterForIsolateArgumentParser, RelevantForCompilationIsolates);
+
+    /// Enables the HotSpot WhiteBox API for boot-loaded test classes.
+    @Option(help = "Enable the HotSpot WhiteBox API for boot-loaded test classes.", type = OptionType.Debug)//
+    public static final RuntimeOptionKey<Boolean> WhiteBoxAPI = new RuntimeOptionKey<>(false);
 
     @Option(help = "For internal purposes only. Disables type id result verification even when running with assertions enabled.", stability = OptionStability.EXPERIMENTAL, type = OptionType.Debug)//
     public static final HostedOptionKey<Boolean> DisableTypeIdResultVerification = new HostedOptionKey<>(true);
@@ -1555,7 +1575,7 @@ public class SubstrateOptions {
     }
 
     @Option(help = "Support for intrinsics from the Java Vector API", type = Expert) //
-    public static final HostedOptionKey<Boolean> VectorAPISupport = new HostedOptionKey<>(false);
+    public static final HostedOptionKey<Boolean> VectorAPISupport = new HostedOptionKey<>(true);
 
     @Option(help = "Enable support for Arena.ofShared ", type = Expert)//
     public static final HostedOptionKey<Boolean> SharedArenaSupport = new HostedOptionKey<>(true, key -> {

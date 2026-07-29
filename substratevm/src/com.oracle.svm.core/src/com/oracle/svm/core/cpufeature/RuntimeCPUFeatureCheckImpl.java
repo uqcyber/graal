@@ -40,7 +40,7 @@ import com.oracle.svm.core.CPUFeatureAccess;
 import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.jdk.RuntimeSupport;
+import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
@@ -128,6 +128,12 @@ public final class RuntimeCPUFeatureCheckImpl {
 
     static RuntimeCPUFeatureCheckImpl[] layeredSingletons() {
         return MultiLayeredImageSingleton.getAllLayers(RuntimeCPUFeatureCheckImpl.class);
+    }
+
+    /// Gets the singleton installed for the topmost runtime image layer.
+    public static RuntimeCPUFeatureCheckImpl runtimeLastLayer() {
+        var singletons = layeredSingletons();
+        return singletons[singletons.length - 1];
     }
 
     /**
@@ -264,7 +270,16 @@ public final class RuntimeCPUFeatureCheckImpl {
     }
 
     private byte getEncodingUnchecked(Enum<?> feature) {
-        return feature.ordinal() < enumToBitIndex.length ? enumToBitIndex[feature.ordinal()] : -1;
+        return enumToBitIndex != null && feature.ordinal() < enumToBitIndex.length ? enumToBitIndex[feature.ordinal()] : -1;
+    }
+
+    /// Determines whether `feature` is available on the current CPU.
+    ///
+    /// Returns `false` when `feature` is not eligible for a runtime CPU feature check. The
+    /// `cpuFeatureMask` stores unavailable features as set bits.
+    public boolean isAvailableAtRuntime(Enum<?> feature) {
+        byte encoding = getEncodingUnchecked(feature);
+        return encoding >= 0 && (cpuFeatureMask & (1 << encoding)) == 0;
     }
 
     private int getEncoding(Enum<?> feature) {

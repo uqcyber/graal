@@ -97,6 +97,7 @@ import jdk.graal.compiler.lir.aarch64.AArch64DilithiumAlmostNttOp;
 import jdk.graal.compiler.lir.aarch64.AArch64DilithiumDecomposePolyOp;
 import jdk.graal.compiler.lir.aarch64.AArch64DilithiumMontMulByConstantOp;
 import jdk.graal.compiler.lir.aarch64.AArch64DilithiumNttMultOp;
+import jdk.graal.compiler.lir.aarch64.AArch64DoubleKeccakOp;
 import jdk.graal.compiler.lir.aarch64.AArch64EncodeArrayOp;
 import jdk.graal.compiler.lir.aarch64.AArch64GHASHProcessBlocksOp;
 import jdk.graal.compiler.lir.aarch64.AArch64GaloisCounterModeAESCryptOp;
@@ -711,7 +712,7 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     @Override
     public Variable emitArrayIndexOf(Stride stride, ArrayIndexOfVariant variant, EnumSet<?> runtimeCheckedCPUFeatures,
                     Value arrayPointer, Value arrayOffset, Value arrayLength, Value fromIndex, Value... searchValues) {
-        Variable result = newVariable(LIRKind.value(AArch64Kind.DWORD));
+        Variable result = newVariable(LIRKind.value(variant.returnsLong() ? AArch64Kind.QWORD : AArch64Kind.DWORD));
         AllocatableValue[] allocatableSearchValues = new AllocatableValue[searchValues.length];
         for (int i = 0; i < searchValues.length; i++) {
             allocatableSearchValues[i] = asAllocatable(searchValues[i]);
@@ -990,27 +991,156 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
 
     @Override
     public void emitSha1ImplCompress(EnumSet<?> runtimeCheckedCPUFeatures, Value buf, Value state) {
-        append(new AArch64SHA1Op(this, asAllocatable(buf), asAllocatable(state)));
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        append(new AArch64SHA1Op(rBuf, rState));
+    }
+
+    @Override
+    public Variable emitSha1ImplCompressMB(EnumSet<?> runtimeCheckedCPUFeatures, Value buf, Value state, Value ofs, Value limit) {
+        LIRKind resultKind = LIRKind.value(AArch64Kind.DWORD);
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        RegisterValue rOfs = AArch64.r2.asValue(ofs.getValueKind());
+        RegisterValue rLimit = AArch64.r3.asValue(limit.getValueKind());
+        RegisterValue rResult = AArch64.r0.asValue(resultKind);
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        emitMove(rOfs, ofs);
+        emitMove(rLimit, limit);
+        append(new AArch64SHA1Op(rBuf, rState, rOfs, rLimit, rResult, true));
+        Variable result = newVariable(resultKind);
+        emitMove(result, rResult);
+        return result;
     }
 
     @Override
     public void emitSha256ImplCompress(EnumSet<?> runtimeCheckedCPUFeatures, Value buf, Value state) {
-        append(new AArch64SHA256Op(this, asAllocatable(buf), asAllocatable(state)));
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        append(new AArch64SHA256Op(rBuf, rState));
+    }
+
+    @Override
+    public Variable emitSha256ImplCompressMB(EnumSet<?> runtimeCheckedCPUFeatures, Value buf, Value state, Value ofs, Value limit) {
+        LIRKind resultKind = LIRKind.value(AArch64Kind.DWORD);
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        RegisterValue rOfs = AArch64.r2.asValue(ofs.getValueKind());
+        RegisterValue rLimit = AArch64.r3.asValue(limit.getValueKind());
+        RegisterValue rResult = AArch64.r0.asValue(resultKind);
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        emitMove(rOfs, ofs);
+        emitMove(rLimit, limit);
+        append(new AArch64SHA256Op(rBuf, rState, rOfs, rLimit, rResult, true));
+        Variable result = newVariable(resultKind);
+        emitMove(result, rResult);
+        return result;
     }
 
     @Override
     public void emitSha3ImplCompress(Value buf, Value state, Value blockSize) {
-        append(new AArch64SHA3Op(this, asAllocatable(buf), asAllocatable(state), asAllocatable(blockSize)));
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        RegisterValue rBlockSize = AArch64.r2.asValue(blockSize.getValueKind());
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        emitMove(rBlockSize, blockSize);
+        append(new AArch64SHA3Op(this, rBuf, rState, rBlockSize));
+    }
+
+    @Override
+    public Variable emitSha3ImplCompressMB(Value buf, Value state, Value blockSize, Value ofs, Value limit) {
+        LIRKind resultKind = LIRKind.value(AArch64Kind.DWORD);
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        RegisterValue rBlockSize = AArch64.r2.asValue(blockSize.getValueKind());
+        RegisterValue rOfs = AArch64.r3.asValue(ofs.getValueKind());
+        RegisterValue rLimit = AArch64.r4.asValue(limit.getValueKind());
+        RegisterValue rResult = AArch64.r0.asValue(resultKind);
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        emitMove(rBlockSize, blockSize);
+        emitMove(rOfs, ofs);
+        emitMove(rLimit, limit);
+        append(new AArch64SHA3Op(this, rBuf, rState, rBlockSize, rOfs, rLimit, rResult, true));
+        Variable result = newVariable(resultKind);
+        emitMove(result, rResult);
+        return result;
+    }
+
+    @Override
+    public Variable emitDoubleKeccak(Value state0, Value state1) {
+        RegisterValue rState0 = AArch64.r0.asValue(state0.getValueKind());
+        RegisterValue rState1 = AArch64.r1.asValue(state1.getValueKind());
+        RegisterValue rResult = AArch64.r0.asValue(LIRKind.value(AArch64Kind.DWORD));
+
+        emitMove(rState0, state0);
+        emitMove(rState1, state1);
+
+        append(new AArch64DoubleKeccakOp(rState0, rState1, rResult));
+        Variable result = newVariable(LIRKind.value(AArch64Kind.DWORD));
+        emitMove(result, rResult);
+        return result;
     }
 
     @Override
     public void emitSha512ImplCompress(Value buf, Value state) {
-        append(new AArch64SHA512Op(this, asAllocatable(buf), asAllocatable(state)));
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        append(new AArch64SHA512Op(rBuf, rState));
+    }
+
+    @Override
+    public Variable emitSha512ImplCompressMB(Value buf, Value state, Value ofs, Value limit) {
+        LIRKind resultKind = LIRKind.value(AArch64Kind.DWORD);
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        RegisterValue rOfs = AArch64.r2.asValue(ofs.getValueKind());
+        RegisterValue rLimit = AArch64.r3.asValue(limit.getValueKind());
+        RegisterValue rResult = AArch64.r0.asValue(resultKind);
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        emitMove(rOfs, ofs);
+        emitMove(rLimit, limit);
+        append(new AArch64SHA512Op(rBuf, rState, rOfs, rLimit, rResult, true));
+        Variable result = newVariable(resultKind);
+        emitMove(result, rResult);
+        return result;
     }
 
     @Override
     public void emitMD5ImplCompress(Value buf, Value state) {
-        append(new AArch64MD5Op(this, asAllocatable(buf), asAllocatable(state)));
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        append(new AArch64MD5Op(rBuf, rState));
+    }
+
+    @Override
+    public Variable emitMD5ImplCompressMB(Value buf, Value state, Value ofs, Value limit) {
+        LIRKind resultKind = LIRKind.value(AArch64Kind.DWORD);
+        RegisterValue rBuf = AArch64.r0.asValue(buf.getValueKind());
+        RegisterValue rState = AArch64.r1.asValue(state.getValueKind());
+        RegisterValue rOfs = AArch64.r2.asValue(ofs.getValueKind());
+        RegisterValue rLimit = AArch64.r3.asValue(limit.getValueKind());
+        RegisterValue rResult = AArch64.r0.asValue(resultKind);
+        emitMove(rBuf, buf);
+        emitMove(rState, state);
+        emitMove(rOfs, ofs);
+        emitMove(rLimit, limit);
+        append(new AArch64MD5Op(rBuf, rState, rOfs, rLimit, rResult, true));
+        Variable result = newVariable(resultKind);
+        emitMove(result, rResult);
+        return result;
     }
 
     @Override

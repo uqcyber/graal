@@ -60,6 +60,9 @@ import com.oracle.svm.shared.util.VMError;
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionKey;
 
+class TimeZoneSubstitutions {
+}
+
 /**
  * The following classes aim to provide full support for time zones for native-image. This
  * substitution is necessary due to the reliance on JAVA_HOME in the JDK.
@@ -100,10 +103,8 @@ final class Target_java_util_TimeZone {
             if (ImageSingletons.contains(TimeZoneSupport.class)) {
                 byte[] content = ImageSingletons.lookup(TimeZoneSupport.class).getTzMappingsContent();
                 contentLen = content.length;
-                if (contentLen != 0) {
-                    refContent = PrimitiveArrayView.createForReading(content);
-                    tzMappingsPtr = refContent.addressOfArrayElement(0);
-                }
+                refContent = PrimitiveArrayView.createForReading(content);
+                tzMappingsPtr = refContent.addressOfArrayElement(0);
             }
             CCharPointer tzId = LibCHelper.SVM_FindJavaTZmd(tzMappingsPtr, contentLen);
             String result = CTypeConversion.toJavaString(tzId);
@@ -187,11 +188,6 @@ final class TimeZoneFeature implements InternalFeature {
     public void afterRegistration(AfterRegistrationAccess access) {
 
         if (OS.getCurrent() != OS.WINDOWS) {
-            if (ImageLayerBuildingSupport.buildingImageLayer()) {
-                // GR-75591: The ImageSingletons.contains plugin records this application-layer
-                // singleton even when the platform-specific payload is unused.
-                ImageSingletons.add(TimeZoneSupport.class, new TimeZoneSupport(new byte[0]));
-            }
             return;
         }
 
@@ -230,7 +226,4 @@ final class TimeZoneFeature implements InternalFeature {
          */
         ZoneId.systemDefault();
     }
-}
-
-class TimeZoneSubstitutions {
 }

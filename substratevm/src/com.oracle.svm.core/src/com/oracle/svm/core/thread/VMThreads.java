@@ -31,6 +31,7 @@ import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
+import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.function.CFunction;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.ComparableWord;
@@ -38,23 +39,22 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.NeverInline;
+import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.isolated.IsolatedCompileClient;
 import com.oracle.svm.core.graal.isolated.IsolatedCompileContext;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicWord;
+import com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils.AtomicWord;
 import com.oracle.svm.core.locks.VMLockSupport;
 import com.oracle.svm.core.locks.VMMutex;
-import com.oracle.svm.core.log.Log;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.guest.staging.core.memory.UntrackedNullableNativeMemory;
 import com.oracle.svm.core.nodes.CodeSynchronizationNode;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.threadlocal.VMThreadLocalSupport;
-import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.util.UnsignedUtils;
 import com.oracle.svm.guest.staging.c.function.CEntryPointErrors;
 import com.oracle.svm.guest.staging.c.function.CFunctionOptions;
 import com.oracle.svm.guest.staging.core.thread.OSThreadHandle;
@@ -73,12 +73,10 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.directives.GraalDirectives;
-import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.nodes.extended.MembarNode;
 import jdk.graal.compiler.nodes.extended.MembarNode.FenceKind;
 import jdk.graal.compiler.replacements.ReplacementsUtil;
 import jdk.graal.compiler.replacements.nodes.AssertionNode;
-import jdk.vm.ci.aarch64.AArch64;
 
 /**
  * Utility methods for the manipulation and iteration of {@link IsolateThread}s.
@@ -1013,7 +1011,7 @@ public abstract class VMThreads {
          */
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static void markThreadAsCrashed() {
-            if (SubstrateOptions.supportCompileInIsolates()) {
+            if (SubstrateOptions.SupportCompileInIsolates.getValue()) {
                 /*
                  * Threads that are used for isolated compilation may be attached to both the main
                  * and a compilation isolate. So, mark it as crashed in both isolates.
@@ -1089,7 +1087,7 @@ public abstract class VMThreads {
          */
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static boolean isActionPending() {
-            if (!isAarch64()) {
+            if (!Platform.includedIn(Platform.AARCH64.class)) {
                 return false;
             }
             return actionTL.get() != NO_ACTION;
@@ -1097,7 +1095,7 @@ public abstract class VMThreads {
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static void runPendingActions() {
-            if (!isAarch64() || !ActionOnTransitionToJavaSupport.isActionPending()) {
+            if (!Platform.includedIn(Platform.AARCH64.class) || !ActionOnTransitionToJavaSupport.isActionPending()) {
                 return;
             }
 
@@ -1108,7 +1106,7 @@ public abstract class VMThreads {
 
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public static void setSynchronizeCode(IsolateThread vmThread) {
-            if (!isAarch64()) {
+            if (!Platform.includedIn(Platform.AARCH64.class)) {
                 return;
             }
 
@@ -1117,7 +1115,7 @@ public abstract class VMThreads {
         }
 
         public static void requestAllThreadsSynchronizeCode() {
-            assert isAarch64();
+            assert Platform.includedIn(Platform.AARCH64.class);
 
             final IsolateThread myself = CurrentIsolate.getCurrentThread();
             for (IsolateThread vmThread = VMThreads.firstThread(); vmThread.isNonNull(); vmThread = VMThreads.nextThread(vmThread)) {
@@ -1126,11 +1124,6 @@ public abstract class VMThreads {
                 }
                 setSynchronizeCode(vmThread);
             }
-        }
-
-        @Fold
-        static boolean isAarch64() {
-            return SubstrateTarget.getArchitecture() instanceof AArch64;
         }
     }
 

@@ -25,7 +25,7 @@
 package com.oracle.svm.core.heap;
 
 import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
-import static com.oracle.svm.core.jdk.UninterruptibleUtils.Byte.toUnsignedInt;
+import static com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils.Byte.toUnsignedInt;
 
 import com.oracle.svm.core.config.ObjectLayout;
 import org.graalvm.word.LocationIdentity;
@@ -39,8 +39,8 @@ import com.oracle.svm.core.graal.nodes.NewPodInstanceNode;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
-import com.oracle.svm.core.util.DuplicatedInNativeCode;
-import com.oracle.svm.core.util.UnsignedUtils;
+import com.oracle.svm.shared.util.DuplicatedInNativeCode;
+import com.oracle.svm.shared.util.UnsignedUtils;
 
 import jdk.graal.compiler.api.directives.GraalDirectives;
 import jdk.graal.compiler.nodes.java.ArrayLengthNode;

@@ -27,6 +27,10 @@
       <property name="methods" value="canonicalize,canonical"/>
     </module>
     <module name="com.oracle.mxtool.veriopt.VerioptCommentCheck"/>
+    <module name="OuterTypeFilename">
+      <message key="type.file.mismatch"
+               value="The top-level type matching the filename must be declared first in the file."/>
+    </module>
     <module name="AvoidStarImport"/>
     <module name="JavadocStyle">
       <property name="checkHtml" value="false"/>

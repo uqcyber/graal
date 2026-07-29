@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -165,13 +165,13 @@ suite = {
       },
     },
 
-    "XZ-1.10" : {
-      "digest" : "sha512:af234bb2a5d42b355ea020c5b687268f0336e393eae69a05251677151d1e85b1e34999d5a6be6451e0b047e3cf13341dc227a5483553766252b0ea66025a44f9",
-      "sourceDigest" : "sha512:19439a7f83d34528a3b457baec1a352901eb311c38ffeeea6aed6f49d91417207cf9798572cdbd6eae1769944dab692629dd7668f7a3073b30ba5d242cf6a4b2",
+    "XZ-1.12" : {
+      "digest" : "sha512:a854dc65df5a07fbb026f624d2b10901f6f5d95a20091c52bfb64f88c14565ef1bb65733436ffd5b2a9d16329e523b650085fd4c36a1bb384d40788e727c1e60",
+      "sourceDigest" : "sha512:8c96e1d03b27af7d482cbae70136af45ae56403ba2bfe0355781ba931c84e15a2cd91a65453f30f2dfbde5789ce3529ee71b649cd22fa4887041f658ff5f1247",
       "maven" : {
         "groupId" : "org.tukaani",
         "artifactId" : "xz",
-        "version" : "1.10",
+        "version" : "1.12",
       },
     },
 
@@ -796,6 +796,7 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [
         "com.oracle.truffle.api.staticobject",
+        "com.oracle.truffle.api.test",
         "TRUFFLE_API",
         "mx:JUNIT"
       ],
@@ -1284,19 +1285,6 @@ suite = {
       "graalCompilerSourceEdition": "ignore",
     },
 
-    "com.oracle.graalvm.locator": {
-      "subDir": "src",
-      "sourceDirs": ["src"],
-      "dependencies": [
-        "truffle:TRUFFLE_API",
-      ],
-      "checkstyle" : "com.oracle.truffle.api",
-      "javaCompliance" : "17+",
-      "license": "GPLv2-CPE",
-      "jacoco" : "exclude",
-      "graalCompilerSourceEdition": "ignore",
-    },
-
     "org.graalvm.shadowed.com.ibm.icu" : {
       # shaded ICU4J + ICU4J-CHARSET
       "subDir" : "src",
@@ -1614,7 +1602,7 @@ suite = {
       "javaCompliance" : "17+",
       "spotbugsIgnoresGenerated" : True,
       "shadedDependencies" : [
-        "truffle:XZ-1.10",
+        "truffle:XZ-1.12",
       ],
       "class" : "ShadedLibraryProject",
       "shade" : {
@@ -2008,7 +1996,6 @@ suite = {
           "com.oracle.truffle.runtime.hotspot to jdk.graal.compiler",
         ],
         "uses" : [
-          "com.oracle.truffle.api.impl.TruffleLocator",
           "com.oracle.truffle.runtime.TruffleTypes",
           "com.oracle.truffle.runtime.jfr.EventFactory.Provider",
           "com.oracle.truffle.runtime.FloodControlHandler",
@@ -2106,7 +2093,6 @@ suite = {
         "uses" : [
           "com.oracle.truffle.api.TruffleRuntimeAccess",
           "java.nio.file.spi.FileTypeDetector",
-          "com.oracle.truffle.api.impl.TruffleLocator",
           "com.oracle.truffle.api.provider.TruffleLanguageProvider",
           "com.oracle.truffle.api.provider.InternalResourceProvider",
           "com.oracle.truffle.api.library.provider.DefaultExportProvider",
@@ -2704,25 +2690,6 @@ suite = {
       "layout" : {
         "native-image.properties" : "file:mx.truffle/language-xz.properties",
       },
-      "maven" : False,
-      "graalCompilerSourceEdition": "ignore",
-    },
-
-    "LOCATOR": {
-      "subDir": "src",
-      "moduleInfo" : {
-        "name" : "org.graalvm.locator",
-        "exports" : [
-          "com.oracle.graalvm.locator to jdk.graal.compiler.management",
-        ],
-        "requires": [
-          "org.graalvm.polyglot",
-        ],
-      },
-      "dependencies": ["com.oracle.graalvm.locator"],
-      "distDependencies": [
-        "truffle:TRUFFLE_API",
-      ],
       "maven" : False,
       "graalCompilerSourceEdition": "ignore",
     },
