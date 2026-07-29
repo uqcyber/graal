@@ -150,6 +150,7 @@ public final class ConditionalNode extends FloatingNode implements Canonicalizab
             CompareNode compare = (CompareNode) condition;
             if ((compare.getX() == trueValue && compare.getY() == falseValue) || (compare.getX() == falseValue && compare.getY() == trueValue)) {
                 // veriopt: ConditionalEqualIsRHS: ((x == y) ? x : y) |-> y
+                // veriopt: ConditionalEqualIsLHS: ((x == y) ? y : x) |-> x
                 return falseValue;
             }
         }
