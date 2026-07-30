@@ -96,7 +96,6 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
 
         // convert "(-a)*(-b)" into "a*b"
         if (forX instanceof NegateNode && forY instanceof NegateNode) {
-
             // veriopt: EliminateRedundantNegative: (-x) * (-y) |-> x * y
             return new MulNode(((NegateNode) forX).getValue(), ((NegateNode) forY).getValue()).maybeCommuteInputs();
         }
@@ -110,7 +109,6 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
         if (forY.isConstant()) {
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
-
                 // veriopt: MulNeutral2: x * const(1) |-> x
                 return forX;
             }
@@ -201,11 +199,11 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                         // veriopt-definition: shiftPow2: (log2 (highestBitValue)) + 1
                         // veriopt-definition: subVal: (1 << shiftPow2) - c
 
-                        // veriopt: MulPower2SubPower2: x * c |-> (x << const(shiftPow2)) - (x << const(log2 (subVal)))
+                        // veriopt: MulPower2SubPower2:   x * c |-> (x << const(shiftPow2)) - (x << const(log2 (subVal)))
                         //          when (constant_condition && bitCount c != 2 && is_Power2(subVal) && subVal != 1 &&
                         //                stamp_expr (x * c) = IntegerStamp b lo hi && shiftPow2 < b)
 
-                        // veriopt: MulPower2Sub1:      x * c |-> (x << const(shiftPow2)) - x
+                        // veriopt: MulPower2Sub1_MaxVal: x * c |-> (x << const(shiftPow2)) - x
                         //          when (constant_condition && bitCount c != 2 && is_Power2(subVal) && subVal == 1 &&
                         //                stamp_expr (x * c) = IntegerStamp b lo hi && shiftPow2 < b)
                         return SubNode.create(left, right, view);
@@ -221,7 +219,6 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                 return LeftShiftNode.create(forX, ConstantNode.forInt(integerStamp.getBits() - 1), view);
             }
             if (CodeUtil.isPowerOf2(-i)) {
-
                 // veriopt: MulNegativeConstShift: x * const(-(2^j)) |-> -(x << const(j))
                 return NegateNode.create(LeftShiftNode.create(forX, ConstantNode.forInt(CodeUtil.log2(-i)), view), view);
             }
