@@ -271,7 +271,8 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                 return improvement;
             }
             // if this fails we only swap
-            // @formatter:off veriopt: AddShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x) when ~(is_ConstantExpr y)
+            // @formatter:off veriopt: AddShiftConstantRight: ((ConstantExpr x) + y) |-> y + (ConstantExpr x)
+            //                                                when ~(is_ConstantExpr y)
             return new AddNode(forY, forX);
         }
         BinaryOp<Add> op = getOp(forX, forY);
