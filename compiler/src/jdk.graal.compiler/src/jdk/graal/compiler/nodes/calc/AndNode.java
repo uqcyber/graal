@@ -181,11 +181,11 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
                  *     1     &     0    = 0  # rhs can't be one
                  *     1     &     1    = ?  # cannot infer
                  */
-                // @formatter:off veriopt: AndRightFallthrough: x & y |-> y
+                // @formatter:off veriopt: AndRightFallThrough: x & y |-> y
                 //                                              when (canBeZero x.stamp & canBeOne y.stamp) = 0
                 return forY;
             } else if (((~yStamp.mustBeSet()) & xStamp.mayBeSet()) == 0) {
-                // @formatter:off veriopt: AndLeftFallthrough: x & y |-> x
+                // @formatter:off veriopt: AndLeftFallThrough: x & y |-> x
                 //                                             when (canBeZero y.stamp & canBeOne x.stamp) = 0
                 return forX;
             }
