@@ -584,6 +584,10 @@ final class BytecodeInstructionHandler extends CodeExecutableElement implements 
                 return emitCustomShortCircuit(b);
             case LOAD_ARGUMENT:
                 return emitLoadArgument(b, resultLocalName, mode);
+            case LOAD_STACKVALUE:
+                return emitLoadStackValue(b, resultLocalName);
+            case STORE_STACKVALUE:
+                return emitStoreStackValue(b);
             case BRANCH:
                 b.statement("return " + BytecodeRootNodeElement.readImmediate("bc", "bci", instruction.getImmediate(ImmediateKind.BYTECODE_INDEX)));
                 return null;
@@ -1544,6 +1548,22 @@ final class BytecodeInstructionHandler extends CodeExecutableElement implements 
         }
     }
 
+    private TypeMirror emitLoadStackValue(CodeTreeBuilder b, String resultLocalName) {
+        b.startDeclaration(type(Object.class), resultLocalName);
+        BytecodeRootNodeElement.startGetFrameUnsafe(b, "frame", type(Object.class));
+        b.startGroup().string("sp - 1 - ").tree(BytecodeRootNodeElement.readImmediate("bc", "bci", instruction.findImmediate(ImmediateKind.SHORT, "offset"))).end();
+        b.end(); // getFrameUnsafe
+        b.end(); // declaration
+        return type(Object.class);
+    }
+
+    private TypeMirror emitStoreStackValue(CodeTreeBuilder b) {
+        b.declaration(type(int.class), "offset", BytecodeRootNodeElement.readImmediate("bc", "bci", instruction.findImmediate(ImmediateKind.SHORT, "offset")));
+        b.declaration(parent.getStackPointerType(), "targetIndex", "sp - 1 - offset");
+        b.statement(BytecodeRootNodeElement.setFrameObject("targetIndex", instruction.signature.singleDynamicOperand().localName()));
+        return null;
+    }
+
     private TypeMirror emitTagLeave(CodeTreeBuilder b, ExecutionMode mode) {
         Operand valueOperand = instruction.signature.singleDynamicOperand();
         if (mode.isFastPath()) {
@@ -2003,6 +2023,26 @@ final class BytecodeInstructionHandler extends CodeExecutableElement implements 
 
                 // If an UnexpectedResultException occurs, specialize to the generic
                 // version.
+                if (model().defaultLocalValue != null) {
+                    /*
+                     * Explicitly generalize the cached tag to object here. Normally, we can rely on
+                     * each store operation updating the cached tag, but when a default local value
+                     * is used, a load.local may observe an object without the cached tag ever being
+                     * set to object. To prevent entering this slow path again, we need to
+                     * generalize the tag so that all stores switch to object.
+                     */
+                    b.startIf().string("tag != ").staticReference(parent.parent.frameTagsElement.getObject()).end().startBlock();
+                    b.startStatement().startCall(bytecodeNode, "setCachedLocalTagInternal");
+                    if (materialized) {
+                        b.startCall(bytecodeNode, "getLocalTags").end();
+                    } else {
+                        b.string("localTags");
+                    }
+                    b.tree(localIndex);
+                    b.staticReference(parent.parent.frameTagsElement.getObject());
+                    b.end(2);
+                    b.end(); // if cached tag != Object
+                }
                 b.startStatement().string("newInstruction = ").tree(parent.parent.createInstructionConstant(genericTypeInstruction)).end();
                 parent.parent.emitOnSpecialize(b, "this", "bci", BytecodeRootNodeElement.readInstruction("bc", "bci"), "LoadLocal$" + genericTypeInstruction.getQuickeningName());
                 b.startStatement();

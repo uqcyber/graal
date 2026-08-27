@@ -2066,7 +2066,7 @@ public final class Context implements AutoCloseable {
          * Sets a host class loader. If set the given {@code classLoader} is used to load host
          * classes and it's also set as a {@link Thread#setContextClassLoader(java.lang.ClassLoader)
          * context ClassLoader} during code execution. Otherwise the ClassLoader that was captured
-         * when the context was {@link #build() built} is used to to load host classes and the
+         * when the context was {@link #build() built} is used to load host classes and the
          * {@link Thread#setContextClassLoader(java.lang.ClassLoader) context ClassLoader} is not
          * set during code execution. Setting the hostClassLoader has a negative effect on enter and
          * leave performance.
@@ -2518,11 +2518,17 @@ public final class Context implements AutoCloseable {
                                     "do not set Builder.allowHostAccess(boolean) to use the sandbox policy preset or set Builder.allowHostAccess(HostAccess)");
                 }
                 if (hostAccess != null) {
-                    if (hostAccess.allowPublic) {
+                    if (hostAccess.allowsAllPublicAccess()) {
                         throw Engine.Builder.throwSandboxException(useSandboxPolicy,
                                         "Builder.allowHostAccess(HostAccess) is set to a HostAccess which was created with HostAccess.Builder.allowPublicAccess(boolean) set to true, " +
                                                         "but HostAccess.Builder.allowPublicAccess(boolean) must not be set to true.",
                                         "do not set HostAccess.Builder.allowPublicAccess(boolean)");
+                    }
+                    if (hostAccess.hasPublicAccessPredicate()) {
+                        throw Engine.Builder.throwSandboxException(useSandboxPolicy,
+                                        "Builder.allowHostAccess(HostAccess) is set to a HostAccess which was created with HostAccess.Builder.allowPublicAccess(Predicate) configured, " +
+                                                        "but HostAccess.Builder.allowPublicAccess(Predicate) must not be configured.",
+                                        "do not configure HostAccess.Builder.allowPublicAccess(Predicate)");
                     }
                     if (hostAccess.allowAccessInheritance) {
                         throw Engine.Builder.throwSandboxException(useSandboxPolicy,

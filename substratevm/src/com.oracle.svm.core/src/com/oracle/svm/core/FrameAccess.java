@@ -35,7 +35,7 @@ import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.core.heap.StoredContinuation;
 import com.oracle.svm.core.heap.StoredContinuationAccess;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.core.stack.JavaFrameAnchor;
 import com.oracle.svm.core.stack.JavaFrameAnchors;
 import com.oracle.svm.core.thread.VMOperation;
@@ -76,7 +76,17 @@ public abstract class FrameAccess {
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public void writeReturnAddress(IsolateThread thread, Pointer sourceSp, CodePointer newReturnAddress) {
         verifyReturnAddressWithinJavaStack(thread, sourceSp);
-        unsafeReturnAddressLocation(sourceSp).writeWord(0, newReturnAddress);
+        unsafeReturnAddressLocation(sourceSp).writeWord(0, encodeReturnAddress(sourceSp, newReturnAddress));
+    }
+
+    /**
+     * Produces the architecture-specific representation of a return address for storage on the
+     * stack. {@code sourceSp} must be the stack pointer that the returning epilogue will use, rather
+     * than the address of the return-address slot.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public CodePointer encodeReturnAddress(@SuppressWarnings("unused") Pointer sourceSp, CodePointer returnAddress) {
+        return returnAddress;
     }
 
     /**

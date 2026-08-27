@@ -91,8 +91,8 @@ import org.graalvm.nativeimage.impl.RuntimeClassInitializationSupport;
 
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.reports.ReportUtils;
-import com.oracle.svm.shared.BuildPhaseProvider;
 import com.oracle.svm.core.FutureDefaultsOptions;
+import com.oracle.svm.core.OS;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
@@ -108,6 +108,7 @@ import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.analysis.Inflation;
 import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.substitute.AnnotationSubstitutionProcessor;
+import com.oracle.svm.shared.BuildPhaseProvider;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.shared.option.HostedOptionKey;
@@ -115,6 +116,7 @@ import com.oracle.svm.shared.util.ModuleSupport;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
 import com.oracle.svm.util.JVMCIRuntimeClassInitializationSupport;
 import com.oracle.svm.util.OriginalMethodProvider;
@@ -333,6 +335,9 @@ public class SecurityServicesFeature extends JNIRegistrationUtil implements Inte
         rci.initializeAtRunTime(type(access, "com.sun.crypto.provider.SunJCE$SecureRandomHolder"), "for substitutions");
         optionalType(access, "sun.security.krb5.Confounder").ifPresent(clazz -> rci.initializeAtRunTime(clazz, "for substitutions"));
         optionalType(access, "sun.security.krb5.Config").ifPresent(clazz -> rci.initializeAtRunTime(clazz, "Reset the value of lazily initialized field sun.security.krb5.Config#singleton"));
+        if (OS.DARWIN.isCurrent()) {
+            optionalType(access, "sun.security.krb5.SCDynamicStoreConfig").ifPresent(clazz -> rci.initializeAtRunTime(clazz, "Loads a dynamic library and installs a native callback"));
+        }
 
         rci.initializeAtRunTime(type(access, "sun.security.jca.JCAUtil"), "JCAUtil.def holds a SecureRandom.");
 
@@ -499,7 +504,7 @@ public class SecurityServicesFeature extends JNIRegistrationUtil implements Inte
         if (usedProviders.contains(p)) {
             return false;
         }
-        if (substitutionProcessor.isDeleted(p.getClass())) {
+        if (substitutionProcessor.isDeleted(GuestAccess.get().lookupType(p.getClass()))) {
             return true;
         }
         return !manuallyMarkedUsedProviderClassNames.contains(p.getClass().getName());

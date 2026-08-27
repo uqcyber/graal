@@ -73,9 +73,11 @@ public final class InstructionModel implements PrettyPrintable {
     public enum InstructionKind {
         LOAD_ARGUMENT,
         LOAD_CONSTANT,
+        LOAD_STACKVALUE,
         LOAD_LOCAL,
         CLEAR_LOCAL,
         STORE_LOCAL,
+        STORE_STACKVALUE,
         BRANCH,
         BRANCH_BACKWARD,
         BRANCH_FALSE,
@@ -197,7 +199,7 @@ public final class InstructionModel implements PrettyPrintable {
          * Index into BytecodeRootNodes.nodes. Necessary for boxing elimination of materialized
          * local accesses.
          */
-        LOCAL_ROOT("local_root", ImmediateWidth.SHORT),
+        LOCAL_ROOT("local_root", ImmediateWidth.INT),
         STATE_PROFILE("state", ImmediateWidth.SHORT),
         SHORT("short", ImmediateWidth.SHORT),
         INTEGER("int", ImmediateWidth.INT),

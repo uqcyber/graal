@@ -115,6 +115,7 @@ public final class RuntimeOptionParser {
     private static final String LOG_FILE_OPTION = "LogFile";
     private static final String LOG_FILE_OPTION_PREFIX = NORMAL_OPTION_PREFIX + LOG_FILE_OPTION + "=";
     @GuaranteeFolded private static final String HOTSPOT_OPTION_COMPATIBILITY_NAME = "CREMA_HOTSPOT_OPTION_COMPATIBILITY";
+    private static final String PATCH_MODULE_OPTION = "--patch-module";
     private static final String RESERVED_INTERNAL_MODULE_PROPERTY_WARNING = "Ignoring system property options whose names match '-Djdk.module.*', which is reserved for internal use.";
 
     private static final Set<String> SYSTEM_ASSERTION_OPTIONS = Set.of(
@@ -164,6 +165,10 @@ public final class RuntimeOptionParser {
                     "-Xverify:none",
                     "-Xdebug",
                     "-Xcheck:jni");
+    private static final Set<String> UNIMPLEMENTED_VERBOSE_OPTIONS = Set.of(
+                    "gc",
+                    "jni",
+                    "module");
 
     /** All reachable options. */
     private final EconomicMap<String, OptionDescriptor> options = ImageHeapMap.createNonLayeredMap();
@@ -205,16 +210,17 @@ public final class RuntimeOptionParser {
         String[] args = parseJavaVMOptions(initialArgs, context);
         args = consumeCompatibilityOptions(args);
         args = singleton().parse(args, ignoreUnrecognized);
-        if (!context.legacyJavaOptionMode) {
+        if (GuestStagingDependencyBridge.singleton().strictRuntimeJavaOptions()) {
             rejectRecognizedUnimplementedJavaOptions(args);
         }
         configureLogFile(context.logFile);
+        GuestStagingDependencyBridge.singleton().endOfParsing();
         return args;
     }
 
     /** Parses runtime options for a Java main image and returns the application main arguments. */
     public static String[] parseAndConsumeJavaMainOptions(String[] initialArgs, boolean ignoreUnrecognized) {
-        if (GuestStagingDependencyBridge.singleton().legacyJavaOptionMode()) {
+        if (!GuestStagingDependencyBridge.singleton().strictRuntimeJavaOptions()) {
             return parseAndConsumeAllOptions(initialArgs, ignoreUnrecognized);
         }
 
@@ -360,12 +366,12 @@ public final class RuntimeOptionParser {
                 continue;
             }
             if (parseProperty(arg, context) ||
-                            (!context.legacyJavaOptionMode && (parseModuleOption(arg, context) ||
+                            (GuestStagingDependencyBridge.singleton().strictRuntimeJavaOptions() && (parseModuleOption(arg, context) ||
                                             parsePreviewOption(arg) ||
-                                            parseXBootClasspathAppendOption(arg, context)))) {
+                                            parseXBootClasspathAppendOption(arg, context) ||
+                                            parseRecognizedJavaOption(arg)))) {
                 continue;
             }
-            assert newIdx <= oldIdx;
             args[newIdx] = arg;
             newIdx++;
         }
@@ -393,7 +399,7 @@ public final class RuntimeOptionParser {
         if (!arg.startsWith(PROPERTY_PREFIX) || hasPrefix(arg, GRAAL_OPTION_PREFIX) || hasPrefix(arg, LEGACY_GRAAL_OPTION_PREFIX)) {
             return false;
         }
-        if (!context.legacyJavaOptionMode && isReservedInternalModuleProperty(arg)) {
+        if (GuestStagingDependencyBridge.singleton().strictRuntimeJavaOptions() && isReservedInternalModuleProperty(arg)) {
             if (!context.warnedInternalModuleProperty) {
                 Log.log().string("Substrate VM warning: ").string(RESERVED_INTERNAL_MODULE_PROPERTY_WARNING).newline();
                 context.warnedInternalModuleProperty = true;
@@ -498,38 +504,37 @@ public final class RuntimeOptionParser {
         Log.log().string("Substrate VM warning: ignoring Java VM option ").string(arg).newline();
     }
 
+    /// Throws an exception for `arg` unless runtime class loading is supported.
+    private static void enforceRuntimeClassLoadingSupported(String arg) {
+        if (!GuestStagingDependencyBridge.singleton().isRuntimeClassLoadingSupported()) {
+            throw new IllegalArgumentException("The option '" + arg + "' is not supported by Native Image without runtime class loading");
+        }
+    }
+
     /// Parses module options that SVM applies to the runtime boot layer into the normalized
     /// `jdk.module.*` property scheme.
     private static boolean parseModuleOption(String arg, ParseContext context) {
-        if (arg.startsWith(RuntimeBootModuleLayerOptions.MODULE_PATH_OPTION + "=")) {
+        if (arg.startsWith(PATCH_MODULE_OPTION + "=")) {
+            context.properties.put(RuntimeBootModuleLayerOptions.PATCH_MODULE_PROPERTY_PREFIX + context.patchModuleIndex++, optionValue(arg));
+        } else if (arg.startsWith(RuntimeBootModuleLayerOptions.MODULE_PATH_OPTION + "=")) {
             context.properties.put(RuntimeBootModuleLayerOptions.MODULE_PATH_PROPERTY, optionValue(arg));
-            return true;
-        }
-        if (arg.startsWith(RuntimeBootModuleLayerOptions.UPGRADE_MODULE_PATH_OPTION + "=")) {
+        } else if (arg.startsWith(RuntimeBootModuleLayerOptions.UPGRADE_MODULE_PATH_OPTION + "=")) {
             context.properties.put(RuntimeBootModuleLayerOptions.UPGRADE_MODULE_PATH_PROPERTY, optionValue(arg));
-            return true;
-        }
-        if (arg.startsWith(RuntimeBootModuleLayerOptions.ADD_MODULES_OPTION + "=")) {
+        } else if (arg.startsWith(RuntimeBootModuleLayerOptions.ADD_MODULES_OPTION + "=")) {
             context.properties.put(RuntimeBootModuleLayerOptions.ADD_MODULES_PROPERTY_PREFIX + context.addModulesIndex++, optionValue(arg));
-            return true;
-        }
-        if (arg.startsWith(RuntimeBootModuleLayerOptions.ADD_READS_OPTION + "=")) {
+        } else if (arg.startsWith(RuntimeBootModuleLayerOptions.ADD_READS_OPTION + "=")) {
             context.properties.put(RuntimeBootModuleLayerOptions.ADD_READS_PROPERTY_PREFIX + context.addReadsIndex++, optionValue(arg));
-            return true;
-        }
-        if (arg.startsWith(RuntimeBootModuleLayerOptions.ADD_EXPORTS_OPTION + "=")) {
+        } else if (arg.startsWith(RuntimeBootModuleLayerOptions.ADD_EXPORTS_OPTION + "=")) {
             context.properties.put(RuntimeBootModuleLayerOptions.ADD_EXPORTS_PROPERTY_PREFIX + context.addExportsIndex++, optionValue(arg));
-            return true;
-        }
-        if (arg.startsWith(RuntimeBootModuleLayerOptions.ADD_OPENS_OPTION + "=")) {
+        } else if (arg.startsWith(RuntimeBootModuleLayerOptions.ADD_OPENS_OPTION + "=")) {
             context.properties.put(RuntimeBootModuleLayerOptions.ADD_OPENS_PROPERTY_PREFIX + context.addOpensIndex++, optionValue(arg));
-            return true;
-        }
-        if (arg.startsWith(RuntimeBootModuleLayerOptions.ENABLE_NATIVE_ACCESS_OPTION + "=")) {
+        } else if (arg.startsWith(RuntimeBootModuleLayerOptions.ENABLE_NATIVE_ACCESS_OPTION + "=")) {
             context.properties.put(RuntimeBootModuleLayerOptions.ENABLE_NATIVE_ACCESS_PROPERTY_PREFIX + context.enableNativeAccessIndex++, optionValue(arg));
-            return true;
+        } else {
+            return false;
         }
-        return false;
+        enforceRuntimeClassLoadingSupported(arg);
+        return true;
     }
 
     /// Parses `--enable-preview` and enables the runtime preview-feature flag consulted by
@@ -553,6 +558,8 @@ public final class RuntimeOptionParser {
             return false;
         }
 
+        enforceRuntimeClassLoadingSupported(arg);
+
         // Buffer the property read by jdk.internal.loader.ClassLoaders.<clinit>.
         String value = arg.substring(X_BOOTCLASSPATH_APPEND_OPTION_PREFIX.length());
         if (!value.isEmpty()) {
@@ -561,6 +568,37 @@ public final class RuntimeOptionParser {
             context.properties.put(BOOT_CLASS_PATH_APPEND_PROPERTY, result);
         }
         return true;
+    }
+
+    /// Parses known and implemented Java VM options.
+    private static boolean parseRecognizedJavaOption(String arg) {
+        if (isEnableAssertionsOption(arg)) {
+            GuestStagingDependencyBridge.singleton().updateRuntimeAssertionStatus(assertionOptionTarget(arg), true);
+            return true;
+        }
+        if (isDisableAssertionsOption(arg)) {
+            GuestStagingDependencyBridge.singleton().updateRuntimeAssertionStatus(assertionOptionTarget(arg), false);
+            return true;
+        }
+        if (SYSTEM_ASSERTION_OPTIONS.contains(arg)) {
+            boolean enable = arg.equals("-esa") || arg.equals("-enablesystemassertions");
+            GuestStagingDependencyBridge.singleton().updateRuntimeSystemAssertionStatus(enable);
+            return true;
+        }
+        if (arg.equals("-verbose") || arg.equals("-verbose:class")) {
+            GuestStagingDependencyBridge.singleton().enableTraceClassLoading();
+            return true;
+        }
+        if (arg.startsWith("-verbose:")) {
+            String component = arg.substring("-verbose:".length());
+            if (UNIMPLEMENTED_VERBOSE_OPTIONS.contains(component)) {
+                // Will be handled in `isRecognizedUnimplementedJavaOption`
+                return false;
+            }
+            // Accept any `-verbose:foo`, as they are implemented by doing nothing.
+            return true;
+        }
+        return false;
     }
 
     /// Rejects recognized Java VM options that remain in `args` because this parser does not
@@ -579,15 +617,6 @@ public final class RuntimeOptionParser {
         if (arg.startsWith(FINALIZATION_OPTION_PREFIX)) {
             return true;
         }
-        if (isEnableAssertionsOption(arg)) {
-            return true;
-        }
-        if (isDisableAssertionsOption(arg)) {
-            return true;
-        }
-        if (SYSTEM_ASSERTION_OPTIONS.contains(arg)) {
-            return true;
-        }
         if (arg.startsWith("-agentlib:")) {
             return true;
         }
@@ -597,16 +626,16 @@ public final class RuntimeOptionParser {
         if (arg.startsWith("-javaagent:")) {
             return true;
         }
-        if (arg.equals("-verbose") || arg.startsWith("-verbose:")) {
-            return true;
+        if (arg.startsWith("-verbose:")) {
+            String component = arg.substring("-verbose:".length());
+            if (UNIMPLEMENTED_VERBOSE_OPTIONS.contains(component)) {
+                return true;
+            }
         }
         if (arg.startsWith(ILLEGAL_NATIVE_ACCESS_OPTION_PREFIX)) {
             return true;
         }
         if (arg.startsWith(SUN_MISC_UNSAFE_MEMORY_ACCESS_OPTION_PREFIX)) {
-            return true;
-        }
-        if (arg.startsWith("--patch-module=")) {
             return true;
         }
         if (arg.startsWith("--limit-modules=")) {
@@ -631,6 +660,12 @@ public final class RuntimeOptionParser {
         return arg.equals("-da") || arg.equals("-disableassertions") || arg.startsWith("-da:") || arg.startsWith("-disableassertions:");
     }
 
+    /// Extracts the optional class or package target from an assertion option.
+    private static String assertionOptionTarget(String arg) {
+        int separatorIndex = arg.indexOf(':');
+        return separatorIndex == -1 ? "" : arg.substring(separatorIndex + 1);
+    }
+
     /// Returns whether `arg` is a recognized `-Xshare` mode.
     private static boolean isRecognizedXShareOption(String arg) {
         return arg.equals("-Xshare:dump") || arg.equals("-Xshare:on") || arg.equals("-Xshare:auto") || arg.equals("-Xshare:off");
@@ -652,14 +687,14 @@ public final class RuntimeOptionParser {
     }
 
     private static final class ParseContext {
-        /// Whether to preserve the Java option handling behavior that existed before GR-74762.
-        final boolean legacyJavaOptionMode = GuestStagingDependencyBridge.singleton().legacyJavaOptionMode();
-
         /// Collects system properties to initialize after recognized options are parsed.
         final EconomicMap<String, String> properties = EconomicMap.create();
 
         /// Next numbered-property slot for decoded `--add-modules` options.
         int addModulesIndex;
+
+        /// Next numbered-property slot for decoded `--patch-module` options.
+        int patchModuleIndex;
 
         /// Next numbered-property slot for decoded `--add-reads` options.
         int addReadsIndex;

@@ -44,16 +44,16 @@ import org.graalvm.word.impl.Word;
 import com.oracle.svm.configure.ClassNameSupport;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo;
 import com.oracle.svm.core.heap.Heap;
-import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.jni.MissingJNIRegistrationUtils;
 import com.oracle.svm.core.jni.headers.JNIFieldId;
 import com.oracle.svm.core.jni.headers.JNIMethodId;
-import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.metadata.MetadataTracer;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.core.util.DeferredKeyMap;
+import com.oracle.svm.core.util.DynamicHubKey;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.guest.staging.util.ImageHeapMap;
-import com.oracle.svm.shared.BuildPhaseProvider.AfterCompilation;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
@@ -111,20 +111,10 @@ public final class JNIReflectionDictionary {
     }
 
     private final EconomicMap<CharSequence, JNIAccessibleClass> classesByName = ImageHeapMap.createNonLayeredMap(WRAPPED_CSTRING_EQUIVALENCE);
-    /**
-     * JNI registrations are collected during analysis, before final {@link DynamicHub} type IDs are
-     * assigned, so the hosted-time map {@link #classesByHub} uses {@link DynamicHubKey}s to
-     * deduplicate repeated class registrations and merge their method/field metadata. Before
-     * compilation, once type IDs are stable, the entries are copied to classesByTypeID for runtime
-     * lookup. Runtime layered-image lookup must not use {@link Class} or {@link DynamicHub} object
-     * keys because their identity/hash behavior is not stable across layers.
-     */
-    @UnknownObjectField(fullyQualifiedTypes = "org.graalvm.collections.EconomicMapImpl", availability = AfterCompilation.class) //
-    private EconomicMap<Integer, JNIAccessibleClass> classesByTypeID = null;
 
     /**
-     * The classes map keyed by typeID need to be rescanned manually because the
-     * {@link JNIReflectionDictionary#classesByTypeID} map is only available after compilation.
+     * The runtime classes map need to be rescanned manually because the
+     * {@link JNIReflectionDictionary#classes} map is only available after compilation.
      */
     @Platforms(HOSTED_ONLY.class) //
     private Consumer<Object> objectRescanner;
@@ -133,25 +123,19 @@ public final class JNIReflectionDictionary {
     @Platforms(HOSTED_ONLY.class) //
     private Consumer<JNIAccessibleClass> fieldsFieldRescanner;
 
-    @Platforms(HOSTED_ONLY.class) //
-    private EconomicMap<DynamicHubKey, JNIAccessibleClass> classesByHub = EconomicMap.create();
+    /**
+     * JNI registrations are collected during analysis, before final {@link DynamicHub} type IDs are
+     * assigned, so the hosted-time map uses {@link DynamicHubKey} keys to deduplicate repeated
+     * class registrations and merge their method/field metadata. Before compilation, once type IDs
+     * are stable, {@link DeferredKeyMap} converts those keys for runtime lookup. Runtime
+     * layered-image lookup must not use {@link Class} or {@link DynamicHub} object keys because
+     * their identity/hash behavior is not stable across layers.
+     */
+    private final DeferredKeyMap<DynamicHubKey, Integer, JNIAccessibleClass> classes;
     private final EconomicMap<JNINativeLinkage, JNINativeLinkage> nativeLinkages = ImageHeapMap.createNonLayeredMap();
 
     private JNIReflectionDictionary() {
-    }
-
-    /**
-     * Maps that are conceptually indexed by {@link Class} need different keys before and after type
-     * IDs are assigned. Hosted maps can use {@link DynamicHub} keys to identify classes while
-     * registrations are still collected, but image heap maps need to be keyed by
-     * {@link DynamicHub#getTypeID()}, which is stable at run time. This hosted-only wrapper is used
-     * for the first map to ensure that {@link DynamicHub} keys do not leak into the image.
-     */
-    @Platforms(HOSTED_ONLY.class)
-    private record DynamicHubKey(DynamicHub hub) {
-        int getTypeID() {
-            return hub.getTypeID();
-        }
+        classes = new DeferredKeyMap<>(DynamicHubKey::getTypeID);
     }
 
     private static void dump(boolean condition, String label) {
@@ -183,7 +167,7 @@ public final class JNIReflectionDictionary {
                 }
 
                 ps.println(" classesByTypeID:");
-                MapCursor<Integer, JNIAccessibleClass> cursor = dictionary.classesByTypeID.getEntries();
+                MapCursor<Integer, JNIAccessibleClass> cursor = dictionary.classes.getRuntimeEntries();
                 while (cursor.advance()) {
                     ps.print("  ");
                     ps.println(cursor.getKey());
@@ -196,10 +180,10 @@ public final class JNIReflectionDictionary {
     public JNIAccessibleClass addOrUpdateClass(Class<?> classObj, DynamicHub hub, boolean updatedPreserved, Function<Class<?>, JNIAccessibleClass> mappingFunction) {
         assert !isSealed() : "The JNIReflectionDictionary is already sealed";
         DynamicHubKey key = new DynamicHubKey(hub);
-        JNIAccessibleClass existing = classesByHub.get(key);
+        JNIAccessibleClass existing = classes.getHosted(key);
         if (existing == null) {
             JNIAccessibleClass instance = mappingFunction.apply(classObj);
-            classesByHub.put(key, instance);
+            classes.putHosted(key, instance);
             String name = instance.getJNIName();
             classesByName.put(name, instance);
             rescanObject(instance);
@@ -253,27 +237,21 @@ public final class JNIReflectionDictionary {
 
     @Platforms(HOSTED_ONLY.class)
     public Iterable<JNIAccessibleClass> getClasses() {
-        return classesByHub == null ? classesByTypeID.getValues() : classesByHub.getValues();
+        return classes.getValues();
     }
 
     @Platforms(HOSTED_ONLY.class)
     public void seal() {
-        VMError.guarantee(classesByTypeID == null, "The DynamicHub keys should only be populated once");
-        classesByTypeID = EconomicMap.create();
-        MapCursor<DynamicHubKey, JNIAccessibleClass> cursor = classesByHub.getEntries();
-        while (cursor.advance()) {
-            classesByTypeID.put(cursor.getKey().getTypeID(), cursor.getValue());
-        }
-        classesByHub = null;
+        classes.seal();
     }
 
     private boolean isSealed() {
-        return classesByHub == null;
+        return classes.isSealed();
     }
 
     private static JNIAccessibleClass getJniAccessibleClass(JNIReflectionDictionary dictionary, Class<?> classObject) {
         int typeId = DynamicHub.fromClass(classObject).getTypeID();
-        return dictionary.classesByTypeID.get(typeId);
+        return dictionary.classes.getRuntime(typeId);
     }
 
     public static Class<?> getClassObjectByName(CharSequence name) {
@@ -287,7 +265,9 @@ public final class JNIReflectionDictionary {
 
     public static JNIAccessibleClass getJniAccessibleClass(CharSequence name) {
         JNIAccessibleClass result = lookupClassByName(name);
-        if (MetadataTracer.enabled() && (result != null || ClassNameSupport.isValidJNIName(name))) {
+        boolean validJNIName = ClassNameSupport.isValidJNIName(name);
+        boolean metadataRegisteredForReplay = result != null && (result.isNegative() || result.isPreserved());
+        if (MetadataTracer.enabled() && validJNIName && MetadataTracer.shouldTraceMetadata(result == null, metadataRegisteredForReplay)) {
             // trace if class exists (positive query) or name is valid (negative query)
             MetadataTracer.singleton().traceJNIType(ClassNameSupport.jniNameToTypeName(name.toString()));
         }
@@ -365,35 +345,49 @@ public final class JNIReflectionDictionary {
     public static JNIMethodId getDeclaredMethodID(Class<?> classObject, JNIAccessibleMethodDescriptor descriptor, boolean isStatic) {
         JNIAccessibleMethod method = getDeclaredMethod(classObject, descriptor, "getDeclaredMethodID");
         boolean match = (method != null && method.isStatic() == isStatic);
+        traceMethodAccessIfNeeded(classObject, descriptor, method, match, method == null);
         return toMethodID(match ? method : null);
     }
 
     private static JNIAccessibleMethod getDeclaredMethod(Class<?> classObject, JNIAccessibleMethodDescriptor descriptor, String dumpLabel) {
-        if (MetadataTracer.enabled()) {
-            MetadataTracer.singleton().traceJNIType(classObject);
-            MetadataTracer.singleton().traceMethodAccess(classObject, descriptor.getNameConvertToString(), descriptor.getSignatureConvertToString(),
-                            ConfigurationMemberInfo.ConfigurationMemberDeclaration.DECLARED);
-        }
         boolean foundClass = false;
+        JNIAccessibleMethod result = null;
         for (var dictionary : layeredSingletons()) {
             JNIAccessibleClass clazz = getJniAccessibleClass(dictionary, classObject);
             if (clazz != null) {
                 foundClass = true;
                 JNIAccessibleMethod method = clazz.getMethod(descriptor);
                 if (method != null) {
-                    return method;
+                    result = method;
+                    break;
                 }
             }
+        }
+        if (result != null) {
+            return result;
         }
         dump(!foundClass && dumpLabel != null, dumpLabel);
         return null;
     }
 
     public static JNIMethodId getMethodID(Class<?> classObject, CharSequence name, CharSequence signature, boolean isStatic) {
-        JNIAccessibleMethod method = findMethod(classObject, new JNIAccessibleMethodDescriptor(name, signature), "getMethodID");
-        method = checkMethod(method, classObject, name, signature);
+        JNIAccessibleMethodDescriptor descriptor = new JNIAccessibleMethodDescriptor(name, signature);
+        JNIAccessibleMethod rawMethod = findMethod(classObject, descriptor, "getMethodID");
+        traceMethodAccessIfNeeded(classObject, descriptor, rawMethod, false, rawMethod == null && SignatureUtil.isSignatureValid(signature.toString(), false));
+        JNIAccessibleMethod method = checkMethod(rawMethod, classObject, name, signature);
         boolean match = (method != null && method.isStatic() == isStatic && method.isDiscoverableIn(classObject));
+        traceMethodAccessIfNeeded(classObject, descriptor, method, match, false);
         return toMethodID(match ? method : null);
+    }
+
+    private static void traceMethodAccessIfNeeded(Class<?> classObject, JNIAccessibleMethodDescriptor descriptor, JNIAccessibleMethod method, boolean match, boolean traceMissing) {
+        boolean metadataRegisteredForReplay = method != null && (method.isNegative() || (match && method.isPreserved()));
+        if (MetadataTracer.enabled() && MetadataTracer.shouldTraceMetadata(traceMissing, metadataRegisteredForReplay)) {
+            Class<?> traceClass = method != null && match ? method.getDeclaringClassObject() : classObject;
+            MetadataTracer.singleton().traceJNIType(traceClass);
+            MetadataTracer.singleton().traceMethodAccess(traceClass, descriptor.getNameConvertToString(), descriptor.getSignatureConvertToString(),
+                            ConfigurationMemberInfo.ConfigurationMemberDeclaration.DECLARED);
+        }
     }
 
     private static JNIMethodId toMethodID(JNIAccessibleMethod method) {
@@ -426,20 +420,21 @@ public final class JNIReflectionDictionary {
     }
 
     private static JNIAccessibleField getDeclaredField(Class<?> classObject, CharSequence name, boolean isStatic, String dumpLabel) {
-        if (MetadataTracer.enabled()) {
-            MetadataTracer.singleton().traceJNIType(classObject);
-            MetadataTracer.singleton().traceFieldAccess(classObject, name.toString(), ConfigurationMemberInfo.ConfigurationMemberDeclaration.DECLARED);
-        }
         boolean foundClass = false;
+        JNIAccessibleField result = null;
         for (var dictionary : layeredSingletons()) {
             JNIAccessibleClass clazz = getJniAccessibleClass(dictionary, classObject);
             if (clazz != null) {
                 foundClass = true;
                 JNIAccessibleField field = clazz.getField(name);
                 if (field != null && (field.isStatic() == isStatic || field.isNegative())) {
-                    return field;
+                    result = field;
+                    break;
                 }
             }
+        }
+        if (result != null) {
+            return result;
         }
         dump(!foundClass && dumpLabel != null, dumpLabel);
         return null;
@@ -447,6 +442,7 @@ public final class JNIReflectionDictionary {
 
     public static JNIFieldId getDeclaredFieldID(Class<?> classObject, String name, boolean isStatic) {
         JNIAccessibleField field = getDeclaredField(classObject, name, isStatic, "getDeclaredFieldID");
+        traceFieldAccessIfNeeded(classObject, name, field, field != null && !field.isNegative(), field == null);
         field = checkField(field, classObject, name);
         return (field != null) ? field.getId() : Word.nullPointer();
     }
@@ -477,9 +473,21 @@ public final class JNIReflectionDictionary {
     }
 
     public static JNIFieldId getFieldID(Class<?> clazz, CharSequence name, boolean isStatic) {
-        JNIAccessibleField field = findField(clazz, name, isStatic, "getFieldID");
-        field = checkField(field, clazz, name);
-        return (field != null && field.isDiscoverableIn(clazz)) ? field.getId() : Word.nullPointer();
+        JNIAccessibleField rawField = findField(clazz, name, isStatic, "getFieldID");
+        traceFieldAccessIfNeeded(clazz, name, rawField, false, rawField == null);
+        JNIAccessibleField field = checkField(rawField, clazz, name);
+        boolean match = field != null && field.isDiscoverableIn(clazz);
+        traceFieldAccessIfNeeded(clazz, name, field, match, false);
+        return match ? field.getId() : Word.nullPointer();
+    }
+
+    private static void traceFieldAccessIfNeeded(Class<?> classObject, CharSequence name, JNIAccessibleField field, boolean match, boolean traceMissing) {
+        boolean metadataRegisteredForReplay = field != null && (field.isNegative() || (match && field.isPreserved()));
+        if (MetadataTracer.enabled() && MetadataTracer.shouldTraceMetadata(traceMissing, metadataRegisteredForReplay)) {
+            Class<?> traceClass = field != null && match ? field.getDeclaringClass().getClassObject() : classObject;
+            MetadataTracer.singleton().traceJNIType(traceClass);
+            MetadataTracer.singleton().traceFieldAccess(traceClass, name.toString(), ConfigurationMemberInfo.ConfigurationMemberDeclaration.DECLARED);
+        }
     }
 
     public static String getFieldNameByID(Class<?> classObject, JNIFieldId id) {

@@ -31,7 +31,7 @@ import static com.oracle.svm.core.libjvm.WhiteBoxEntryPoints.WHITEBOX_REGISTER_N
 import java.util.Map;
 import java.util.function.Function;
 
-import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
@@ -39,13 +39,14 @@ import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.impl.Word;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.code.CGlobalDataInfo;
-import com.oracle.svm.core.heap.UnknownObjectField;
+import com.oracle.svm.guest.staging.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
 import com.oracle.svm.core.jdk.Target_java_lang_ClassLoader;
-import com.oracle.svm.core.libjvm.LibJVMSupport;
+import com.oracle.svm.core.util.HostedStringDeduplication;
 import com.oracle.svm.shared.BuildPhaseProvider;
 
 import jdk.internal.vm.annotation.Stable;
@@ -80,6 +81,7 @@ public final class JNINativeLinkage {
      */
     public JNINativeLinkage(DynamicHub declaringClass, CharSequence name, CharSequence descriptor) {
         assert declaringClass != null;
+        assert !ImageInfo.inImageBuildtimeCode() : "DynamicHub linkages must not be constructed at build time";
         this.declaringClass = declaringClass;
         this.declaringClassName = MetaUtil.toInternalName(declaringClass.getName());
         this.name = name;
@@ -88,9 +90,10 @@ public final class JNINativeLinkage {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public JNINativeLinkage(ResolvedJavaType declaringClass, CharSequence name, CharSequence descriptor) {
-        this.declaringClassName = MetaUtil.toInternalName(declaringClass.toClassName());
-        this.name = name;
-        this.descriptor = descriptor;
+        HostedStringDeduplication stringTable = HostedStringDeduplication.singleton();
+        this.declaringClassName = stringTable.deduplicate(MetaUtil.toInternalName(declaringClass.toClassName()), true);
+        this.name = stringTable.deduplicate(name.toString(), true);
+        this.descriptor = stringTable.deduplicate(descriptor.toString(), true);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -174,7 +177,7 @@ public final class JNINativeLinkage {
     ///
     /// This is similar to the `lookup_special_native_methods` table in
     /// the HotSpot source file.
-    private static final Map<String, CEntryPointLiteral<?>> VM_IMPLEMENTED_NATIVE_METHODS = ImageSingletons.contains(LibJVMSupport.class)
+    private static final Map<String, CEntryPointLiteral<?>> VM_IMPLEMENTED_NATIVE_METHODS = SubstrateOptions.IncludeWhiteBoxAPI.getValue()
                     ? Map.of(WHITEBOX_REGISTER_NATIVES_SYMBOL, WHITEBOX_REGISTER_NATIVES)
                     : Map.of();
 

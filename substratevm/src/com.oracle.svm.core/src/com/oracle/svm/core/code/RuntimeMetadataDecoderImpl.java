@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,15 +42,16 @@ import org.graalvm.nativeimage.impl.InternalPlatform;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.reflect.RuntimeMetadataDecoder;
 import com.oracle.svm.core.reflect.target.ReflectionObjectFactory;
 import com.oracle.svm.core.reflect.target.Target_java_lang_reflect_Constructor;
 import com.oracle.svm.core.reflect.target.Target_java_lang_reflect_Executable;
 import com.oracle.svm.core.reflect.target.Target_java_lang_reflect_Field;
 import com.oracle.svm.core.reflect.target.Target_java_lang_reflect_Method;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.util.ByteArrayReader;
 import com.oracle.svm.espresso.classfile.Constants;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
@@ -478,8 +479,14 @@ public class RuntimeMetadataDecoderImpl implements RuntimeMetadataDecoder {
     }
 
     private static RuntimeDynamicAccessMetadata decodeDynamicAccessMetadata(UnsafeArrayTypeReader buf, int layerId, boolean preserved) {
-        var conditionTypes = decodeArray(buf, Class.class, _ -> decodeType(buf, layerId), layerId);
-        return RuntimeDynamicAccessMetadata.createDecoded(conditionTypes, preserved);
+        /*
+         * Decoding conditions reflectively allocates internal Class arrays. Tracing those
+         * allocations would recursively decode their own dynamic-access metadata.
+         */
+        try (var _ = MetadataTracer.disableTracing("dynamic access metadata decoding")) {
+            var conditionTypes = decodeArray(buf, Class.class, _ -> decodeType(buf, layerId), layerId);
+            return RuntimeDynamicAccessMetadata.createDecoded(conditionTypes, preserved);
+        }
     }
 
     /**
@@ -605,7 +612,7 @@ public class RuntimeMetadataDecoderImpl implements RuntimeMetadataDecoder {
                 } else {
                     executable = ReflectionObjectFactory.newConstructor(dynamicAccessMetadata, declaringClass, executable.getParameterTypes(), null, modifiers | NEGATIVE_FLAG_MASK, null, null, null,
                                     null, null,
-                                    null);
+                                    null, layerId);
                 }
             }
             if (reflectOnly) {
@@ -653,7 +660,7 @@ public class RuntimeMetadataDecoderImpl implements RuntimeMetadataDecoder {
                 if (!reflectOnly) {
                     return new ConstructorDescriptor(declaringClass, (String[]) parameterTypes);
                 }
-                return ReflectionObjectFactory.newConstructor(dynamicAccessMetadata, declaringClass, (Class<?>[]) parameterTypes, null, modifiers, null, null, null, null, null, null);
+                return ReflectionObjectFactory.newConstructor(dynamicAccessMetadata, declaringClass, (Class<?>[]) parameterTypes, null, modifiers, null, null, null, null, null, null, layerId);
             }
         }
         Class<?>[] exceptionTypes = decodeArray(buf, Class.class, _ -> decodeType(buf, layerId), layerId);
@@ -678,7 +685,7 @@ public class RuntimeMetadataDecoderImpl implements RuntimeMetadataDecoder {
             executable = SubstrateUtil.cast(method, Target_java_lang_reflect_Executable.class);
         } else {
             Constructor<?> constructor = ReflectionObjectFactory.newConstructor(dynamicAccessMetadata, declaringClass, (Class<?>[]) parameterTypes, exceptionTypes,
-                            modifiers, signature, annotations, parameterAnnotations, accessor, reflectParameters, typeAnnotations);
+                            modifiers, signature, annotations, parameterAnnotations, accessor, reflectParameters, typeAnnotations, layerId);
             if (!reflectOnly) {
                 return new ConstructorDescriptor(constructor);
             }
@@ -786,7 +793,12 @@ public class RuntimeMetadataDecoderImpl implements RuntimeMetadataDecoder {
                 result[valueCount++] = element;
             }
         }
-        return Arrays.copyOf(result, valueCount);
+        if (valueCount == length) {
+            return result;
+        }
+        T[] trimmedResult = (T[]) KnownIntrinsics.unvalidatedNewArray(elementType, valueCount);
+        System.arraycopy(result, 0, trimmedResult, 0, valueCount);
+        return trimmedResult;
     }
 
     private static byte[] decodeByteArray(UnsafeArrayTypeReader buf) {

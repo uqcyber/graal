@@ -48,7 +48,7 @@ import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
+import com.oracle.svm.guest.staging.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.memory.NativeMemory;
 import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.posix.PosixUtils;
@@ -175,7 +175,7 @@ public final class PosixPlatformThreads extends PlatformThreads {
             return Word.nullPointer();
         }
         Pthread.pthread_tPointer newThread = UnsafeStackValue.get(Pthread.pthread_tPointer.class);
-        if (Pthread.pthread_create(newThread, attributes, threadStartRoutine.getFunctionPointer(), isolateThread) != 0) {
+        if (Pthread.pthread_create(newThread, attributes, threadStartEntryPoint.getFunctionPointer(), isolateThread) != 0) {
             undoPrepareStartOnError(thread, isolateThread);
             return Word.nullPointer();
         }

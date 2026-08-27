@@ -35,6 +35,7 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 
 import org.graalvm.nativeimage.CurrentIsolate;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
@@ -47,7 +48,6 @@ import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.Isolates;
-import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.code.CodeInfo;
@@ -70,13 +70,11 @@ import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.heap.SuspendSerialGCMaxHeapSize;
 import com.oracle.svm.core.heap.VMOperationInfos;
 import com.oracle.svm.core.interpreter.InterpreterSupport;
-import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.log.StringBuilderLog;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.core.monitor.MonitorSupport;
-import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
 import com.oracle.svm.core.snippets.ExceptionUnwind;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.core.stack.JavaFrame;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.StackFrameVisitor;
@@ -85,9 +83,12 @@ import com.oracle.svm.core.thread.JavaVMOperation;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
 import com.oracle.svm.core.util.PointerUtils;
-import com.oracle.svm.shared.util.TimeUtils;
+import com.oracle.svm.guest.staging.log.Log;
+import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
+import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.shared.util.TimeUtils;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -779,6 +780,15 @@ public final class Deoptimizer {
         InterpreterEnterStub,
 
         /**
+         * Custom prologue: adapt incoming JNI arguments to match the wrapper's signature. For
+         * varargs calls, we will save all native ABI argument registers onto the stack.
+         * <p>
+         * Custom epilogue: copy the raw return bits from the general-purpose return register to the
+         * floating-point return register.
+         */
+        InterpreterJNIUpcallStub,
+
+        /**
          * Custom prologue: store arguments to stack and allocate variable sized frame.
          * <p>
          * Custom epilogue: prepare stack layout and ABI registers for outgoing call.
@@ -786,9 +796,9 @@ public final class Deoptimizer {
         InterpreterLeaveStub,
 
         /**
-         * Like {@link #InterpreterLeaveStub}, but calls a JNI native entry point.
+         * Like {@link #InterpreterLeaveStub}, but calls a native entry point.
          */
-        InterpreterLeaveJNIStub,
+        InterpreterNativeDowncallStub,
 
         /**
          * Custom prologue: move gp return register to first argument register.
@@ -796,7 +806,7 @@ public final class Deoptimizer {
         InterpreterDeoptEntryPointStub;
 
         public boolean isInterpreterStub() {
-            return equals(InterpreterEnterStub) || equals(InterpreterLeaveStub) || equals(InterpreterLeaveJNIStub);
+            return equals(InterpreterEnterStub) || equals(InterpreterJNIUpcallStub) || equals(InterpreterLeaveStub) || equals(InterpreterNativeDowncallStub);
         }
     }
 
@@ -1145,13 +1155,34 @@ public final class Deoptimizer {
     }
 
     private static CFunctionPointer getLazyDeoptStub(CodeInfoQueryResult sourceChunk, CodePointer pc, boolean ignoreNonDeoptimizable) {
-        if (hasInstalledCodeInterpreterDeoptTarget(pc)) {
+        if (InterpreterSupport.isEnabled() && hasInstalledCodeInterpreterDeoptTarget(pc)) {
             /*
-             * Runtime-compiled Ristretto code has no AOT deopt target method entry, but its
-             * CodeInfo still records whether this deopt entry leaves an object in the GP return
-             * register. The compiled method signature is too broad for non-call deopt entries.
+             * Do not use sourceChunk.getDeoptReturnValueIsObject() here. That bit describes an AOT
+             * deoptimization-entry call site, while Ristretto code deoptimizes to a Crema
+             * interpreter frame. It can therefore be false even when the ABI return register
+             * contains an object.
+             *
+             * This can happen for an AfterPop frame at an invoke BCI. The callee has returned and
+             * the caller has consumed the arguments, but the result still exists only in the ABI
+             * return register. It belongs to the invoke at the decoded BCI, possibly in an inlined
+             * frame, rather than to the compiled method's declared return type.
+             *
+             * The correct stub must be selected before the DeoptimizedFrame is constructed,
+             * because construction can allocate and trigger a moving GC. The object-return stub
+             * exposes the register as a GC root so that GC can update it. The primitive stub
+             * preserves only an UnsignedWord, which could leave a stale address if the register
+             * contains an object.
+             *
+             * For this reason, classify the return value only for an AfterPop frame at an invoke
+             * in a Ristretto method. Determine its kind from existing interpreter linkage without
+             * linking during deoptimization. All other states use the primitive stub. The AOT path
+             * below continues to use the target deoptimization entry's CodeInfo bit.
              */
-            return selectLazyDeoptStub(sourceChunk.getDeoptReturnValueIsObject());
+            boolean objectReturnValueIsObject = InterpreterSupport.singleton().isInterpreterDeoptReturnValueObject(sourceChunk.getFrameInfo());
+            if (ImageSingletons.contains(LazyDeoptStubSelectionRecorder.class)) {
+                ImageSingletons.lookup(LazyDeoptStubSelectionRecorder.class).recordLazyDeoptStubSelection(sourceChunk, pc, objectReturnValueIsObject);
+            }
+            return selectLazyDeoptStub(objectReturnValueIsObject);
         }
 
         FrameInfoQueryResult frameInfo = sourceChunk.getFrameInfo();
@@ -1184,8 +1215,16 @@ public final class Deoptimizer {
                         : DeoptimizationSupport.getLazyDeoptStubPrimitiveReturnPointer();
     }
 
+    public static boolean canEagerlyDeoptimize(FrameInfoQueryResult frameInfo, CodePointer pc) {
+        /*
+         * Eager deoptimization needs either complete AOT deopt target metadata or a Ristretto
+         * interpreter deopt target for installed code.
+         */
+        return hasAOTDeoptTargetMethod(frameInfo) || hasInstalledCodeInterpreterDeoptTarget(pc);
+    }
+
     private DeoptimizedFrame deoptSourceFrameEagerly(CodePointer pc, boolean ignoreNonDeoptimizable) {
-        if (!hasAOTDeoptTargetMethod(sourceChunk.getFrameInfo()) && !hasInstalledCodeInterpreterDeoptTarget(pc)) {
+        if (!canEagerlyDeoptimize(sourceChunk.getFrameInfo(), pc)) {
             if (ignoreNonDeoptimizable) {
                 return null;
             } else {
@@ -1846,6 +1885,11 @@ public final class Deoptimizer {
             current = current.getCaller();
         }
         throw VMError.shouldNotReachHere(sb.toString());
+    }
+
+    /** Test-only observer for lazy-deoptimization stub selection. */
+    public interface LazyDeoptStubSelectionRecorder {
+        void recordLazyDeoptStubSelection(CodeInfoQueryResult sourceChunk, CodePointer pc, boolean objectReturnValueIsObject);
     }
 
 }

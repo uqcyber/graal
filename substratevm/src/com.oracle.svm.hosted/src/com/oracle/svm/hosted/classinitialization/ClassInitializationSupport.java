@@ -53,6 +53,7 @@ import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.BaseLayerType;
 import com.oracle.graal.pointsto.reports.ReportUtils;
+import com.oracle.svm.core.AssertionsSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.util.UserError;
@@ -66,6 +67,7 @@ import com.oracle.svm.shared.singletons.traits.BuiltinTraits.PartiallyLayerAware
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.HostedModuleSupport;
 import com.oracle.svm.util.JVMCIRuntimeClassInitializationSupport;
 import com.oracle.svm.util.OriginalClassProvider;
@@ -74,6 +76,7 @@ import jdk.graal.compiler.core.common.ContextClassLoaderScope;
 import jdk.graal.compiler.java.LambdaUtils;
 import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
@@ -155,6 +158,14 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
 
     boolean configurationSealed;
 
+    /**
+     * Type-reached tracking is an input to class-initializer simulation. Adding a tracking
+     * requirement can make a class initializer that was previously considered simulatable no
+     * longer simulatable. Since published simulation results and decoded graphs are not
+     * invalidated, this input must not change once analysis has started.
+     */
+    private boolean typeReachedTrackingSealed;
+
     final ImageClassLoader loader;
 
     /**
@@ -172,6 +183,22 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
         this.loader = loader;
     }
 
+    /// Gets the assertion status for the declaring class of `field` if `field` is the synthetic field
+    /// injected by javac to implement assertions (i.e. `static final boolean $assertionsDisabled`)
+    /// and the assertion status is a build-time constant (i.e., cannot change at runtime).
+    ///
+    /// @return the fixed assertion status for the declaring class of `field` (`true` if enabled, `false` if disabled)
+    /// or `null` if it is not build-time constant
+    public static Boolean foldedAssertionStatus(ResolvedJavaField field) {
+        if (field.isFinal() && field.isStatic() && field.isSynthetic() && field.getName().startsWith(AssertionsSupport.SYNTHETIC_ASSERTIONS_DISABLED_FIELD_NAME)) {
+            if (singleton().shouldFoldAssertionStatus(field.getDeclaringClass())) {
+                Class<?> javaClass = OriginalClassProvider.getJavaClass(field.getDeclaringClass());
+                return AssertionsSupport.singleton().desiredAssertionStatus(javaClass);
+            }
+        }
+        return null;
+    }
+
     /**
      * Seal the configuration, blocking if another thread is trying to seal the configuration or an
      * unsealed-configuration window is currently open in another thread.
@@ -180,14 +207,14 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
      */
     public synchronized void sealConfiguration() {
         setConfigurationSealed(true);
+        typeReachedTrackingSealed = true;
         if (ClassInitializationOptions.PrintClassInitialization.getValue()) {
             List<ClassOrPackageConfig> allConfigs = classInitializationConfiguration.allConfigs();
             allConfigs.sort(Comparator.comparing(ClassOrPackageConfig::getName));
             ReportUtils.report("class initialization configuration", SubstrateOptions.reportsPath(), "class_initialization_configuration", "csv", writer -> {
                 writer.println("Class or Package Name, Initialization Kind, Reasons");
                 for (ClassOrPackageConfig config : allConfigs) {
-                    writer.append(config.getName()).append(", ").append(config.getKind().toString()).append(", ")
-                                    .append(String.join(" and ", config.getReasons())).append(System.lineSeparator());
+                    writer.append(config.getName()).append(", ").append(config.getKind().toString()).append(", ").append(String.join(" and ", config.getReasons())).append(System.lineSeparator());
                 }
             });
         }
@@ -203,8 +230,11 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
     public synchronized void withUnsealedConfiguration(Runnable action) {
         var previouslySealed = configurationSealed;
         setConfigurationSealed(false);
-        action.run();
-        setConfigurationSealed(previouslySealed);
+        try {
+            action.run();
+        } finally {
+            setConfigurationSealed(previouslySealed);
+        }
     }
 
     private void setConfigurationSealed(boolean sealed) {
@@ -245,10 +275,7 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
      * Returns all classes of a single {@link InitKind}.
      */
     Set<Class<?>> classesWithKind(InitKind kind) {
-        return classInitKinds.entrySet().stream()
-                        .filter(e -> e.getValue() == kind)
-                        .map(Map.Entry::getKey)
-                        .collect(Collectors.toSet());
+        return classInitKinds.entrySet().stream().filter(e -> e.getValue() == kind).map(Map.Entry::getKey).collect(Collectors.toSet());
     }
 
     /**
@@ -276,6 +303,21 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
         return computeInitKindAndMaybeInitializeClass(clazz) == InitKind.BUILD_TIME;
     }
 
+    /// Returns whether the assertion status for `type` can be fixed during image building.
+    public boolean shouldFoldAssertionStatus(ResolvedJavaType type) {
+        /*
+         * A class whose initializer is not folded retains the JDK assertion-status lookup, which
+         * prevents class-initializer simulation. Consequently, this predicate agrees with the
+         * runtime ClassInitializationInfo build-time flag used by DynamicHub.
+         */
+        return !SubstrateOptions.StrictRuntimeJavaOptions.getValue() || maybeInitializeAtBuildTime(type);
+    }
+
+    /// Returns whether the assertion status for `clazz` can be fixed during image building.
+    public boolean shouldFoldAssertionStatus(Class<?> clazz) {
+        return !SubstrateOptions.StrictRuntimeJavaOptions.getValue() || maybeInitializeAtBuildTime(clazz);
+    }
+
     /**
      * Returns {@code true} if the provided type is registered to be initialized at build time.
      * <p>
@@ -292,7 +334,12 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
      * class initialization fails.
      */
     InitKind ensureClassInitialized(Class<?> clazz, boolean allowErrors) {
-        ClassLoader libGraalLoader = (ClassLoader) loader.classLoaderSupport.getLibGraalLoader();
+        /*
+         * GR-76456: This converts a guest class-loader constant back to a builder-hosted object.
+         * Terminus must perform class initialization and context-loader handling in the guest
+         * context instead.
+         */
+        ClassLoader libGraalLoader = GuestAccess.get().getSnippetReflection().asObject(ClassLoader.class, loader.classLoaderSupport.getLibGraalLoader());
         ClassLoader cl = clazz.getClassLoader();
         // Graal and JVMCI make use of ServiceLoader which uses the
         // context class loader so it needs to be the libgraal loader.
@@ -448,6 +495,18 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
         }
 
         return b.toString();
+    }
+
+    /**
+     * Initializes the class during image building, and reports an error if the user requested to
+     * delay initialization to runtime.
+     */
+    public void forceInitializeHosted(ResolvedJavaType type, String reason, boolean allowInitializationErrors) {
+        /*
+         * GR-76456: This converts a guest JVMCI type back to a builder-hosted Class. Terminus must
+         * perform class initialization in the guest context instead.
+         */
+        forceInitializeHosted(OriginalClassProvider.getJavaClass(type), reason, allowInitializationErrors);
     }
 
     /**
@@ -630,13 +689,13 @@ public class ClassInitializationSupport implements JVMCIRuntimeClassInitializati
         }
     }
 
-    public void addForTypeReachedTracking(Class<?> clazz) {
+    public synchronized void addForTypeReachedTracking(Class<?> clazz) {
         if (TrackTypeReachedOnInterfaces.getValue() && clazz.isInterface() && !metaAccess.lookupJavaType(clazz).declaresDefaultMethods()) {
             LogUtils.info("Detected 'typeReached' on interface type without default methods: %s", clazz.getName());
         }
 
         if (!isAlwaysReached(clazz)) {
-            UserError.guarantee(!configurationSealed || typesRequiringReachability.contains(clazz),
+            UserError.guarantee(!typeReachedTrackingSealed || typesRequiringReachability.contains(clazz),
                             "It is not possible to register types for reachability tracking after the analysis has started if they were not registered before analysis started. Trying to register: %s",
                             clazz.getName());
             typesRequiringReachability.add(clazz);

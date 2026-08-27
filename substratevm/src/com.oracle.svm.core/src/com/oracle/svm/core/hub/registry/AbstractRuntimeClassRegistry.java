@@ -53,6 +53,7 @@ import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
 import com.oracle.svm.espresso.classfile.descriptors.ValidationException;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
@@ -60,6 +61,7 @@ import com.oracle.svm.shared.util.VMError;
 import jdk.internal.loader.ClassLoaders;
 import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.meta.MetaUtil;
+import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
  * This class registry is used for ClassLoader instances if runtime class loading is supported.
@@ -88,6 +90,7 @@ public abstract sealed class AbstractRuntimeClassRegistry extends AbstractClassR
     private static final Unsafe UNSAFE = Unsafe.getUnsafe();
     private static final Class<?>[] EMPTY_CLASS_ARRAY = new Class<?>[0];
     private static final ClassLoader bootLoader;
+
     static {
         Method method = ReflectionUtil.lookupMethod(ClassLoaders.class, "bootLoader");
         bootLoader = ReflectionUtil.invokeMethod(method, null);
@@ -134,6 +137,7 @@ public abstract sealed class AbstractRuntimeClassRegistry extends AbstractClassR
         if (existing instanceof Placeholder placeholder && placeholder.isSuperProbingThread()) {
             throw new ClassCircularityError(name.toString());
         }
+        RuntimeClassLoading.guaranteeClassLoadingAllowed();
         Class<?> result = doLoadClass(name);
         if (result == null) {
             // The boot class loader can return null
@@ -171,6 +175,7 @@ public abstract sealed class AbstractRuntimeClassRegistry extends AbstractClassR
     }
 
     private Class<?> defineClassInner(Symbol<Type> typeOrNull, byte[] b, int off, int len, ClassDefinitionInfo info) {
+        RuntimeClassLoading.guaranteeClassLoadingAllowed();
         byte[] data = b;
         if (off != 0 || b.length != len) {
             if (len < 0) {
@@ -212,6 +217,7 @@ public abstract sealed class AbstractRuntimeClassRegistry extends AbstractClassR
         } else if (info.isStrongHidden()) {
             registerStrongHiddenClass(clazz);
         }
+        traceDefine(info, getClassLoader(), clazz);
         return clazz;
     }
 
@@ -338,6 +344,39 @@ public abstract sealed class AbstractRuntimeClassRegistry extends AbstractClassR
 
     private void registerStrongHiddenClass(Class<?> clazz) {
         strongHiddenClasses.add(clazz);
+    }
+
+    private static void traceDefine(ClassDefinitionInfo info, ClassLoader loader, Class<?> clazz) {
+        if (RuntimeClassLoading.Options.TraceClassLoading.getValue()) {
+            DynamicHub hub = DynamicHub.fromClass(clazz);
+            ResolvedJavaType interpreterType = hub.getInterpreterType();
+            String className = interpreterType.toJavaName();
+            String source = info.source;
+            source = source == null ? "<unknown>" : source;
+            Log.log().string(traceMessage(className, loader, source, "load")).newline();
+        }
+        if (RuntimeClassLoading.Options.LogClassLoadingCauseFor.getValue() != null) {
+            String className = DynamicHub.fromClass(clazz).getInterpreterType().toJavaName();
+            String pattern = RuntimeClassLoading.Options.LogClassLoadingCauseFor.getValue();
+            if (pattern.equals("*") || className.contains(pattern)) {
+                Log.log().string("[class,load,cause] Java stack when loading ").string(className).newline();
+                StackTraceElement[] stackTrace = getCurrentStackTrace();
+                for (StackTraceElement stackTraceElement : stackTrace) {
+                    Log.log().string("[class,load,cause]   at ").string(stackTraceElement.toString()).newline();
+                }
+            }
+        }
+    }
+
+    private static StackTraceElement[] getCurrentStackTrace() {
+        return new Throwable().getStackTrace();
+    }
+
+    public static String traceMessage(String className, ClassLoader loader, String source, String... prefixes) {
+        boolean includeSource = source != null && !source.isEmpty();
+        // Note: This already wraps the name in single quotation mark (').
+        String loaderDesc = ClassRegistries.loaderNameAndId(loader);
+        return "[class," + String.join(",", prefixes) + "] " + className + " loader=" + loaderDesc + (includeSource ? " source='" + source + "'" : "");
     }
 
     /**

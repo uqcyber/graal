@@ -96,13 +96,12 @@ public class BytecodeDSLBuiltins {
                                         This operation can be used to group multiple operations together in a single operation.
                                         The result of a Block is the result produced by the last child (or void, if no value is produced).
                                         """) //
-                        .setTransparent(true) //
+                        .setForwardsChildResult(true) //
                         .setVariadic(true, 0) //
-                        .setDynamicOperands(transparentOperationChild());
+                        .setDynamicOperands(variadicBody());
         m.rootOperation = m.operation(OperationKind.ROOT, "Root", rootOperationJavadoc(m)) //
-                        .setTransparent(true) //
-                        .setVariadic(true, 0) //
-                        .setDynamicOperands(transparentOperationChild());
+                        // Root is not technically variadic, but its user-facing body is variadic.
+                        .setDynamicOperands(variadicBody());
         m.ifThenOperation = m.operation(OperationKind.IF_THEN, "IfThen", """
                         IfThen implements an if-then statement. It evaluates {@code condition}, which must produce a boolean. If the value is {@code true}, it executes {@code thens}.
                         This is a void operation; {@code thens} can also be void.
@@ -196,7 +195,7 @@ public class BytecodeDSLBuiltins {
                                         """) //
                         .setVoid(true) //
                         .setVariadic(true, 0) //
-                        .setDynamicOperands(transparentOperationChild()) //
+                        .setDynamicOperands(variadicBody()) //
                         .setOperationBeginArguments(new OperationArgument(context.getType(short.class), Encoding.SHORT, "finallyOperationSp",
                                         "the operation stack pointer for the finally operation that created the FinallyHandler")) //
                         .setInternal();
@@ -239,6 +238,10 @@ public class BytecodeDSLBuiltins {
                         """) //
                         .setInstruction(m.instruction(InstructionKind.LOAD_EXCEPTION, "load.exception", m.signature(Object.class))//
                                         .addImmediate(ImmediateKind.STACK_POINTER, "exception_sp"));
+        m.loadStackValueInstruction = m.instruction(InstructionKind.LOAD_STACKVALUE, "load.stackvalue", m.signature(Object.class)) //
+                        .addImmediate(ImmediateKind.SHORT, "offset");
+        m.storeStackValueInstruction = m.instruction(InstructionKind.STORE_STACKVALUE, "store.stackvalue", m.signature(void.class, "value", Object.class, Object.class)) //
+                        .addImmediate(ImmediateKind.SHORT, "offset");
         m.loadLocalOperation = m.operation(OperationKind.LOAD_LOCAL, "LoadLocal",
                         String.format("""
                                         LoadLocal reads {@code local} from the current frame.
@@ -300,39 +303,38 @@ public class BytecodeDSLBuiltins {
                             .setDynamicOperands(child("value")).setInstruction(m.yieldInstruction);
         }
         m.sourceOperation = m.operation(OperationKind.SOURCE, "Source", """
-                        Source associates the children in its {@code body} with {@code source}. Together with SourceSection, it encodes source locations for operations in the program.
+                        Source associates the operations in its {@code body} with {@code source}. Together with SourceSection, it encodes source locations for operations in the program.
+                        This operation is metadata-only and does not affect the operation tree shape. Operations in its body appear as children of the enclosing operation.
                         """) //
-                        .setTransparent(true) //
                         .setVariadic(true, 0) //
                         .setOperationBeginArguments(new OperationArgument(types.Source, Encoding.CONSTANT, "source", "the source object to associate with the enclosed operations")) //
-                        .setDynamicOperands(transparentOperationChild());
+                        .setDynamicOperands(variadicBody());
 
         String sourceSectionDoc = """
-                        SourceSection associates the children in its {@code body} with the source section described by its attributes.
+                        SourceSection associates the operations in its {@code body} with the source section described by its attributes.
                         This operation must be (directly or indirectly) enclosed within a Source operation.
+                        This operation is metadata-only and does not affect the operation tree shape. Operations in its body appear as children of the enclosing operation.
                         """;
 
         List<OperationArgument> sourceSectionArguments = new ArrayList<>();
-        sourceSectionArguments.add(new OperationArgument(context.getType(int.class), Encoding.INTEGER, "tag", "a tag indicating the kind of source section"));
         for (int i = 0; i < SourceSectionKind.MAX_ATTRIBUTES; i++) {
             sourceSectionArguments.add(new OperationArgument(context.getType(int.class), Encoding.INTEGER, "attr" + (i + 1), "data attribute " + (i + 1) + " of the source section"));
         }
+        sourceSectionArguments.add(new OperationArgument(context.getType(int.class), Encoding.INTEGER, "tag", "a tag indicating the kind of source section"));
 
         m.sourceSectionPrefixOperation = m.operation(OperationKind.SOURCE_SECTION, "SourceSectionPrefix",
                         sourceSectionDoc, "SourceSectionPrefix") //
-                        .setTransparent(true) //
                         .setPrivate() //
                         .setVariadic(true, 0) //
                         .setOperationBeginArguments(sourceSectionArguments.toArray(OperationArgument[]::new)) //
-                        .setDynamicOperands(transparentOperationChild());
+                        .setDynamicOperands(variadicBody());
 
         m.sourceSectionSuffixOperation = m.operation(OperationKind.SOURCE_SECTION, "SourceSectionSuffix",
                         sourceSectionDoc, "SourceSectionSuffix") //
-                        .setTransparent(true) //
                         .setPrivate() //
                         .setVariadic(true, 0) //
                         .setOperationEndArguments(sourceSectionArguments.toArray(OperationArgument[]::new)) //
-                        .setDynamicOperands(transparentOperationChild());
+                        .setDynamicOperands(variadicBody());
 
         if (m.enableTagInstrumentation) {
             m.tagEnterInstruction = m.instruction(InstructionKind.TAG_ENTER, "tag.enter", m.signature(void.class));
@@ -346,7 +348,7 @@ public class BytecodeDSLBuiltins {
                                             Tag associates {@code tagged} with the given tags.
                                             When the {@link BytecodeConfig} includes one or more of the given tags, the interpreter will automatically invoke instrumentation probes when entering/leaving {@code tagged}.
                                             """) //
-                            .setTransparent(true) //
+                            .setForwardsChildResult(true) //
                             .setOperationBeginArguments(
                                             new OperationArgument(new ArrayCodeTypeMirror(context.getDeclaredType(Class.class)), Encoding.TAGS, "newTags",
                                                             "the tags to associate with the enclosed operations"))//
@@ -463,6 +465,36 @@ public class BytecodeDSLBuiltins {
      * specification only if an operation with the same name is not already defined.
      */
     private static void addBackwardCompatibleOperations(BytecodeDSLModel m, TruffleTypes types) {
+        m.bindStackValueOperation = m.operation(OperationKind.BIND_STACKVALUE, "BindStackValue",
+                        """
+                                        BindStackValue binds its child's result while it remains live on the operand stack.
+                                        It must be directly enclosed by a custom operation or Block, ignoring Source and SourceSection metadata operations.
+                                        The returned StackValue is valid while the enclosing operation is active.
+                                        """, "BindStackValue", true);
+        if (m.bindStackValueOperation != null) {
+            m.bindStackValueOperation.setDynamicOperands(child("value"));
+        }
+
+        m.loadStackValueOperation = m.operation(OperationKind.LOAD_STACKVALUE, "LoadStackValue", """
+                        LoadStackValue reads {@code stackValue}.
+                        The stack value must belong to an active custom operation or Block in the current root.
+                        """, "LoadStackValue", true);
+        if (m.loadStackValueOperation != null) {
+            m.loadStackValueOperation.setOperationBeginArguments(new OperationArgument(types.StackValue, Encoding.STACK_VALUE, "stackValue", "the stack value to load")) //
+                            .setInstruction(m.loadStackValueInstruction);
+        }
+
+        m.storeStackValueOperation = m.operation(OperationKind.STORE_STACKVALUE, "StoreStackValue", """
+                        StoreStackValue writes the value produced by {@code value} into {@code stackValue}.
+                        The stack value must belong to an active custom operation or Block in the current root.
+                        """, "StoreStackValue", true);
+        if (m.storeStackValueOperation != null) {
+            m.storeStackValueOperation.setVoid(true) //
+                            .setOperationBeginArguments(new OperationArgument(types.StackValue, Encoding.STACK_VALUE, "stackValue", "the stack value to store to")) //
+                            .setDynamicOperands(child("value")) //
+                            .setInstruction(m.storeStackValueInstruction);
+        }
+
         OperationModel clearLocalOperation = m.operation(OperationKind.CLEAR_LOCAL, "ClearLocal", String.format("""
                         ClearLocal clears {@code local} in the current frame.
                         Until a value is written to the local, a subsequent LoadLocal %s.
@@ -519,7 +551,7 @@ public class BytecodeDSLBuiltins {
         return new DynamicOperandModel(List.of(name), true, false);
     }
 
-    private static DynamicOperandModel transparentOperationChild() {
+    private static DynamicOperandModel variadicBody() {
         return new DynamicOperandModel(List.of("body"), true, true);
     }
 }

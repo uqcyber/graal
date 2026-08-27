@@ -37,7 +37,7 @@ import com.oracle.svm.hosted.webimage.codegen.LowerableResource;
 import com.oracle.svm.hosted.webimage.codegen.LowerableResources;
 import com.oracle.svm.hosted.webimage.codegen.oop.ClassLowerer;
 import com.oracle.svm.shared.util.ModuleSupport;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -50,11 +50,10 @@ import net.java.html.js.JavaScriptResource;
 public class JavaScriptBodyFeature implements Feature {
 
     private static String[] getJSResources(ResolvedJavaType type) {
-        var requiredJavaScriptResources = AnnotationUtil.getAnnotationsByType(type, JavaScriptResource.class, JavaScriptResource.Group.class,
-                        JavaScriptResource.Group::value);
+        var requiredJavaScriptResources = GuestAnnotationAccess.getAnnotationValuesByType(type, JavaScriptResource.class, JavaScriptResource.Group.class);
         assert !requiredJavaScriptResources.isEmpty() ||
-                        !AnnotationUtil.isAnnotationPresent(type, JavaScriptResource.Group.class) : "Repeated annotation not detected by getDeclaredAnnotationsByType";
-        return requiredJavaScriptResources.stream().map(JavaScriptResource::value).toArray(String[]::new);
+                        !GuestAnnotationAccess.isAnnotationPresent(type, JavaScriptResource.Group.class) : "Repeated annotation not detected by metadata lookup";
+        return requiredJavaScriptResources.stream().map(JavaScriptResourceGuestValue::from).map(JavaScriptResourceGuestValue::value).toArray(String[]::new);
     }
 
     @Override
@@ -81,7 +80,7 @@ public class JavaScriptBodyFeature implements Feature {
         /*
          * Methods annotated with @JavaScriptBody are never trivial
          */
-        return AnnotationUtil.isAnnotationPresent(callee, JavaScriptBody.class);
+        return GuestAnnotationAccess.isAnnotationPresent(callee, JavaScriptBody.class);
     }
 
     @Override
@@ -104,7 +103,7 @@ public class JavaScriptBodyFeature implements Feature {
         }
 
         private static boolean isJavaScriptBodyStubMethod(ResolvedJavaMethod method) {
-            return AnnotationUtil.isAnnotationPresent(method, JavaScriptBody.class);
+            return GuestAnnotationAccess.isAnnotationPresent(method, JavaScriptBody.class);
         }
     }
 }

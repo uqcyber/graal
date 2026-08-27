@@ -100,6 +100,7 @@ import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.core.jdk.VectorAPIEnabled;
 import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.nodes.SubstrateMethodCallTargetNode;
+import com.oracle.svm.core.sboutlining.OutlinedSBMethodHolder;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.ConditionalConfigurationRegistry;
@@ -125,7 +126,7 @@ import com.oracle.svm.shared.util.ModuleSupport;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.debug.GraalError;
@@ -924,6 +925,7 @@ public class ForeignFunctionsFeature implements InternalFeature, ForeignHostedSu
 
         registerSafeArenaAccessorClass(metaAccess, FactoryMethodHolder.class);
         registerSafeArenaAccessorClass(metaAccess, FactoryThrowMethodHolder.class);
+        registerSafeArenaAccessorClass(metaAccess, OutlinedSBMethodHolder.class);
         registerSafeArenaAccessorClass(metaAccess, LogUtils.class);
 
         /*
@@ -1040,7 +1042,7 @@ public class ForeignFunctionsFeature implements InternalFeature, ForeignHostedSu
                 if (MethodVariant.isOriginalMethod(b.getMethod())) { // not for hosted compilation
                     return false;
                 }
-                if (!AnnotationUtil.isAnnotationPresent(b.getMethod(), SharedArenaSupport.SCOPED_ANNOTATION)) {
+                if (!GuestAnnotationAccess.isAnnotationPresent(b.getMethod(), SharedArenaSupport.SCOPED_ANNOTATION)) {
                     return false;
                 }
                 MethodCallTargetNode mt = b.add(new SubstrateMethodCallTargetNode(InvokeKind.Static, checkValidStateRawInRuntimeCompiledCode, args, b.getInvokeReturnStamp(b.getAssumptions())));

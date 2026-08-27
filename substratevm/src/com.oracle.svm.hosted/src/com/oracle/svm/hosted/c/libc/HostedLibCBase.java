@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.hosted.c.libc;
 
+import com.oracle.svm.hosted.LibCSpecificGuestValue;
 import java.util.List;
 import java.util.Locale;
 
@@ -33,7 +34,8 @@ import org.graalvm.nativeimage.Platform;
 import com.oracle.svm.core.c.libc.LibCBase;
 import com.oracle.svm.core.c.libc.LibCSpecific;
 import com.oracle.svm.hosted.image.AbstractImage;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
 
 import jdk.graal.compiler.vmaccess.ResolvedJavaPackage;
@@ -48,17 +50,18 @@ public interface HostedLibCBase extends LibCBase {
     }
 
     static boolean containsLibCAnnotation(Annotated element) {
-        return AnnotationUtil.getAnnotationValue(element, LibCSpecific.class) != null;
+        return GuestAnnotationAccess.getAnnotationValue(element, LibCSpecific.class) != null;
     }
 
     static boolean isProvidedInCurrentLibc(Annotated element) {
-        LibCSpecific targetLibC = AnnotationUtil.getAnnotation(element, LibCSpecific.class);
+        LibCSpecificGuestValue targetLibC = LibCSpecificGuestValue.get(element);
         if (targetLibC == null) {
             return false;
         }
         LibCBase currentLibC = ImageSingletons.lookup(LibCBase.class);
-        for (Class<? extends LibCBase> aClass : targetLibC.value()) {
-            if (aClass.isAssignableFrom(currentLibC.getClass())) {
+        var currentLibCType = GuestAccess.get().lookupType(currentLibC.getClass());
+        for (var libCType : targetLibC.value()) {
+            if (libCType.isAssignableFrom(currentLibCType)) {
                 return true;
             }
         }

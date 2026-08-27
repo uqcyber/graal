@@ -25,7 +25,7 @@
 package com.oracle.svm.core.classinitialization;
 
 import static com.oracle.svm.shared.NeverInline.CALLER_CATCHES_IMPLICIT_EXCEPTIONS;
-import static com.oracle.svm.core.snippets.KnownIntrinsics.readCallerStackPointer;
+import static com.oracle.svm.guest.staging.core.graal.KnownIntrinsics.readCallerStackPointer;
 
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -659,10 +659,8 @@ public final class ClassInitializationInfo {
 
         /*
          * Step 8: Next, determine whether assertions are enabled for C by querying its defining
-         * loader.
-         *
-         * Nothing to do for this step, Substrate VM fixes the assertion status during image
-         * building.
+         * loader. The compiled class initializer performs this query when assertion code was
+         * preserved for run time; otherwise image building already fixed the assertion status.
          */
 
         /*

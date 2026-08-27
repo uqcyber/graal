@@ -561,6 +561,16 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
                     "working_dir": "/",
                     "fd_limit": 4096,
                 }
+                # Quarkus Tika loads JDK shared libraries at run time. They are
+                # emitted next to the application image and must be included in
+                # GraalHost's verified set. They are not needed by the other
+                # Barista benchmarks.
+                if suite.benchmarkName() == "quarkus-tika":
+                    graalhost_config["env"] = {"LD_LIBRARY_PATH": str(output_dir)}
+                    graalhost_config["fsmappings"].extend(
+                        {"concrete": str(library), "virt": str(library), "verif": True}
+                        for library in sorted(output_dir.glob("lib*.so"))
+                    )
                 json.dump(graalhost_config, graalhost_config_handle, indent=4)
 
             graalhost_cmd = ["graalhost", "--enable_resolving_env_refs", f"--run_config=@{graalhost_config_file}", "--log_to=syslog", "--run"]
@@ -615,7 +625,7 @@ class BaristaNativeImageBenchmarkSuite(mx_sdk_benchmark.BaristaBenchmarkSuite, m
             ni_barista_cmd = [str(suite.baristaHarnessPath()), "--mode", "native", "--app-executable", app_image]
             if barista_workload is not None:
                 ni_barista_cmd.append(f"--config={barista_workload}")
-            ni_barista_cmd += suite.runArgs(bm_suite_args) + self._energyTrackerExtraOptions(suite)
+            ni_barista_cmd += suite.runArgs(bm_suite_args) + self._energyTrackerExtraOptions(suite) + self._pagefaultsTrackerExtraOptions(suite)
             ni_barista_cmd += parse_prefixed_args("-Dnative-image.benchmark.extra-jvm-arg=", bm_suite_args)
             if stage.is_instrument():
                 # Make instrument run short
@@ -1050,15 +1060,25 @@ class SpecJVM2008NativeImageBenchmarkSuite(mx_sdk_benchmark.SpecJvm2008Benchmark
     def extra_agent_run_arg(self, benchmark, args, image_run_args):
         return super().extra_agent_run_arg(benchmark, args, image_run_args) + SpecJVM2008NativeImageBenchmarkSuite.short_run_args
 
+    def native_image_run_system_properties(self, args):
+        _, _, _, system_properties, _, _, _ = mx_sdk_benchmark.NativeImageVM.extract_benchmark_arguments(
+            args, self.all_command_line_args_are_vm_args())
+        return system_properties
+
+    def native_image_run_args(self, args, image_run_args, stage_run_args):
+        return self.native_image_run_system_properties(args) + ["--"] + image_run_args + stage_run_args
+
     def extra_profile_run_arg(self, benchmark, args, image_run_args, should_strip_run_args):
-        return super().extra_profile_run_arg(benchmark, args, image_run_args, should_strip_run_args) + SpecJVM2008NativeImageBenchmarkSuite.short_run_args
+        image_run_args = super().extra_profile_run_arg(benchmark, args, image_run_args, should_strip_run_args)
+        return self.native_image_run_args(args, image_run_args, SpecJVM2008NativeImageBenchmarkSuite.short_run_args)
 
     def extra_image_build_argument(self, benchmark, args):
         # The reason to add `-H:CompilationExpirationPeriod` is that we encounter non-deterministic compiler crash due to expiration (GR-50701).
-        return super().extra_image_build_argument(benchmark, args) + ['-H:CompilationExpirationPeriod=600']
+        return super().extra_image_build_argument(benchmark, args) + ['-H:CompilationExpirationPeriod=600', '-H:+StrictRuntimeJavaOptions']
 
     def extra_run_arg(self, benchmark, args, image_run_args):
-        return super().extra_run_arg(benchmark, args, image_run_args) + SpecJVM2008NativeImageBenchmarkSuite.long_run_args
+        image_run_args = super().extra_run_arg(benchmark, args, image_run_args)
+        return self.native_image_run_args(args, image_run_args, SpecJVM2008NativeImageBenchmarkSuite.long_run_args)
 
     def successPatterns(self):
         return super().successPatterns() + SUCCESSFUL_STAGE_PATTERNS

@@ -24,6 +24,7 @@
  */
 package jdk.graal.compiler.nodes;
 
+import static jdk.graal.compiler.debug.GraalError.guarantee;
 import static jdk.graal.compiler.debug.GraalError.shouldNotReachHere;
 
 import java.util.ArrayDeque;
@@ -42,6 +43,7 @@ import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
 
 import jdk.graal.compiler.core.common.Fields;
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.PermanentBailoutException;
 import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.core.common.util.TypeReader;
@@ -61,6 +63,7 @@ import jdk.graal.compiler.graph.NodeList;
 import jdk.graal.compiler.graph.NodeSourcePosition;
 import jdk.graal.compiler.graph.NodeSuccessorList;
 import jdk.graal.compiler.nodes.GraphDecoder.MethodScope;
+import jdk.graal.compiler.nodes.calc.NarrowNode;
 import jdk.graal.compiler.nodes.extended.IntegerSwitchNode;
 import jdk.graal.compiler.nodes.extended.SwitchNode;
 import jdk.graal.compiler.nodes.graphbuilderconf.LoopExplosionPlugin;
@@ -82,6 +85,7 @@ import jdk.graal.compiler.nodes.virtual.MaterializedObjectState;
 import jdk.graal.compiler.nodes.virtual.VirtualObjectNode;
 import jdk.graal.compiler.nodes.virtual.VirtualObjectState;
 import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.phases.util.ValueMergeUtil;
 import jdk.graal.compiler.replacements.nodes.MethodHandleWithExceptionNode;
 import jdk.vm.ci.code.Architecture;
 import jdk.vm.ci.code.BytecodeFrame;
@@ -196,6 +200,12 @@ public class GraphDecoder {
         protected FixedNode prepareFixedNode(@SuppressWarnings("unused") MethodScope methodScope, @SuppressWarnings("unused") LoopScope loopScope, @SuppressWarnings("unused") int nodeOrderId,
                         FixedNode node) {
             return node;
+        }
+
+        /**
+         * Performs policy-specific cleanup after all nodes in the root scope have been decoded.
+         */
+        protected void cleanupGraph(@SuppressWarnings("unused") MethodScope methodScope) {
         }
     }
 
@@ -443,6 +453,36 @@ public class GraphDecoder {
                 return exit.unwind.predecessor() instanceof FixedWithNextNode;
             }
             return exit.merge.isAlive() && exit.exceptionPhi != null && exit.exceptionPhi.isAlive() && exit.unwind.predecessor() == exit.merge;
+        }
+
+        /**
+         * Graph-copy inlining expects an inlinee to have at most one unwind. OOME decoding can add
+         * a synthetic unwind to a graph that already has an encoded unwind, so normalize both to a
+         * single exit before exposing the decoded graph.
+         */
+        @Override
+        protected void cleanupGraph(MethodScope methodScope) {
+            List<UnwindNode> unwinds = new ArrayList<>();
+            for (ControlSinkNode sink : methodScope.returnAndUnwindNodes) {
+                if (sink instanceof UnwindNode unwind && unwind.isAlive()) {
+                    unwinds.add(unwind);
+                }
+            }
+            if (unwinds.size() <= 1) {
+                return;
+            }
+
+            OOMEOwnerData owner = oomeScopeData(methodScope).owner;
+            GraalError.guarantee(owner.exceptionExit != null && owner.exceptionExit.exceptionState != null,
+                            "Multiple unwinds in an OOME decode scope require a synthetic OOME exit");
+            MergeNode merge = graph.add(new MergeNode());
+            ValueNode exception = ValueMergeUtil.mergeUnwindExceptions(merge, unwinds);
+            merge.setStateAfter(owner.exceptionExit.exceptionState.duplicateModified(JavaKind.Object, JavaKind.Object, exception, null));
+            UnwindNode unwind = graph.add(new UnwindNode(exception));
+            merge.setNext(unwind);
+
+            methodScope.returnAndUnwindNodes.removeIf(sink -> sink instanceof UnwindNode);
+            methodScope.returnAndUnwindNodes.add(unwind);
         }
     }
 
@@ -2555,6 +2595,7 @@ public class GraphDecoder {
      * @param rootMethodScope The current method.
      */
     protected void cleanupGraph(MethodScope rootMethodScope) {
+        rootMethodScope.decodePolicy.cleanupGraph(rootMethodScope);
         assert verifyEdges();
     }
 
@@ -3061,8 +3102,10 @@ class LoopDetector implements Runnable {
      * <ul>
      * <li>There must be only one loop variable, i.e., one value that is different in the
      * {@link FrameState} of the different loop headers.</li>
-     * <li>The loop variable must use the primitive {@code int} type, because Graal only has a
-     * {@link IntegerSwitchNode switch node} for {@code int}.</li>
+     * <li>The loop variable must use the primitive {@code int} type, or the primitive {@code long}
+     * type with values that are representable as {@code int}, because the state machine uses an
+     * {@link IntegerSwitchNode switch node} with {@code int} keys. A {@code long} loop variable is
+     * narrowed only for the switch; the original value is preserved in the frame state.</li>
      * <li>The values of the loop variable that are merged are {@link PrimitiveConstant compile time
      * constants}.</li>
      * </ul>
@@ -3103,6 +3146,7 @@ class LoopDetector implements Runnable {
         assert explosionHeadValue != null;
 
         ValuePhiNode loopVariablePhi;
+        ValueNode switchValue;
         SortedMap<Integer, AbstractBeginNode> dispatchTable = new TreeMap<>();
         AbstractBeginNode unreachableDefaultSuccessor;
         if (irreducibleLoopSwitch == null) {
@@ -3146,6 +3190,7 @@ class LoopDetector implements Runnable {
             BeginNode handlerBegin = graph.add(new BeginNode());
             handlerBegin.setNext(handlerNext);
             dispatchTable.put(asInt(explosionHeadValue), handlerBegin);
+            switchValue = asIntSwitchValue(loopVariablePhi);
 
             /*
              * We know that there will always be a matching key in the switch. But Graal always
@@ -3164,10 +3209,11 @@ class LoopDetector implements Runnable {
             assert irreducibleLoopHandler.header.isPhiAtMerge(explosionHeadValue);
             assert irreducibleLoopHandler.header.phis().count() == 1 : Assertions.errorMessageContext("irrHeader.phis", irreducibleLoopHandler.header.phis());
             assert irreducibleLoopHandler.header.phis().first() == explosionHeadValue : Assertions.errorMessageContext("irrHeader.phis", irreducibleLoopHandler.header.phis());
-            assert irreducibleLoopSwitch.value() == explosionHeadValue : Assertions.errorMessageContext("irrLoopSwitch", irreducibleLoopSwitch.value(), "explosionHead", explosionHeadValue);
 
             /* We can modify the phi function used by the old switch node. */
             loopVariablePhi = (ValuePhiNode) explosionHeadValue;
+            switchValue = irreducibleLoopSwitch.value();
+            guarantee(isIntSwitchValue(switchValue, loopVariablePhi), "unexpected switch value %s for loop variable %s", switchValue, loopVariablePhi);
 
             /*
              * We cannot modify the old switch node. Insert all information from the old switch node
@@ -3205,22 +3251,64 @@ class LoopDetector implements Runnable {
         }
 
         /* Build and insert the switch node. */
-        irreducibleLoopSwitch = graph.add(createSwitch(loopVariablePhi, dispatchTable, unreachableDefaultSuccessor));
+        irreducibleLoopSwitch = graph.add(createSwitch(switchValue, dispatchTable, unreachableDefaultSuccessor));
         irreducibleLoopHandler.header.setNext(irreducibleLoopSwitch);
     }
 
     private static int asInt(ValueNode node) {
-        if (!node.isConstant() || node.asJavaConstant().getJavaKind() != JavaKind.Int) {
-            throw bailout("must have a loop variable of type int. " + node);
+        if (node.isConstant()) {
+            JavaConstant constant = node.asJavaConstant();
+            if (constant.getJavaKind() == JavaKind.Int) {
+                return constant.asInt();
+            } else if (constant.getJavaKind() == JavaKind.Long && NumUtil.isInt(constant.asLong())) {
+                return (int) constant.asLong();
+            }
         }
-        return node.asJavaConstant().asInt();
+        throw bailout("must have a constant loop variable of type int, or a long value that is representable as int. " + node);
+    }
+
+    /**
+     * Coerces the loop variable to an int-sized value for use as an {@link IntegerSwitchNode} input.
+     * This method should only be used by {@link #handleIrreducibleLoop} to implement the top-level
+     * switch over loop entrypoints.
+     * <b>
+     * When the loop variable is long, we coerce it using a {@link NarrowNode}. This is safe because
+     * each switch key is statically checked to be representable as an int by {@link #asInt}. In
+     * pseudocode, this looks like:
+     * <pre>
+     * long bci = ...;                     // loopVariablePhi
+     * switch(Narrow(bci, Integer.SIZE)) { // switchValue
+     *     case loop_entrypoint_1: ...     // statically checked to fit into int
+     *     case loop_entrypoint_2: ...
+     *     ...
+     *     default: deopt
+     * }
+     * </pre>
+     */
+    private ValueNode asIntSwitchValue(ValuePhiNode loopVariablePhi) {
+        return switch (loopVariablePhi.getStackKind()) {
+            case Int -> loopVariablePhi;
+            case Long -> graph.addOrUnique(NarrowNode.create(loopVariablePhi, Integer.SIZE, NodeView.DEFAULT));
+            default -> throw bailout("must have a loop variable of type int or long. " + loopVariablePhi);
+        };
+    }
+
+    /**
+     * Validates that {@code switchValue} conforms to one of the shapes produced by {@link #asIntSwitchValue}.
+     */
+    private static boolean isIntSwitchValue(ValueNode switchValue, ValuePhiNode loopVariablePhi) {
+        return switch (loopVariablePhi.getStackKind()) {
+            case Int -> switchValue == loopVariablePhi;
+            case Long -> switchValue instanceof NarrowNode narrow && narrow.getValue() == loopVariablePhi && narrow.getResultBits() == Integer.SIZE;
+            default -> throw bailout("switch value did not conform to expected shape. " + switchValue);
+        };
     }
 
     private static RuntimeException bailout(String msg) {
         throw new PermanentBailoutException("Graal implementation restriction: Method with %s loop explosion %s", LoopExplosionPlugin.LoopExplosionKind.MERGE_EXPLODE, msg);
     }
 
-    private static IntegerSwitchNode createSwitch(ValuePhiNode switchedValue, SortedMap<Integer, AbstractBeginNode> dispatchTable, AbstractBeginNode defaultSuccessor) {
+    private static IntegerSwitchNode createSwitch(ValueNode switchedValue, SortedMap<Integer, AbstractBeginNode> dispatchTable, AbstractBeginNode defaultSuccessor) {
         int numKeys = dispatchTable.size();
         int numSuccessors = numKeys + 1;
 

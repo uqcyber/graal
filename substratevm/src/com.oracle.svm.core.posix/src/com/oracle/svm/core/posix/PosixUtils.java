@@ -44,7 +44,7 @@ import org.graalvm.word.impl.Word;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
+import com.oracle.svm.guest.staging.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
@@ -60,7 +60,7 @@ import com.oracle.svm.core.posix.headers.Unistd;
 import com.oracle.svm.core.posix.headers.Wait;
 import com.oracle.svm.core.posix.headers.darwin.DarwinTime;
 import com.oracle.svm.core.posix.headers.linux.LinuxTime;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.core.hub.DynamicHubIntrinsics;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shared.Uninterruptible;
@@ -165,7 +165,7 @@ public class PosixUtils {
 
     @Uninterruptible(reason = "Array must not move.")
     public static boolean writeUninterruptibly(int fd, byte[] data) {
-        DynamicHub hub = KnownIntrinsics.readHub(data);
+        DynamicHub hub = DynamicHubIntrinsics.readHub(data);
         UnsignedWord baseOffset = LayoutEncoding.getArrayBaseOffset(hub.getLayoutEncoding());
         Pointer dataPtr = Word.objectToUntrackedPointer(data).add(baseOffset);
         return writeUninterruptibly(fd, dataPtr, Word.unsigned(data.length));

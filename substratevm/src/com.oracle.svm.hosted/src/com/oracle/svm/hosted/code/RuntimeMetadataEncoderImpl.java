@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.hosted.code;
 
+import com.oracle.svm.hosted.DeleteGuestValue;
 import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_FLAGS_MASK;
 import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_NEST_MEMBERS_FLAG;
 import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_PERMITTED_SUBCLASSES_FLAG;
@@ -80,7 +81,6 @@ import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.BaseLayerType;
 import com.oracle.graal.pointsto.util.AnalysisError;
-import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.code.CodeInfoEncoder;
 import com.oracle.svm.core.code.RuntimeMetadataDecoderImpl;
 import com.oracle.svm.core.code.RuntimeMetadataEncoding;
@@ -122,7 +122,6 @@ import com.oracle.svm.shared.singletons.traits.SingletonLayeredCallbacksSupplier
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
 
 import jdk.graal.compiler.annotation.AnnotationValue;
 import jdk.graal.compiler.annotation.TypeAnnotationValue;
@@ -171,7 +170,7 @@ public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
     private final CodeInfoEncoder.Encoders encoders;
     private final HostedMetaAccess metaAccess;
     private final ReflectionDataAccessors accessors;
-    private final ReflectionDataBuilder dataBuilder;
+    private ReflectionDataBuilder dataBuilder;
     private final SymbolEncoder symbolEncoder = SymbolEncoder.singleton();
     private final LayeredRuntimeMetadataSingleton layeredRuntimeMetadataSingleton;
     private TreeSet<HostedType> sortedTypes = new TreeSet<>(Comparator.comparingLong(t -> t.getHub().getTypeID()));
@@ -425,9 +424,15 @@ public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
         /* Reflect method because substitution of Object.hashCode() is private */
         int modifiers = reflectField.getModifiers();
         boolean trustedFinal = isTrustedFinal(reflectField);
-        String signature = getSignature(reflectField);
+        AnalysisField analysisField = hostedField.getWrapped();
+        /*
+         * The generic signature must describe the original declaration, because that is the
+         * declaring class reported at run time.
+         */
+        Field signatureField = ReflectionDataBuilder.getGenericSignatureDeclaration(analysisField);
+        String signature = getSignature(signatureField != null ? signatureField : reflectField);
         int offset = hostedField.wrapped.isUnsafeAccessed() ? hostedField.getOffset() : SharedField.LOC_UNINITIALIZED;
-        Delete deleteAnnotation = AnnotationUtil.getAnnotation(hostedField, Delete.class);
+        DeleteGuestValue deleteAnnotation = DeleteGuestValue.get(hostedField);
         String deletedReason = (deleteAnnotation != null) ? deleteAnnotation.value() : null;
         RuntimeDynamicAccessMetadata dynamicAccessMetadata = conditionalReflectField.getDynamicAccessMetadata();
         /* Fill encoders with the necessary values. */
@@ -439,7 +444,6 @@ public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
         encoders.otherStrings.addObject(signature);
         encoders.otherStrings.addObject(deletedReason);
         /* Register string and class values in annotations */
-        AnalysisField analysisField = hostedField.getWrapped();
         AnnotationValue[] annotations = registerAnnotationValues(analysisField);
         TypeAnnotationValue[] typeAnnotations = registerTypeAnnotationValues(analysisField);
         int installedLayerNumber = Modifier.isStatic(modifiers) && hostedField.hasInstalledLayerNum() ? hostedField.getInstalledLayerNum()
@@ -878,6 +882,7 @@ public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
         RuntimeMetadataEncoding.currentLayer().trimReflectionMetadataEncoding();
         /* Enable field recomputers in reflection objects to see the computed values */
         ImageSingletons.add(EncodedRuntimeMetadataSupplier.class, encodings);
+        dataBuilder.afterRuntimeMetadataEncoding();
         clearDataAfterEncoding();
     }
 
@@ -898,6 +903,7 @@ public class RuntimeMetadataEncoderImpl implements RuntimeMetadataEncoder {
         this.recordComponentLookupErrors = null;
 
         this.heapData = null;
+        this.dataBuilder = null;
     }
 
     private int encodeErrorIndex(Throwable error) {

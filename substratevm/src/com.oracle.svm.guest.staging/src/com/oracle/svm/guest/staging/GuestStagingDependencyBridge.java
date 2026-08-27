@@ -180,12 +180,10 @@ public interface GuestStagingDependencyBridge {
      */
     boolean shouldParseRuntimeOptions();
 
-    /**
-     * Returns whether runtime Java options use the legacy compatibility mode.
-     * <p>
-     * Remove this method when {@code LegacyJavaOptionMode} moves to guest/staging.
-     */
-    boolean legacyJavaOptionMode();
+    /// Returns whether strict runtime Java option handling is enabled.
+    ///
+    /// Remove this method when `StrictRuntimeJavaOptions` moves to guest/staging.
+    boolean strictRuntimeJavaOptions();
 
     /**
      * Initializes a system property parsed from a runtime Java option.
@@ -200,4 +198,37 @@ public interface GuestStagingDependencyBridge {
      * Remove this method when substitutions can move to guest/staging (GR-71844).
      */
     void enablePreviewFeatures();
+
+    /**
+     * Returns whether runtime class loading is supported.
+     * <p>
+     * Remove this method when runtime class loading (aka Crema) options move to guest/staging.
+     */
+    boolean isRuntimeClassLoadingSupported();
+
+    /**
+     * Enables tracing of class loading. Enabled through {@code --verbose} or {@code --verbose:class}.
+     * <p>
+     * Remove this method when runtime class loading (aka Crema) options move to guest/staging.
+     */
+    void enableTraceClassLoading();
+
+    /// Applies a runtime assertion directive to a class, package, or the application default.
+    ///
+    /// Remove this method when runtime assertion support moves to guest/staging.
+    /// @param classOrPackage target class or package to which directive applies.
+    /// A value of `""` applies the directive to all classes.
+    void updateRuntimeAssertionStatus(String classOrPackage, boolean enable);
+
+    /// Updates the runtime assertion default for bootstrap-loaded classes.
+    ///
+    /// Remove this method when runtime assertion support moves to guest/staging.
+    void updateRuntimeSystemAssertionStatus(boolean enable);
+
+    /**
+     * This method is called at the end of runtime options parsing.
+     * <p>
+     * Remove this method when runtime option parsing fully moves to guest/staging.
+     */
+    void endOfParsing();
 }

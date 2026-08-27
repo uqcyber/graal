@@ -24,11 +24,20 @@
  */
 package com.oracle.svm.core.graal.amd64;
 
+import static com.oracle.svm.core.interpreter.InterpreterSupport.NATIVE_DOWNCALL_RETURNS_IN_BUFFER;
+import static com.oracle.svm.core.interpreter.InterpreterSupport.NATIVE_DOWNCALL_RETURNS_IN_FP_REGISTER;
 import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+import static jdk.vm.ci.amd64.AMD64.r10;
+import static jdk.vm.ci.amd64.AMD64.r11;
+import static jdk.vm.ci.amd64.AMD64.r12;
+import static jdk.vm.ci.amd64.AMD64.r9;
 import static jdk.vm.ci.amd64.AMD64.rax;
 import static jdk.vm.ci.amd64.AMD64.rbp;
+import static jdk.vm.ci.amd64.AMD64.rbx;
+import static jdk.vm.ci.amd64.AMD64.rdx;
 import static jdk.vm.ci.amd64.AMD64.rsp;
 import static jdk.vm.ci.amd64.AMD64.xmm0;
+import static jdk.vm.ci.amd64.AMD64.xmm1;
 
 import java.util.List;
 
@@ -58,6 +67,8 @@ import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.interpreter.InterpreterEnterStub;
+import com.oracle.svm.core.interpreter.InterpreterJNIUpcallStub;
+import com.oracle.svm.core.jni.CallVariant;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.DisallowLayered;
@@ -68,7 +79,7 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.NumUtil;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.asm.Label;
@@ -79,11 +90,11 @@ import jdk.graal.compiler.asm.amd64.AMD64MacroAssembler;
 import jdk.graal.compiler.core.common.Stride;
 import jdk.graal.compiler.lir.amd64.AMD64Move;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
-import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterConfig;
+import jdk.vm.ci.code.StackSlot;
 import jdk.vm.ci.code.ValueUtil;
 import jdk.vm.ci.meta.JavaKind;
 
@@ -104,7 +115,7 @@ public class AMD64InterpreterStubs {
         public InterpreterEnterStubContext(SharedMethod method, CallingConvention callingConvention) {
             super(method, callingConvention);
             boolean useRistretto = SubstrateOptions.useRistretto();
-            InterpreterEnterStub stubType = AnnotationUtil.getAnnotation(method, InterpreterEnterStub.class);
+            InterpreterEnterStub stubType = GuestAnnotationAccess.getAnnotation(method, InterpreterEnterStub.class);
             assert stubType != null : "Missing @InterpreterEnterStub annotation on interpreter enter stub.";
             assert !useRistretto || ImageSingletons.contains(InterpreterExecutionOffsets.class) : "Missing InterpreterExecutionOffsets singleton while Ristretto is enabled.";
             emitDirectFastPath = useRistretto && stubType.value() == InterpreterEnterStub.Kind.DIRECT;
@@ -277,18 +288,18 @@ public class AMD64InterpreterStubs {
 
             /*
              * Ristretto currently makes this frame context reachable during analysis. Explicitly
-             * avoid the singleton lookup in that case until GR-55022 is fixed.
+             * avoid the singleton lookup in that case until GR-74744 is fixed.
              */
             if (SubstrateUtil.HOSTED) {
                 if (emitVTableFastPath) {
-                    emitVTableInstalledCodeFastPath(masm, gps.getFirst(), SubstrateAMD64Backend.HIDDEN_ARGUMENT_REGISTER, AMD64.r10, AMD64.r11);
+                    emitVTableInstalledCodeFastPath(masm, gps.getFirst(), SubstrateAMD64Backend.HIDDEN_ARGUMENT_REGISTER, r10, r11);
                 } else if (emitDirectFastPath) {
-                    emitInstalledCodeFastPath(masm, SubstrateAMD64Backend.HIDDEN_ARGUMENT_REGISTER, false, AMD64.r10);
+                    emitInstalledCodeFastPath(masm, SubstrateAMD64Backend.HIDDEN_ARGUMENT_REGISTER, false, r10);
                 }
             }
 
             Register trampArg = SubstrateAMD64Backend.HIDDEN_ARGUMENT_REGISTER;
-            Register spCopy = AMD64.r11;
+            Register spCopy = r11;
 
             masm.movq(spCopy, rsp);
 
@@ -326,6 +337,80 @@ public class AMD64InterpreterStubs {
         }
     }
 
+    /** Adapts incoming JNI arguments to the interpreter wrapper signature. */
+    public static class InterpreterJNIUpcallStubContext extends SubstrateAMD64Backend.SubstrateAMD64FrameContext {
+        private final CallVariant callVariant;
+        private final boolean nonVirtual;
+
+        public InterpreterJNIUpcallStubContext(SharedMethod method, CallingConvention callingConvention) {
+            super(method, callingConvention);
+            InterpreterJNIUpcallStub annotation = GuestAnnotationAccess.getAnnotation(method, InterpreterJNIUpcallStub.class);
+            assert annotation != null : "Missing @InterpreterJNIUpcallStub annotation on JNI interpreter wrapper.";
+            callVariant = annotation.callVariant();
+            nonVirtual = annotation.nonVirtual();
+        }
+
+        private static AMD64Address jniUpcallDataAddress(SubstrateAMD64Backend.SubstrateAMD64FrameMap frameMap, int offset) {
+            return new AMD64Address(rsp, frameMap.offsetForStackSlot(frameMap.getInterpreterJNIUpcallData()) + offset);
+        }
+
+        @Override
+        public void enter(CompilationResultBuilder crb) {
+            AMD64MacroAssembler masm = (AMD64MacroAssembler) crb.asm;
+            SubstrateAMD64Backend.SubstrateAMD64FrameMap frameMap = (SubstrateAMD64Backend.SubstrateAMD64FrameMap) crb.frameMap;
+            SubstrateAMD64RegisterConfig registerConfig = (SubstrateAMD64RegisterConfig) frameMap.getRegisterConfig();
+            StackSlot jniUpcallData = frameMap.getInterpreterJNIUpcallData();
+            assert (callVariant == CallVariant.VARARGS) == (jniUpcallData != null);
+
+            List<Register> gps = registerConfig.getNativeGeneralParameterRegs();
+            List<Register> fps = registerConfig.getFloatingPointParameterRegs();
+            Register originalSp = r11;
+
+            /* Preserve the caller stack pointer before the regular prologue allocates the frame. */
+            masm.movq(originalSp, rsp);
+            super.enter(crb);
+
+            if (callVariant == CallVariant.VARARGS) {
+                /* Capture the original JNI arguments before adapting registers for the wrapper. */
+                masm.movq(jniUpcallDataAddress(frameMap, offsetAbiSpReg()), originalSp);
+                for (int i = 0; i < gps.size(); i++) {
+                    masm.movq(jniUpcallDataAddress(frameMap, offsetAbiGp(i)), gps.get(i));
+                }
+                for (int i = 0; i < fps.size(); i++) {
+                    masm.movq(jniUpcallDataAddress(frameMap, offsetAbiFpArg(i)), fps.get(i));
+                }
+            }
+
+            if (nonVirtual) {
+                /* Drop the JNI clazz argument: methodID becomes the third argument. */
+                masm.movq(gps.get(2), gps.get(3));
+            }
+
+            Register payload = gps.get(3);
+            if (callVariant == CallVariant.VARARGS) {
+                /* Pass the address of the dedicated frame slot that preserves the captured arguments. */
+                masm.leaq(payload, jniUpcallDataAddress(frameMap, 0));
+            } else if (nonVirtual) {
+                /* Due to the drop of the JNI clazz argument: payload becomes the fourth argument. */
+                if (gps.size() > 4) {
+                    masm.movq(payload, gps.get(4));
+                } else {
+                    assert Platform.includedIn(InternalPlatform.WINDOWS_BASE.class);
+                    /* On Windows, the fifth JNI argument follows shadow space on the caller stack. */
+                    masm.movq(payload, new AMD64Address(originalSp, FrameAccess.returnAddressSize() + callingConvention.getStackSize()));
+                }
+            }
+        }
+
+        @Override
+        public void leave(CompilationResultBuilder crb) {
+            AMD64MacroAssembler masm = (AMD64MacroAssembler) crb.asm;
+            /* The wrapper returns raw bits in rax; JNI floating-point variants return them in xmm0. */
+            masm.movdq(xmm0, rax);
+            super.leave(crb);
+        }
+    }
+
     public static class InterpreterLeaveStubContext extends SubstrateAMD64Backend.SubstrateAMD64FrameContext {
 
         public InterpreterLeaveStubContext(SharedMethod method, CallingConvention callingConvention) {
@@ -355,18 +440,18 @@ public class AMD64InterpreterStubs {
             List<Register> fps = getRegisterConfig().getFloatingPointParameterRegs();
 
             /* Save call target */
-            Register callTarget = AMD64.r10;
+            Register callTarget = r10;
             masm.movq(callTarget, rax);
 
             /* Get pointer to InterpreterData struct */
             masm.movq(rax, gps.get(1));
 
-            Register stackSize = AMD64.r11;
+            Register stackSize = r11;
             masm.movq(stackSize, gps.get(2));
 
             /* Copy prepared outgoing args to the stack where the ABI expects it */
-            Register calleeSpArgs = AMD64.r12;
-            Register interpDataSp = AMD64.r9;
+            Register calleeSpArgs = r12;
+            Register interpDataSp = r9;
             masm.movq(interpDataSp, new AMD64Address(rax, offsetAbiSpReg()));
             masm.movq(calleeSpArgs, rsp);
 
@@ -397,19 +482,19 @@ public class AMD64InterpreterStubs {
             masm.indirectCall(AMD64MacroAssembler.PostCallAction.NONE, callTarget, false, null, SubstrateCallingConventionKind.Java.toType(true));
 
             /* Obtain stack size from deopt slot */
-            masm.movq(AMD64.r12, new AMD64Address(rsp, 0));
+            masm.movq(r12, new AMD64Address(rsp, 0));
 
             /* Assumption of deopt slot encoding */
             assert crb.target.stackAlignment == 0x10;
-            masm.shrq(AMD64.r12, DeoptimizationSlotPacking.POS_VARIABLE_FRAMESIZE - DeoptimizationSlotPacking.STACK_ALIGNMENT);
+            masm.shrq(r12, DeoptimizationSlotPacking.POS_VARIABLE_FRAMESIZE - DeoptimizationSlotPacking.STACK_ALIGNMENT);
 
             /* Restore stack pointer */
-            masm.addq(rsp, AMD64.r12);
+            masm.addq(rsp, r12);
 
             Label gpResult = new Label();
             /* The leave stub returns a long, so check whether the actual call returned in xmm0. */
-            masm.movq(AMD64.r10, new AMD64Address(rsp, 0));
-            masm.testq(AMD64.r10, AMD64.r10);
+            masm.movq(r10, new AMD64Address(rsp, 0));
+            masm.testq(r10, r10);
             masm.jccb(AMD64Assembler.ConditionFlag.Zero, gpResult);
             /* Return the raw float/double bits in rax. */
             masm.movdq(rax, xmm0);
@@ -419,9 +504,9 @@ public class AMD64InterpreterStubs {
         }
     }
 
-    public static class InterpreterLeaveJNIStubContext extends SubstrateAMD64Backend.SubstrateAMD64FrameContext {
+    public static class InterpreterNativeDowncallStubContext extends SubstrateAMD64Backend.SubstrateAMD64FrameContext {
 
-        public InterpreterLeaveJNIStubContext(SharedMethod method, CallingConvention callingConvention) {
+        public InterpreterNativeDowncallStubContext(SharedMethod method, CallingConvention callingConvention) {
             super(method, callingConvention);
         }
 
@@ -431,18 +516,26 @@ public class AMD64InterpreterStubs {
             AMD64MacroAssembler masm = (AMD64MacroAssembler) crb.asm;
             List<Register> gps = getRegisterConfig().getJavaGeneralParameterRegs();
 
-            /* sp points to one reserved stack slot for this stub */
+            /* sp points to two reserved stack slots for this stub */
 
             /* arg0 is untouched by this extra prolog */
 
-            /* arg3: true if the result of the function is in a floating-point register */
+            /* arg3: return flags used to preserve the required native return registers. */
             masm.movq(new AMD64Address(rsp, 0), gps.get(3));
 
+            /*
+             * Interpreter data lives in the caller's stack. Do not preserve its absolute address
+             * across the native call because relocating a virtual-thread stack would make that
+             * address stale. Preserve its SP-relative offset instead.
+             */
+            masm.movq(r10, gps.get(1));
+            masm.subq(r10, rsp);
+            masm.movq(new AMD64Address(rsp, 8), r10);
             /*
              * arg2: Variable stack size. Compared to Java calls we have no deopt stack slot
              * available to store the stack size, so we save it in a callee-saved register.
              */
-            masm.movq(AMD64.rbx, gps.get(2));
+            masm.movq(rbx, gps.get(2));
 
             masm.subq(rsp, gps.get(2) /* variable stack size */);
         }
@@ -455,13 +548,13 @@ public class AMD64InterpreterStubs {
             List<Register> fps = getRegisterConfig().getFloatingPointParameterRegs();
 
             /* Save call target */
-            Register callTarget = AMD64.r10;
+            Register callTarget = r10;
             masm.movq(callTarget, rax);
 
             /* Get pointer to InterpreterData struct */
             masm.movq(rax, jgps.get(1));
 
-            Register stackSize = AMD64.r11;
+            Register stackSize = r11;
             masm.movq(stackSize, jgps.get(2));
 
             Label regsHandling = new Label();
@@ -470,8 +563,8 @@ public class AMD64InterpreterStubs {
             masm.jccb(AMD64Assembler.ConditionFlag.Zero, regsHandling);
 
             /* Copy prepared outgoing args to the stack where the ABI expects it */
-            Register calleeSpArgs = AMD64.r12;
-            Register interpDataSp = AMD64.r9;
+            Register calleeSpArgs = r12;
+            Register interpDataSp = r9;
             masm.movq(interpDataSp, new AMD64Address(rax, offsetAbiSpReg()));
             masm.movq(calleeSpArgs, rsp);
 
@@ -500,19 +593,39 @@ public class AMD64InterpreterStubs {
                 masm.movq(ngps.get(i), new AMD64Address(rax, offsetAbiGp(i)));
             }
 
+            /*
+             * FFM variadic calls pass the number of used XMM argument registers in al.
+             */
+            masm.movq(rax, new AMD64Address(rax, offsetAbiGpRet()));
+
             /* Call into target method */
             masm.indirectCall(AMD64MacroAssembler.PostCallAction.NONE, callTarget, false, null, SubstrateCallingConventionKind.Native.toType(true));
 
-            Register resultCopy = AMD64.r10;
-            masm.movq(resultCopy, rax);
-
             /* Restore stack pointer */
-            masm.addq(rsp, AMD64.rbx);
+            masm.addq(rsp, rbx);
+
+            Register returnFlags = r10;
+            masm.movq(returnFlags, new AMD64Address(rsp, 0));
+
+            Label noReturnBuffer = new Label();
+            masm.testl(returnFlags, NATIVE_DOWNCALL_RETURNS_IN_BUFFER);
+            masm.jccb(AMD64Assembler.ConditionFlag.Zero, noReturnBuffer);
+            /*
+             * Outgoing argument slots are dead after the call. Reuse them to preserve every return
+             * register needed by an FFM aggregate return before those registers are repurposed.
+             */
+            Register data = r11;
+            masm.movq(data, new AMD64Address(rsp, 8));
+            masm.addq(data, rsp);
+            masm.movq(new AMD64Address(data, offsetAbiGp(0)), rax);
+            masm.movq(new AMD64Address(data, offsetAbiGp(1)), rdx);
+            masm.movq(new AMD64Address(data, offsetAbiFpArg(0)), xmm0);
+            masm.movq(new AMD64Address(data, offsetAbiFpArg(1)), xmm1);
+            masm.bind(noReturnBuffer);
 
             Label gpResult = new Label();
             /* The leave stub returns a long, so check whether the actual call returned in xmm0. */
-            masm.movq(AMD64.r10, new AMD64Address(rsp, 0));
-            masm.testq(AMD64.r10, AMD64.r10);
+            masm.testl(returnFlags, NATIVE_DOWNCALL_RETURNS_IN_FP_REGISTER);
             masm.jccb(AMD64Assembler.ConditionFlag.Zero, gpResult);
             /* Return the raw float/double bits in rax. */
             masm.movdq(rax, xmm0);
@@ -534,8 +647,8 @@ public class AMD64InterpreterStubs {
     }
 
     public static int additionalFrameSizeLeaveStub() {
-        /* Reserve one extra word to remember whether the actual call returns in the FP register. */
-        return 8;
+        /* Reserve words for the FP-return flag and the stable interpreter data pointer. */
+        return 16;
     }
 
     @RawStructure
@@ -701,11 +814,15 @@ public class AMD64InterpreterStubs {
 
         @Override
         @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-        public void setSp(Pointer data, int stackSize, Pointer stackBuffer, boolean saveStackSizeInDeoptSlot) {
+        public void setSp(Pointer data, Pointer stackBuffer) {
             VMError.guarantee(stackBuffer.isNonNull());
+            ((InterpreterDataAMD64) data).setAbiSpReg(stackBuffer.rawValue());
+        }
 
+        @Override
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+        public void setStackSize(Pointer data, int stackSize, boolean saveStackSizeInDeoptSlot) {
             InterpreterDataAMD64 p = (InterpreterDataAMD64) data;
-            p.setAbiSpReg(stackBuffer.rawValue());
             p.setStackSize(stackSize);
 
             if (saveStackSizeInDeoptSlot) {
@@ -718,6 +835,7 @@ public class AMD64InterpreterStubs {
                  * comment above `currentStackOffset` declaration.
                  */
                 assert stackSize % 0x10 == 0;
+                Pointer stackBuffer = Word.pointer(p.getAbiSpReg());
                 stackBuffer.writeLong(0, DeoptimizationSlotPacking.encodeVariableFrameSizeIntoDeoptSlot(stackSize));
             } else {
                 /*
@@ -755,7 +873,17 @@ public class AMD64InterpreterStubs {
 
         @Override
         @Uninterruptible(reason = REASON_RAW_POINTER, callerMustBe = true)
-        public void setGpArgumentAtJNI(int cArgType, Pointer data, int pos, long val, boolean incoming) {
+        public void setGpArgumentAtNative(int cArgType, Pointer data, int pos, long val, boolean incoming) {
+            if (PreparedSignature.isRegister(cArgType) && pos == NATIVE_GP_REGISTERS_SIZE) {
+                /*
+                 * SysV models the number of XMM arguments to a variadic function as a synthetic
+                 * GP argument assigned to rax, immediately after the ordinary GP argument
+                 * registers. The native leave stub loads AbiGpRet into rax before the call.
+                 */
+                VMError.guarantee(!incoming && PreparedSignature.isRegister(cArgType));
+                ((InterpreterDataAMD64) data).setAbiGpRet(val);
+                return;
+            }
             setGpArgumentAt0(cArgType, data, pos, val, incoming, NATIVE_GP_REGISTERS_SIZE);
         }
 
@@ -783,7 +911,7 @@ public class AMD64InterpreterStubs {
             }
 
             VMError.guarantee(sp.isNonNull());
-            VMError.guarantee(incoming || offset < p.getStackSize());
+            VMError.guarantee(incoming || offset < InterpreterAccessStubData.getStackBufferSize());
 
             sp.writeLong(offset, val);
         }
@@ -848,7 +976,7 @@ public class AMD64InterpreterStubs {
                 int offset = PreparedSignature.getStackOffset(cArgType);
 
                 VMError.guarantee(sp.isNonNull());
-                VMError.guarantee(offset < p.getStackSize());
+                VMError.guarantee(offset < InterpreterAccessStubData.getStackBufferSize());
 
                 sp.writeLong(offset, val);
             }
@@ -876,6 +1004,28 @@ public class AMD64InterpreterStubs {
         @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public void setFpReturn(Pointer data, long fpReturn) {
             ((InterpreterDataAMD64) data).setAbiFpRet(fpReturn);
+        }
+
+        @Override
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+        public long getGpResultAt(Pointer data, int index) {
+            InterpreterDataAMD64 p = (InterpreterDataAMD64) data;
+            return switch (index) {
+                case 0 -> p.getAbiGp0();
+                case 1 -> p.getAbiGp1();
+                default -> throw VMError.shouldNotReachHereAtRuntime();
+            };
+        }
+
+        @Override
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+        public long getFpResultAt(Pointer data, int index) {
+            InterpreterDataAMD64 p = (InterpreterDataAMD64) data;
+            return switch (index) {
+                case 0 -> p.getAbiFpArg0();
+                case 1 -> p.getAbiFpArg1();
+                default -> throw VMError.shouldNotReachHereAtRuntime();
+            };
         }
 
         @Override

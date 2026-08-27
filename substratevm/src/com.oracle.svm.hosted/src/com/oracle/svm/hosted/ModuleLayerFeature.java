@@ -76,7 +76,7 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.encoder.SymbolEncoder;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.JavaConstantWrapper;
-import com.oracle.svm.core.heap.UnknownObjectField;
+import com.oracle.svm.guest.staging.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.LayeredModuleSingleton;
@@ -1487,18 +1487,24 @@ public class ModuleLayerFeature implements InternalFeature {
         /// Rebuilds the runtime `BuiltinClassLoader.packageToModule` entries for packages selected
         /// by analysis.
         ///
-        /// Each package is mapped to a fresh JDK `LoadedModule` instance whose loader and module
-        /// reference match the synthesized runtime boot layer. The map is cleared before repopulating
-        /// it so the final boot layer synthesis replaces the broader before-analysis prototype. The
-        /// static field is transformed into `runtimePackageToModule` during image heap scanning, so
-        /// rescanning that map is enough to keep the image heap and the JDK lookup table consistent.
+        /// Packages in the same module share one JDK `LoadedModule` instance, matching
+        /// `BuiltinClassLoader.loadModule`. The map is cleared before repopulating it so the final
+        /// boot layer synthesis replaces the broader before-analysis prototype. The static field is
+        /// transformed into `runtimePackageToModule` during image heap scanning, so rescanning that
+        /// map is enough to keep the image heap and the JDK lookup table consistent.
         void patchBuiltinClassLoaderPackageToModuleField(AnalysisAccessBase accessImpl, Map<BuiltinClassLoader, Map<String, ModuleReference>> packageToModule) {
             runtimePackageToModule.clear();
             for (Map.Entry<BuiltinClassLoader, Map<String, ModuleReference>> loaderEntry : packageToModule.entrySet()) {
                 BuiltinClassLoader loader = loaderEntry.getKey();
+                Map<ModuleReference, Object> loadedModules = new HashMap<>();
                 for (Map.Entry<String, ModuleReference> packageEntry : loaderEntry.getValue().entrySet()) {
                     try {
-                        Object loadedModule = loadedModuleConstructor.newInstance(loader, packageEntry.getValue());
+                        ModuleReference moduleReference = packageEntry.getValue();
+                        Object loadedModule = loadedModules.get(moduleReference);
+                        if (loadedModule == null) {
+                            loadedModule = loadedModuleConstructor.newInstance(loader, moduleReference);
+                            loadedModules.put(moduleReference, loadedModule);
+                        }
                         runtimePackageToModule.put(packageEntry.getKey(), loadedModule);
                     } catch (InstantiationException | IllegalAccessException | InvocationTargetException ex) {
                         throw VMError.shouldNotReachHere("Failed to create a runtime BuiltinClassLoader.LoadedModule.", ex);

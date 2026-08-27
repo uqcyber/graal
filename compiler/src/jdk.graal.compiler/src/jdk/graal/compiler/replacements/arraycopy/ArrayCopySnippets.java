@@ -28,6 +28,7 @@ import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.DEOPT_PROB
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.FAST_PATH_PROBABILITY;
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.FREQUENT_PROBABILITY;
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.NOT_FREQUENT_PROBABILITY;
+import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.SLOW_PATH_PROBABILITY;
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.probability;
 
 import java.util.EnumMap;
@@ -36,6 +37,7 @@ import java.util.function.Supplier;
 import org.graalvm.collections.UnmodifiableEconomicMap;
 import org.graalvm.word.LocationIdentity;
 
+import jdk.graal.compiler.api.directives.GraalDirectives;
 import jdk.graal.compiler.api.replacements.Fold.InjectedParameter;
 import jdk.graal.compiler.api.replacements.Snippet;
 import jdk.graal.compiler.api.replacements.Snippet.ConstantParameter;
@@ -43,6 +45,7 @@ import jdk.graal.compiler.api.replacements.Snippet.NonNullParameter;
 import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.guards.optimistic.memory.OptimisticAliasingAnalysisPhase;
 import jdk.graal.compiler.nodes.CallTargetNode;
 import jdk.graal.compiler.nodes.DeoptimizeNode;
 import jdk.graal.compiler.nodes.FrameState;
@@ -68,6 +71,7 @@ import jdk.graal.compiler.nodes.type.StampTool;
 import jdk.graal.compiler.nodes.util.GraphUtil;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.PhaseSuite;
+import jdk.graal.compiler.phases.common.CanonicalizerPhase;
 import jdk.graal.compiler.phases.util.Providers;
 import jdk.graal.compiler.replacements.ReplacementsUtil;
 import jdk.graal.compiler.replacements.SnippetCounter;
@@ -176,6 +180,19 @@ public abstract class ArrayCopySnippets implements Snippets {
      */
     protected boolean useOriginalArraycopy() {
         return true;
+    }
+
+    @SuppressWarnings("static-method")
+    protected Supplier<PhaseSuite<CoreProviders>> midTierPreLoweringPhaseFactory() {
+        /*
+         * Extra phases to run on the snippet in the mid tier. When expanding an arraycopy to a
+         * loop, we need to run optimistic aliasing on that loop to allow loop vectorization.
+         */
+        return () -> {
+            PhaseSuite<CoreProviders> result = new PhaseSuite<>();
+            result.appendPhase(new OptimisticAliasingAnalysisPhase(CanonicalizerPhase.create()));
+            return result;
+        };
     }
 
     /**
@@ -317,6 +334,8 @@ public abstract class ArrayCopySnippets implements Snippets {
                 Object value = GuardedUnsafeLoadNode.guardedLoad(src, sourceOffset + position * scale, elementKind, arrayLocation, anchor);
                 RawStoreNode.storeObject(dest, destOffset + position * scale, value, elementKind, arrayLocation, true);
             }
+        } else if (!GraalDirectives.shortCircuitOr(SLOW_PATH_PROBABILITY, src != dest, srcPos >= destPos)) {
+            ReplacementsUtil.dynamicAssert(false, "unreachable arraycopy alias case");
         } else {
             for (int position = 0; probability(FAST_PATH_PROBABILITY, position < length); position++) {
                 GuardingNode anchor = SnippetAnchorNode.anchor();
@@ -543,18 +562,6 @@ public abstract class ArrayCopySnippets implements Snippets {
             arraycopyCallCounters.put(kind, new SnippetCounter(counters, kind + "[] stub", "arraycopy call for " + kind + "[] arrays"));
             arraycopyCallCopiedCounters.put(kind, new SnippetCounter(copiedCounters, kind + "[] stub", "arraycopy call for " + kind + "[] arrays"));
         }
-    }
-
-    /**
-     * Returns a {@link Supplier} that builds a phase suite with extra phases to run on the snippet
-     * in the mid tier. Extension point for subclasses, used to implement
-     * {@link Templates#createMidTierPreLoweringPhases()}.
-     *
-     * @return a valid {@link Supplier} that returns either a valid {@link PhaseSuite} or
-     *         {@code null} if no extra lowering phases are needed
-     */
-    protected Supplier<PhaseSuite<CoreProviders>> midTierPreLoweringPhaseFactory() {
-        return () -> null;
     }
 
     /**

@@ -60,7 +60,7 @@ import com.oracle.svm.core.heap.ObjectVisitor;
 import com.oracle.svm.core.heap.ReferenceHandler;
 import com.oracle.svm.core.heap.ReferenceHandlerThread;
 import com.oracle.svm.core.heap.ReferenceInternals;
-import com.oracle.svm.core.heap.RestrictHeapAccess;
+import com.oracle.svm.guest.staging.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.RuntimeCodeInfoGCSupport;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
@@ -74,7 +74,7 @@ import com.oracle.svm.core.nodes.CFunctionEpilogueNode;
 import com.oracle.svm.core.nodes.CFunctionPrologueNode;
 import com.oracle.svm.guest.staging.option.NotifyGCRuntimeOptionKey;
 import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.core.thread.PlatformThreads;
 import com.oracle.svm.guest.staging.core.thread.ThreadStatus;
 import com.oracle.svm.core.thread.ThreadsLock;
@@ -1036,7 +1036,7 @@ final class Target_java_lang_Runtime {
     private void gc() {
         if (!SubstrateGCOptions.DisableExplicitGC.getValue()) {
             long startTicks = JfrTicks.elapsedTicks();
-            GCImpl.getGCImpl().collectCompletely(GCCause.JavaLangSystemGC);
+            GCImpl.getGCImpl().collect(GCCause.JavaLangSystemGC);
             SystemGCEvent.emit(startTicks, false);
         }
     }

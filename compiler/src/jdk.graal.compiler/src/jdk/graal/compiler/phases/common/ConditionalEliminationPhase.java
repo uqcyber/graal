@@ -55,8 +55,10 @@ import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeMap;
 import jdk.graal.compiler.graph.NodeStack;
+import jdk.graal.compiler.graph.Position;
 import jdk.graal.compiler.nodeinfo.InputType;
 import jdk.graal.compiler.nodes.AbstractBeginNode;
+import jdk.graal.compiler.nodes.AbstractFixedGuardNode;
 import jdk.graal.compiler.nodes.AbstractMergeNode;
 import jdk.graal.compiler.nodes.BeginNode;
 import jdk.graal.compiler.nodes.BinaryOpLogicNode;
@@ -523,17 +525,21 @@ public class ConditionalEliminationPhase extends PostRunCanonicalizationPhase<Co
             }
         }
 
-        protected void processFixedGuard(FixedGuardNode node) {
+        protected void processFixedGuard(AbstractFixedGuardNode node) {
             if (!tryProveGuardCondition(node, node.condition(), (guard, result, guardedValueStamp, newInput) -> {
                 if (result != node.isNegated()) {
-                    node.replaceAtUsages(guard.asNode());
-                    GraphUtil.unlinkFixedNode(node);
-                    GraphUtil.killWithUnusedFloatingInputs(node);
+                    if (canReplaceAtUsages(node, guard.asNode())) {
+                        node.replaceAtUsages(guard.asNode());
+                        GraphUtil.unlinkFixedNode(node);
+                        GraphUtil.killWithUnusedFloatingInputs(node);
 
-                    if (guard instanceof BeginNode b && b.predecessor() instanceof IfNode ifNode) {
-                        rebuildPiNodes(b, ifNode.condition());
-                    } else if (guard instanceof DeoptimizingGuard dg && !((DeoptimizingGuard) guard).isNegated()) {
-                        rebuildPiNodes(dg, dg.getCondition());
+                        if (guard instanceof BeginNode b && b.predecessor() instanceof IfNode ifNode) {
+                            rebuildPiNodes(b, ifNode.condition());
+                        } else if (guard instanceof DeoptimizingGuard dg && !((DeoptimizingGuard) guard).isNegated()) {
+                            rebuildPiNodes(dg, dg.getCondition());
+                        }
+                    } else {
+                        node.setCondition(LogicConstantNode.forBoolean(result, node.graph()), node.isNegated());
                     }
                 } else {
                     node.setCondition(LogicConstantNode.forBoolean(result, node.graph()), node.isNegated());
@@ -544,6 +550,22 @@ public class ConditionalEliminationPhase extends PostRunCanonicalizationPhase<Co
             })) {
                 registerNewCondition(node.condition(), node.isNegated(), node);
             }
+        }
+
+        /**
+         * Checks whether replacing a guard with a dominating guard preserves the declared type of
+         * every usage. Some guard users require a concrete guard subtype instead of any
+         * {@link jdk.graal.compiler.nodes.extended.GuardingNode}.
+         */
+        private static boolean canReplaceAtUsages(Node node, Node replacement) {
+            for (Node usage : node.usages()) {
+                for (Position position : usage.inputPositions()) {
+                    if (position.get(usage) == node && !position.getType().isAssignableFrom(replacement.getClass())) {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
 
         /**
@@ -611,7 +633,8 @@ public class ConditionalEliminationPhase extends PostRunCanonicalizationPhase<Co
                          * just recently skipped. In the optimization (if conditional elimination is
                          * called multiple times).
                          */
-                        if (infoElement.getGuard() != fieldPiGuard && nodeToBlock.get(infoElement.getGuard().asNode()).strictlyDominates(nodeToBlock.get(fieldPiGuard.asNode()))) {
+                        if (infoElement.getGuard() != fieldPiGuard && nodeToBlock.get(infoElement.getGuard().asNode()).strictlyDominates(nodeToBlock.get(fieldPiGuard.asNode())) &&
+                                        ConditionalEliminationUtil.mayRewriteToGuard(infoElement.getGuard())) {
                             final Stamp stamp = infoElement.getStamp();
                             /*
                              * Determine if this pi can be skipped by using a pi based on the stamp
@@ -739,6 +762,9 @@ public class ConditionalEliminationPhase extends PostRunCanonicalizationPhase<Co
         }
 
         private boolean rewriteIfCondition(IfNode node, GuardingNode guard, boolean result) {
+            if (!ConditionalEliminationUtil.mayRewriteToGuard(guard)) {
+                return false;
+            }
             AbstractBeginNode survivingSuccessor = node.getSuccessor(result);
             node.setCondition(LogicConstantNode.forBoolean(result, node.graph()));
             if (survivingSuccessor instanceof LoopExitNode loopExitNode) {
@@ -773,7 +799,7 @@ public class ConditionalEliminationPhase extends PostRunCanonicalizationPhase<Co
             ConditionalEliminationUtil.InfoElement infoElement = infoElementProvider.infoElements(piNode.object());
             while (infoElement != null) {
                 Stamp joinedStamp = infoElement.getStamp().join(piNode.piStamp());
-                if (joinedStamp.equals(infoElement.getStamp())) {
+                if (joinedStamp.equals(infoElement.getStamp()) && ConditionalEliminationUtil.mayRewriteToGuard(infoElement.getGuard())) {
                     /*
                      * The PiNode is already proven by a dominating condition. We just re-anchor the
                      * PiNode at the dominating point. If that point already has an equivalent
@@ -880,8 +906,8 @@ public class ConditionalEliminationPhase extends PostRunCanonicalizationPhase<Co
                         return;
                     }
                     processAbstractBegin((AbstractBeginNode) node);
-                } else if (node instanceof FixedGuardNode) {
-                    processFixedGuard((FixedGuardNode) node);
+                } else if (node instanceof AbstractFixedGuardNode) {
+                    processFixedGuard((AbstractFixedGuardNode) node);
                 } else if (node instanceof GuardNode) {
                     processGuard((GuardNode) node);
                 } else if (node instanceof ConditionAnchorNode) {
@@ -920,6 +946,9 @@ public class ConditionalEliminationPhase extends PostRunCanonicalizationPhase<Co
                         ValueNode valueAt = phi.valueAt(i);
                         Stamp curBestStamp = valueAt.stamp(NodeView.DEFAULT);
                         ConditionalEliminationUtil.InfoElement infoElement = phiInfoElements.get(merge.forwardEndAt(i));
+                        if (infoElement != null && !ConditionalEliminationUtil.mayRewriteToGuard(infoElement.getGuard())) {
+                            infoElement = null;
+                        }
                         if (infoElement != null) {
                             curBestStamp = curBestStamp.join(infoElement.getStamp());
                         }

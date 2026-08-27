@@ -22,30 +22,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-/*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
- *
- * This code is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
- *
- * This code is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code).
- *
- * You should have received a copy of the GNU General Public License version
- * 2 along with this work; if not, write to the Free Software Foundation,
- * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
- *
- * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
- * or visit www.oracle.com if you need additional information or have any
- * questions.
- */
 package com.oracle.svm.hosted.classinitialization;
 
 import java.util.List;
@@ -96,6 +72,7 @@ import jdk.graal.compiler.nodes.virtual.VirtualInstanceNode;
 import jdk.graal.compiler.nodes.virtual.VirtualObjectNode;
 import jdk.graal.compiler.replacements.arraycopy.ArrayCopyNode;
 import jdk.graal.compiler.replacements.nodes.ObjectClone;
+import jdk.graal.compiler.vector.replacements.CopyOfNode;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -216,6 +193,8 @@ public class SimulateClassInitializerGraphDecoder extends InlineBeforeAnalysisGr
             node = handleStoreIndexedNode(storeIndexedNode);
         } else if (node instanceof LoadIndexedNode loadIndexedNode) {
             node = handleLoadIndexedNode(loadIndexedNode);
+        } else if (node instanceof CopyOfNode copyOfNode) {
+            node = handleCopyOfNode(countersScope, copyOfNode);
         } else if (node instanceof ArrayCopyNode arrayCopyNode) {
             node = handleArrayCopyNode(arrayCopyNode);
         } else if (node instanceof EnsureClassInitializedNode ensureClassInitializedNode) {
@@ -339,6 +318,38 @@ public class SimulateClassInitializerGraphDecoder extends InlineBeforeAnalysisGr
     }
 
     /**
+     * Simulates {@link CopyOfNode} when the source array, offsets, and lengths are constants known
+     * during class initialization. The allocation counter is updated before creating the image heap
+     * array so the simulated allocation observes the same limits as normal array creation.
+     */
+    private ValueNode handleCopyOfNode(SimulateClassInitializerInlineScope countersScope, CopyOfNode node) {
+        AnalysisType newArrayType;
+        if (node.getElementKind() == JavaKind.Object) {
+            var constantType = node.getNewObjectArrayType().asConstant();
+            if (constantType == null) {
+                /* Object array copy where the new array element type is not a constant. */
+                return node;
+            }
+            newArrayType = (AnalysisType) providers.getConstantReflection().asJavaType(constantType);
+        } else {
+            /* For a primitive array copy, the array type is derived from the element kind. */
+            newArrayType = (AnalysisType) metaAccess.lookupJavaType(node.getElementKind().toJavaClass()).getArrayClass();
+        }
+
+        int from = asIntegerOrMinusOne(node.getFrom());
+        int sourceLength = asIntegerOrMinusOne(node.getSourceLength());
+        int newLength = asIntegerOrMinusOne(node.getNewLength());
+        if (from >= 0 && sourceLength >= 0 && accumulateNewArraySize(countersScope, newArrayType, newLength, node)) {
+            var newArray = createNewArray(newArrayType, newLength);
+            int readLength = Math.min(newLength, sourceLength - from);
+            if (handleArrayCopy(asActiveImageHeapArray(node.getSource()), from, newArray, 0, readLength)) {
+                return ConstantNode.forConstant(newArray, metaAccess);
+            }
+        }
+        return node;
+    }
+
+    /**
      * Simulates {@link System#arraycopy(Object, int, Object, int, int)} for active image-heap
      * arrays. The implementation first enforces the same bounds and assignability checks that the
      * runtime copy would observe and then performs an element-wise copy through the
@@ -393,13 +404,23 @@ public class SimulateClassInitializerGraphDecoder extends InlineBeforeAnalysisGr
 
     private Node handleEnsureClassInitializedNode(EnsureClassInitializedNode node) {
         var aConstantReflection = (AnalysisConstantReflectionProvider) providers.getConstantReflection();
-        var classInitType = (AnalysisType) node.constantTypeOrNull(aConstantReflection);
-        if (classInitType != null) {
-            if (support.trySimulateClassInitializer(graph.getDebug(), classInitType, clusterMember) && !aConstantReflection.initializationCheckRequired(classInitType)) {
+        var initializationTargetType = (AnalysisType) node.constantTypeOrNull(aConstantReflection);
+        if (initializationTargetType != null) {
+            boolean requiresInitializationCheck = aConstantReflection.initializationCheckRequired(initializationTargetType);
+            if (requiresInitializationCheck) {
+                /*
+                 * A required initialization check means that the initializer currently being decoded
+                 * cannot be simulated. The EnsureClassInitializedNode must remain in the graph and
+                 * execute at run time. For a type-reached check, executing the node marks the
+                 * target's DynamicHub as reached and makes conditional metadata available.
+                 */
+                return node;
+            }
+            if (support.trySimulateClassInitializer(graph.getDebug(), initializationTargetType, clusterMember)) {
                 /* Class is already simulated initialized, no need for a run-time check. */
                 return null;
             }
-            var classInitTypeMember = clusterMember.cluster.clusterMembers.get(classInitType);
+            var classInitTypeMember = clusterMember.cluster.clusterMembers.get(initializationTargetType);
             if (classInitTypeMember != null && !classInitTypeMember.status.published) {
                 /*
                  * The class is part of the same cycle as our class. We optimistically remove the

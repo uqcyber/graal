@@ -40,9 +40,10 @@ import org.graalvm.word.WordBase;
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.graal.meta.KnownOffsets;
 import com.oracle.svm.core.graal.snippets.OpenTypeWorldDispatchTableSnippets;
-import com.oracle.svm.core.heap.UnknownObjectField;
+import com.oracle.svm.guest.staging.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
+import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.espresso.classfile.ParserKlass;
 import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
 import com.oracle.svm.espresso.classfile.descriptors.Name;
@@ -57,10 +58,12 @@ import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.OriginalClassProvider;
 
+import jdk.vm.ci.meta.Assumptions;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.ResolvedJavaRecordComponent;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
@@ -85,6 +88,53 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
     @Platforms(Platform.HOSTED_ONLY.class) private ResolvedJavaType originalType;
 
     private final String sourceFileName;
+
+    /** Lazily allocated state whose lifetime follows this class metadata object. */
+    private RuntimeClassHierarchyState runtimeClassHierarchyState;
+
+    /** Returns this type's runtime hierarchy state, creating it while the hierarchy lock is held. */
+    final RuntimeClassHierarchyState getOrCreateRuntimeClassHierarchyState() {
+        if (runtimeClassHierarchyState == null) {
+            runtimeClassHierarchyState = new RuntimeClassHierarchyState();
+        }
+        return runtimeClassHierarchyState;
+    }
+
+    /** Returns the existing runtime hierarchy state, or {@code null} if none has been needed. */
+    final RuntimeClassHierarchyState getRuntimeClassHierarchyState() {
+        return runtimeClassHierarchyState;
+    }
+
+    @Override
+    public Assumptions.AssumptionResult<ResolvedJavaType> findLeafConcreteSubtype() {
+        if (isLeaf()) {
+            return new Assumptions.AssumptionResult<>(this);
+        }
+        if (isArray()) {
+            ResolvedJavaType elementalType = getElementalType();
+            Assumptions.AssumptionResult<ResolvedJavaType> elementResult = elementalType.findLeafConcreteSubtype();
+            if (elementResult != null && elementResult.getResult().equals(elementalType)) {
+                Assumptions.AssumptionResult<ResolvedJavaType> result = new Assumptions.AssumptionResult<>(this);
+                result.add(elementResult);
+                return result;
+            }
+            return null;
+        }
+        return RuntimeLoadedClassHierarchy.findLeafConcreteSubtype(this);
+    }
+
+    @Override
+    public ResolvedJavaType getSingleImplementor() {
+        return RuntimeLoadedClassHierarchy.getSingleImplementor(this);
+    }
+
+    @Override
+    public Assumptions.AssumptionResult<ResolvedJavaMethod> findUniqueConcreteMethod(ResolvedJavaMethod method) {
+        if (method instanceof InterpreterResolvedJavaMethod interpreterMethod) {
+            return RuntimeLoadedClassHierarchy.findUniqueConcreteMethod(this, interpreterMethod);
+        }
+        return null;
+    }
 
     /**
      * Holds the interpreter-side dispatch table for this type.
@@ -659,25 +709,6 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
         throw VMError.unimplemented("getJavaName");
     }
 
-    @Override
-    public final InterpreterResolvedJavaType findLeastCommonAncestor(InterpreterResolvedJavaType other) {
-        assert !isPrimitive() && !other.isPrimitive();
-        assert !isInterface() && !other.isInterface();
-        assert !isArray() && !other.isArray();
-        InterpreterResolvedObjectType t1 = this;
-        InterpreterResolvedObjectType t2 = (InterpreterResolvedObjectType) other;
-        while (true) {
-            if (t1.isAssignableFrom(t2)) {
-                return t1;
-            }
-            if (t2.isAssignableFrom(t1)) {
-                return t2;
-            }
-            t1 = t1.getSuperclass();
-            t2 = t2.getSuperclass();
-        }
-    }
-
     /**
      * Returns the super class according to the contract of {@link TypeAccess#getSuperClass()}.
      * <p>
@@ -745,6 +776,20 @@ public class InterpreterResolvedObjectType extends InterpreterResolvedJavaType {
     }
 
     public final void imposeLoadingConstraints() {
+        /*
+         * Preparation updates shared loading-constraint state through the vtable and itable walks
+         * below. Keep the yellow zone available for the complete update so StackOverflowError
+         * cannot expose partially recorded constraints.
+         */
+        StackOverflowCheck.singleton().makeYellowZoneAvailable();
+        try {
+            imposeLoadingConstraints0();
+        } finally {
+            StackOverflowCheck.singleton().protectYellowZone();
+        }
+    }
+
+    private void imposeLoadingConstraints0() {
         if (!isInterface() && getSuperClass() != null) {
             InterpreterResolvedJavaMethod[] thisTable = getVtable();
             InterpreterResolvedJavaMethod[] superTable = getSuperClass().getVtable();

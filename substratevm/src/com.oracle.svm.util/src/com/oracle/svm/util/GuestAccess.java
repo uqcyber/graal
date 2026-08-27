@@ -46,6 +46,7 @@ import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import jdk.graal.compiler.vmaccess.InvocationException;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -351,16 +352,35 @@ public final class GuestAccess implements VMAccess {
     }
 
     /**
+     * Creates a builder-side supplier backed by one instance of {@code supplierType} in this guest
+     * context. The returned supplier must not outlive this guest context.
+     *
+     * @param supplierType a concrete {@link java.util.function.BooleanSupplier} type
+     */
+    public BooleanSupplier createBooleanSupplier(ResolvedJavaType supplierType) {
+        JavaConstant supplier = instantiateBooleanSupplier(supplierType);
+        return () -> invokeBooleanSupplier(supplier);
+    }
+
+    /** Instantiates {@code supplierType} in the guest. */
+    private JavaConstant instantiateBooleanSupplier(ResolvedJavaType supplierType) {
+        ResolvedJavaMethod cons = JVMCIReflectionUtil.getDeclaredConstructor(false, supplierType);
+        return invoke(cons, null);
+    }
+
+    /** Invokes a guest {@link BooleanSupplier}. */
+    private boolean invokeBooleanSupplier(JavaConstant supplier) {
+        return invoke(elements.java_util_function_BooleanSupplier_getAsBoolean, supplier).asBoolean();
+    }
+
+    /**
      * Instantiates an instance of {@code supplierType} in the guest and invokes
      * {@link BooleanSupplier#getAsBoolean()} on it.
      *
      * @param supplierType a concrete {@link java.util.function.BooleanSupplier} type
      */
     public boolean callBooleanSupplier(ResolvedJavaType supplierType) {
-        ResolvedJavaMethod cons = JVMCIReflectionUtil.getDeclaredConstructor(false, supplierType);
-        JavaConstant supplier = invoke(cons, null);
-        ResolvedJavaMethod getAsBoolean = JVMCIReflectionUtil.getUniqueDeclaredMethod(metaAccess, BooleanSupplier.class, "getAsBoolean");
-        return invoke(getAsBoolean, supplier).asBoolean();
+        return invokeBooleanSupplier(instantiateBooleanSupplier(supplierType));
     }
 
     /**
@@ -373,8 +393,26 @@ public final class GuestAccess implements VMAccess {
     public JavaConstant callFunction(ResolvedJavaType functionType, JavaConstant arg) {
         ResolvedJavaMethod cons = JVMCIReflectionUtil.getDeclaredConstructor(false, functionType);
         JavaConstant function = invoke(cons, null);
-        ResolvedJavaMethod apply = JVMCIReflectionUtil.getUniqueDeclaredMethod(metaAccess, Function.class, "apply", Object.class);
-        return invoke(apply, function, arg);
+        return invoke(elements.java_util_function_Function_apply, function, arg);
+    }
+
+    /**
+     * Instantiates an instance of {@code predicateType} in the guest and invokes
+     * {@link java.util.function.Predicate#test(Object)} on it.
+     */
+    public boolean callPredicate(ResolvedJavaType predicateType, JavaConstant arg) {
+        ResolvedJavaMethod cons = JVMCIReflectionUtil.getDeclaredConstructor(false, predicateType);
+        JavaConstant predicate = invoke(cons, null);
+        return invoke(elements.java_util_function_Predicate_test, predicate, arg).asBoolean();
+    }
+
+    /**
+     * Gets an annotation instance from a guest type.
+     */
+    public JavaConstant getAnnotation(ResolvedJavaType annotatedType, ResolvedJavaType annotationType) {
+        JavaConstant annotatedClass = constantReflection.asJavaClass(annotatedType);
+        JavaConstant annotationClass = constantReflection.asJavaClass(annotationType);
+        return invoke(elements.java_lang_Class_getAnnotation, annotatedClass, annotationClass);
     }
 
     /**
@@ -572,9 +610,27 @@ public final class GuestAccess implements VMAccess {
         return delegate.owns(value);
     }
 
+    /**
+     * Invokes the provided method. Unlike {@link VMAccess#invoke}, this method rethrows builder
+     * exceptions returned through host proxies directly instead of wrapping them in an
+     * {@link InvocationException}.
+     */
     @Override
     public JavaConstant invoke(ResolvedJavaMethod method, JavaConstant receiver, JavaConstant... args) {
-        return delegate.invoke(method, receiver, args);
+        try {
+            return delegate.invoke(method, receiver, args);
+        } catch (InvocationException ie) {
+            if (ie.getCause() != null && ie.getExceptionObject() == null) {
+                // host exception
+                throw sneakyThrow(ie.getCause());
+            }
+            throw ie;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> RuntimeException sneakyThrow(Throwable ex) throws T {
+        throw (T) ex;
     }
 
     @Override

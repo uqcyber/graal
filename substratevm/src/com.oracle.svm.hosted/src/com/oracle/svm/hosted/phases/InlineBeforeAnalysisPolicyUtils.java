@@ -37,7 +37,7 @@ import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisPolicy;
 import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.UninterruptibleAnnotationUtils;
-import com.oracle.svm.core.heap.RestrictHeapAccess;
+import com.oracle.svm.guest.staging.core.heap.RestrictHeapAccess;
 import com.oracle.svm.hosted.AbstractAnalysisMetadataTrackingNode;
 import com.oracle.svm.hosted.SVMHost;
 import com.oracle.svm.hosted.SharedArenaSupport;
@@ -48,7 +48,7 @@ import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.util.BasedOnJDKFile;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.OriginalMethodProvider;
 
@@ -92,7 +92,7 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  * only exception are constants - an arbitrary number of constants is always allowed. Limiting to 1
  * node (which can be also 1 invoke) means that field accessors can be inlined and forwarding
  * methods can be inlined. But null checks and class initialization checks are already putting a
- * method above the limit. On the other hand, the inlining depth is generous because we do do not
+ * method above the limit. On the other hand, the inlining depth is generous because we do not
  * need to limit it. Note that more experimentation is necessary to come up with the optimal
  * configuration.
  *
@@ -179,7 +179,7 @@ public class InlineBeforeAnalysisPolicyUtils {
     private final Set<ResolvedJavaMethod> explicitMethodHandleIntrinisificationRoots = GuestAccess.elements().abstractMemorySegmentGetSetMethods;
 
     public boolean isMethodHandleIntrinsificationRoot(ResolvedJavaMethod method) {
-        return AnnotationUtil.isAnnotationPresent(method, COMPILED_LAMBDA_FORM_ANNOTATION) ||
+        return GuestAnnotationAccess.isAnnotationPresent(method, COMPILED_LAMBDA_FORM_ANNOTATION) ||
                         explicitMethodHandleIntrinisificationRoots.contains(OriginalMethodProvider.getOriginalMethod(method));
     }
 
@@ -214,7 +214,7 @@ public class InlineBeforeAnalysisPolicyUtils {
          * other phases.
          */
         if (isScopedMethod(b.getMethod()) &&
-                        (AnnotationUtil.isAnnotationPresent(method, AlwaysInline.class) || AnnotationUtil.isAnnotationPresent(method, ForceInline.class))) {
+                        (GuestAnnotationAccess.isAnnotationPresent(method, AlwaysInline.class) || GuestAnnotationAccess.isAnnotationPresent(method, ForceInline.class))) {
             return false;
         }
 
@@ -268,14 +268,14 @@ public class InlineBeforeAnalysisPolicyUtils {
         if (hostVM.neverInlineTrivial(caller, callee)) {
             return false;
         }
-        if (AnnotationUtil.isAnnotationPresent(callee, Fold.class) || AnnotationUtil.isAnnotationPresent(callee, Node.NodeIntrinsic.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(callee, Fold.class) || GuestAnnotationAccess.isAnnotationPresent(callee, Node.NodeIntrinsic.class)) {
             /*
              * We should never see a call to such a method. But if we do, do not inline them
              * otherwise we miss the opportunity later to report it as an error.
              */
             return false;
         }
-        if (AnnotationUtil.isAnnotationPresent(callee, RestrictHeapAccess.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(callee, RestrictHeapAccess.class)) {
             /*
              * This is conservative. We do not know the caller's heap restriction state yet because
              * that can only be computed after static analysis (it relies on the call graph produced
@@ -606,7 +606,7 @@ public class InlineBeforeAnalysisPolicyUtils {
                     ReflectionUtil.lookupMethod(ReflectionUtil.lookupClass("jdk.internal.foreign.AbstractMemorySegmentImpl"), "equals", Object.class));
 
     private boolean inlineForMethodHandleIntrinsification(AnalysisMethod method) {
-        return AnnotationUtil.isAnnotationPresent(method, ForceInline.class) ||
+        return GuestAnnotationAccess.isAnnotationPresent(method, ForceInline.class) ||
                         isMethodHandleIntrinsificationRoot(method) ||
                         INLINE_METHOD_HANDLE_CLASSES.contains(method.getDeclaringClass().getJavaClass()) ||
                         isManuallyListed(method.getJavaMethod());

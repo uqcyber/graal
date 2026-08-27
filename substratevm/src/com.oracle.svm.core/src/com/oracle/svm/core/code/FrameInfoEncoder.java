@@ -59,7 +59,7 @@ import com.oracle.svm.core.util.ByteArrayReader;
 import com.oracle.svm.core.util.HostedStringDeduplication;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.core.common.LIRKind;
@@ -161,7 +161,7 @@ public class FrameInfoEncoder {
          * a {@link Hidden} annotation themselves.
          */
         protected boolean isHiddenMethod(ResolvedJavaMethod method) {
-            return method.getDeclaringClass().isHidden() || AnnotationUtil.isAnnotationPresent(method, Hidden.class);
+            return method.getDeclaringClass().isHidden() || GuestAnnotationAccess.isAnnotationPresent(method, Hidden.class);
         }
 
         /**
@@ -545,7 +545,7 @@ public class FrameInfoEncoder {
         return data;
     }
 
-    protected FrameData addDefaultDebugInfo(ResolvedJavaMethod method, int totalFrameSize) {
+    FrameData addDefaultDebugInfo(ResolvedJavaMethod method, int totalFrameSize) {
         FrameData data = new FrameData(null, totalFrameSize, null, true);
         data.frame.encodedBci = FrameInfoEncoder.encodeBci(0, FrameState.StackState.BeforePop);
         customization.fillSourceFields(method, data.frame);
@@ -614,6 +614,16 @@ public class FrameInfoEncoder {
                  */
                 frameInfo.deoptMethod = method;
                 encoders.objectConstants.addObject(constantAccess.forObject(method, false));
+            }
+            /*
+             * Runtime frame-info customization requests method retention, and an interpreter
+             * counterpart is precisely what makes a runtime-installed frame eligible to resume in
+             * Ristretto. Make that producer contract explicit here: the lazy-deoptimization stub
+             * selector must never have to guess a return-register root kind from an anonymous
+             * AfterPop frame. General AOT encodings remain allowed to omit this optional field.
+             */
+            if (customization.storeDeoptTargetMethod() && method.getInterpreterMethod() != null) {
+                VMError.guarantee(method.equals(frameInfo.deoptMethod), "Runtime interpreter frame metadata must retain its deoptimization method");
             }
 
             frameInfo.numLocals = frame.numLocals;
@@ -918,13 +928,17 @@ public class FrameInfoEncoder {
         return result;
     }
 
+    byte[] encodeAll(Runnable recordActivity) {
+        return NonmovableArrays.heapCopyOfByteArray(encodeFrameDatas(recordActivity));
+    }
+
     protected void encodeAllAndInstall(CodeInfo target, Runnable recordActivity) {
         NonmovableArray<Byte> frameInfoEncodings = encodeFrameDatas(recordActivity);
         install(target, frameInfoEncodings);
     }
 
     @Uninterruptible(reason = "Nonmovable object arrays are not visible to GC until installed in target.")
-    private static void install(CodeInfo target, NonmovableArray<Byte> frameInfoEncodings) {
+    static void install(CodeInfo target, NonmovableArray<Byte> frameInfoEncodings) {
         CodeInfoAccess.setFrameInfo(target, frameInfoEncodings);
         afterInstallation(target);
     }

@@ -207,6 +207,21 @@ public final class ClassRegistries implements ParsingContext {
         return null;
     }
 
+    /// Reports whether `name` is already present as an AOT-loaded class for `loader`.
+    public static boolean hasAOTLoadedClass(String name, ClassLoader loader) {
+        ByteSequence typeBytes = ByteSequence.createTypeFromName(name);
+        Symbol<Type> type = SymbolsSupport.getTypes().lookupValidType(typeBytes);
+        if (type == null) {
+            return false;
+        }
+        for (var singleton : layeredSingletons()) {
+            if (singleton.getRegistry(loader).findAOTLoadedClass(type) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static ParsingContext getParsingContext() {
         assert RuntimeClassLoading.isSupported();
         return runtimeLastLayer();
@@ -281,11 +296,12 @@ public final class ClassRegistries implements ParsingContext {
      * this query), and null otherwise.
      */
     private Object checkResult(DynamicHub result, String name) {
-        if (MetadataTracer.enabled() && shouldFollowReflectionConfiguration()) {
+        Object knownClassName = shouldFollowReflectionConfiguration() ? knownClassNames.get(name) : null;
+        if (MetadataTracer.enabled() && shouldTraceClassLookup(result, knownClassName)) {
             MetadataTracer.singleton().traceReflectionType(name);
         }
         if (result == null && shouldFollowReflectionConfiguration()) {
-            Throwable savedException = getSavedException(name);
+            Throwable savedException = getSavedException(name, knownClassName);
             if (savedException != null) {
                 if (savedException instanceof Error error) {
                     if (!RuntimeClassLoading.isSupported()) {
@@ -302,6 +318,14 @@ public final class ClassRegistries implements ParsingContext {
         return result;
     }
 
+    private static boolean shouldTraceClassLookup(DynamicHub result, Object knownClassName) {
+        if (result != null) {
+            return MetadataTracer.shouldTraceMetadata(result.getDynamicAccessMetadata());
+        }
+        RuntimeDynamicAccessMetadata dynamicAccessMetadata = knownClassName == null ? null : ConditionalRuntimeValue.getDynamicAccessMetadata(knownClassName);
+        return MetadataTracer.shouldTraceMetadata(dynamicAccessMetadata);
+    }
+
     private static void maybeThrowMissingRegistrationError(DynamicHub result, String name) {
         if (throwMissingRegistrationErrors() && shouldFollowReflectionConfiguration() && ClassNameSupport.isValidReflectionName(name) && shouldThrowMissingRegistrationError(result)) {
             MissingReflectionRegistrationUtils.reportClassAccess(name);
@@ -316,8 +340,7 @@ public final class ClassRegistries implements ParsingContext {
         return dynamicAccess == null || !dynamicAccess.satisfied();
     }
 
-    private Throwable getSavedException(String name) {
-        Object cond = knownClassNames.get(name);
+    private static Throwable getSavedException(String name, Object cond) {
         if (cond == null || !ConditionalRuntimeValue.isSatisfied(cond)) {
             return null;
         }

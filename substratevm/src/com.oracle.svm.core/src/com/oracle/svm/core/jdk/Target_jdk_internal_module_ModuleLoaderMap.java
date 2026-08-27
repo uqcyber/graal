@@ -30,7 +30,7 @@ import java.util.function.Function;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.TargetClass;
 
-@TargetClass(className = "jdk.internal.module.ModuleLoaderMap")
+@TargetClass(value = jdk.internal.module.ModuleLoaderMap.class)
 @SuppressWarnings("unused")
 final class Target_jdk_internal_module_ModuleLoaderMap {
     @Alias

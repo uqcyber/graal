@@ -61,12 +61,13 @@ import com.oracle.svm.core.heap.ObjectVisitor;
 import com.oracle.svm.core.heap.OutOfMemoryUtil;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.heap.ReferenceInternals;
-import com.oracle.svm.core.heap.RestrictHeapAccess;
+import com.oracle.svm.guest.staging.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.VMOperationInfos;
 import com.oracle.svm.core.hub.InteriorObjRefWalker;
 import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.snippets.ImplicitExceptions;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.core.hub.DynamicHubIntrinsics;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.core.thread.NativeVMOperation;
 import com.oracle.svm.core.thread.NativeVMOperationData;
 import com.oracle.svm.core.thread.VMOperation;
@@ -207,12 +208,7 @@ public class WasmLMGC implements GC {
 
     @Override
     public void collect(GCCause cause) {
-        collect(cause, false);
-    }
-
-    @Override
-    public void collectCompletely(GCCause cause) {
-        collect(cause, true);
+        collect(cause, cause.collectsCompletely());
     }
 
     @Override
@@ -564,7 +560,7 @@ final class GrayToBlackObjectVisitor implements ObjectVisitor {
             assert isGray(obj) : "Object in worklist is not gray";
 
             // Mark all references in the object gray
-            if (probability(SLOW_PATH_PROBABILITY, KnownIntrinsics.readHub(obj).isReferenceInstanceClass())) {
+            if (probability(SLOW_PATH_PROBABILITY, DynamicHubIntrinsics.readHub(obj).isReferenceInstanceClass())) {
                 discoverReference(obj, grayReferenceVisitor);
             }
             InteriorObjRefWalker.walkObject(obj, grayReferenceVisitor);
@@ -724,7 +720,7 @@ final class Target_java_lang_Runtime {
 
     @Substitute
     private void gc() {
-        WasmLMGC.getGC().collectCompletely(GCCause.JavaLangSystemGC);
+        WasmLMGC.getGC().collect(GCCause.JavaLangSystemGC);
     }
 
     @Substitute

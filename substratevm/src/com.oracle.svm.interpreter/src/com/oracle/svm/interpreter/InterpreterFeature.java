@@ -24,7 +24,6 @@
  */
 package com.oracle.svm.interpreter;
 
-import static com.oracle.svm.core.UninterruptibleAnnotationUtils.UninterruptibleGuestValue;
 import static jdk.graal.compiler.nodeinfo.NodeCycles.CYCLES_0;
 import static jdk.graal.compiler.nodeinfo.NodeSize.SIZE_0;
 
@@ -47,6 +46,7 @@ import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.UninterruptibleAnnotationUtils;
+import com.oracle.svm.core.UninterruptibleGuestValue;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.aarch64.AArch64InterpreterStubs;
 import com.oracle.svm.core.graal.amd64.AMD64InterpreterStubs;
@@ -72,7 +72,7 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -105,7 +105,7 @@ import jdk.vm.ci.meta.Signature;
 @SingletonTraits(access = BuildtimeAccessOnly.class, layeredCallbacks = NoLayeredCallbacks.class, other = DisallowLayered.class)
 public class InterpreterFeature implements InternalFeature {
     private AnalysisMethod leaveStub;
-    private AnalysisMethod leaveJNIStub;
+    private AnalysisMethod nativeDowncallStub;
 
     static boolean assertionsEnabled() {
         boolean enabled = false;
@@ -114,10 +114,10 @@ public class InterpreterFeature implements InternalFeature {
     }
 
     static boolean executableByInterpreter(AnalysisMethod m) {
-        if (AnnotationUtil.getAnnotation(m, CFunction.class) != null) {
+        if (GuestAnnotationAccess.isAnnotationPresent(m, CFunction.class)) {
             return false;
         }
-        if (AnnotationUtil.getAnnotation(m, CEntryPoint.class) != null) {
+        if (GuestAnnotationAccess.isAnnotationPresent(m, CEntryPoint.class)) {
             return false;
         }
         UninterruptibleGuestValue uninterruptible = UninterruptibleAnnotationUtils.getAnnotation(m);
@@ -143,7 +143,7 @@ public class InterpreterFeature implements InternalFeature {
     }
 
     public static boolean callableByInterpreter(ResolvedJavaMethod m, MetaAccessProvider metaAccess) {
-        if (AnnotationUtil.getAnnotation(m, Fold.class) != null) {
+        if (GuestAnnotationAccess.isAnnotationPresent(m, Fold.class)) {
             /*
              * GR-55052: For now @Fold methods are considered not callable. The problem is that such
              * methods are reachability cut-offs, so we would need to roll our own reachability
@@ -283,9 +283,9 @@ public class InterpreterFeature implements InternalFeature {
         leaveStub = metaAccess.lookupJavaMethod(leaveMethod);
         accessImpl.registerAsRoot(leaveStub, true, "low level entry point");
 
-        Method leaveJNIMethod = ReflectionUtil.lookupMethod(InterpreterStubSection.class, "leaveInterpreterJNIStub", CFunctionPointer.class, Pointer.class, long.class, boolean.class);
-        leaveJNIStub = metaAccess.lookupJavaMethod(leaveJNIMethod);
-        accessImpl.registerAsRoot(leaveJNIStub, true, "low level JNI entry point");
+        Method nativeDowncallMethod = ReflectionUtil.lookupMethod(InterpreterStubSection.class, "leaveInterpreterForNativeDowncallStub", CFunctionPointer.class, Pointer.class, long.class, byte.class);
+        nativeDowncallStub = metaAccess.lookupJavaMethod(nativeDowncallMethod);
+        accessImpl.registerAsRoot(nativeDowncallStub, true, "low level native downcall entry point");
 
         InterpreterOptions.registerInterpreterTraceOptionValidation();
     }
@@ -325,10 +325,10 @@ public class InterpreterFeature implements InternalFeature {
 
         InterpreterSupport.setLeaveStubPointer(new MethodPointer(hLeaveStub), leaveStubLength);
 
-        HostedMethod hLeaveJNIStub = accessImpl.getUniverse().lookup(leaveJNIStub);
-        int leaveJNIStubLength = accessImpl.getCompilations().get(hLeaveJNIStub).result.getTargetCodeSize();
+        HostedMethod hNativeDowncallStub = accessImpl.getUniverse().lookup(nativeDowncallStub);
+        int nativeDowncallStubLength = accessImpl.getCompilations().get(hNativeDowncallStub).result.getTargetCodeSize();
 
-        InterpreterSupport.setLeaveJNIStubPointer(new MethodPointer(hLeaveJNIStub), leaveJNIStubLength);
+        InterpreterSupport.setNativeDowncallStubPointer(new MethodPointer(hNativeDowncallStub), nativeDowncallStubLength);
     }
 
     private static ResolvedJavaMethod getExecuteBodyFromBCIMethod(MetaAccessProvider metaAccess) {

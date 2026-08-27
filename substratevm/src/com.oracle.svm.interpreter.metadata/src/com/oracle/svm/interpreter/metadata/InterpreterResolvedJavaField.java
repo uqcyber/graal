@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,6 +43,7 @@ import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.core.invoke.ResolvedMember;
 import com.oracle.svm.core.meta.SharedField;
+import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.espresso.classfile.ClassfileParser;
 import com.oracle.svm.espresso.classfile.Constants;
 import com.oracle.svm.espresso.classfile.descriptors.Name;
@@ -52,7 +53,7 @@ import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.vm.ci.meta.JavaConstant;
@@ -79,6 +80,7 @@ public class InterpreterResolvedJavaField extends InterpreterAnnotated implement
     private final int flags;
     private final Symbol<Name> name;
     private final Symbol<Type> typeSymbol;
+    private final JavaKind javaKind;
 
     // Computed after analysis.
     private int offset;
@@ -115,6 +117,7 @@ public class InterpreterResolvedJavaField extends InterpreterAnnotated implement
                     boolean isWordStorage) {
         this.name = MetadataUtil.requireNonNull(name);
         this.typeSymbol = MetadataUtil.requireNonNull(typeSymbol);
+        this.javaKind = CremaTypeAccess.symbolToJvmciKind(typeSymbol);
         this.flags = flags;
         this.declaringClass = MetadataUtil.requireNonNull(declaringClass);
         this.offset = offset;
@@ -134,7 +137,7 @@ public class InterpreterResolvedJavaField extends InterpreterAnnotated implement
     public static InterpreterResolvedJavaField createAtBuildTime(AnalysisField originalField, InterpreterResolvedObjectType declaringClass) {
         Symbol<Name> nameSymbol = SymbolsSupport.getNames().getOrCreate(originalField.getName());
         Symbol<Type> typeSymbol = CremaTypeAccess.jvmciNameToType(originalField.getType().getName());
-        boolean isStable = AnnotationUtil.isAnnotationPresent(originalField, jdk.internal.vm.annotation.Stable.class);
+        boolean isStable = GuestAnnotationAccess.isAnnotationPresent(originalField, jdk.internal.vm.annotation.Stable.class);
         boolean isHidden = originalField.isInternal();
         int flags = createFlags(originalField.getModifiers(), isStable, isHidden);
         InterpreterResolvedJavaField field = new InterpreterResolvedJavaField(
@@ -295,7 +298,7 @@ public class InterpreterResolvedJavaField extends InterpreterAnnotated implement
 
     @Override
     public final JavaKind getJavaKind() {
-        return CremaTypeAccess.symbolToJvmciKind(getSymbolicType());
+        return javaKind;
     }
 
     public final boolean isWordStorage() {
@@ -367,11 +370,22 @@ public class InterpreterResolvedJavaField extends InterpreterAnnotated implement
 
     @Override
     public final void loadingConstraints(InterpreterResolvedJavaType accessingClass) {
-        ClassLoader loader1 = accessingClass.getClassLoader();
-        ClassLoader loader2 = getDeclaringClass().getClassLoader();
+        /*
+         * Loading-constraint checks can update shared VM state and therefore must not be interrupted
+         * by a StackOverflowError. Make the yellow zone available before doing any constraint work
+         * so a check that starts near the regular stack boundary can finish. No application code is
+         * invoked while the yellow zone is available.
+         */
+        StackOverflowCheck.singleton().makeYellowZoneAvailable();
+        try {
+            ClassLoader loader1 = accessingClass.getClassLoader();
+            ClassLoader loader2 = getDeclaringClass().getClassLoader();
 
-        if (loader1 != loader2) {
-            CremaSupport.singleton().checkLoadingConstraint(getSymbolicType(), loader1, loader2);
+            if (loader1 != loader2) {
+                CremaSupport.singleton().checkLoadingConstraint(getSymbolicType(), loader1, loader2);
+            }
+        } finally {
+            StackOverflowCheck.singleton().protectYellowZone();
         }
     }
 

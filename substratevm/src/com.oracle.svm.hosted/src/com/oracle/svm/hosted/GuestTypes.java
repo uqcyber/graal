@@ -43,7 +43,6 @@ import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.util.UserError;
-import com.oracle.svm.hosted.annotation.SubstrateAnnotationExtractor;
 import com.oracle.svm.hosted.driver.LayerOptionsSupport;
 import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
 import com.oracle.svm.shared.option.HostedOptionKey;
@@ -51,6 +50,7 @@ import com.oracle.svm.shared.option.LocatableMultiOptionValue;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 import com.oracle.svm.shared.util.LogUtils;
 import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
 import com.oracle.svm.util.TypeResult;
@@ -79,8 +79,6 @@ public final class GuestTypes {
      */
     private final GuestAccess guestAccess;
 
-    private final SubstrateAnnotationExtractor annotationExtractor;
-
     /**
      * The names of types that were discovered during path scanning.
      */
@@ -94,6 +92,12 @@ public final class GuestTypes {
     private final EconomicSet<String> emptySet = EconomicSet.emptySet();
 
     final EconomicSet<URI> builderURILocations = EconomicSet.create();
+
+    /**
+     * Types discovered in containers that belong to the Native Image implementation rather than
+     * the application class path or module path.
+     */
+    private final Set<ResolvedJavaType> builderTypes = ConcurrentHashMap.newKeySet();
 
     /**
      * The platform of the target image being built.
@@ -129,9 +133,8 @@ public final class GuestTypes {
     private final Set<ResolvedJavaType> typesToIncludeUnconditionally = ConcurrentHashMap.newKeySet();
     private final Set<String> includedJavaPackages = ConcurrentHashMap.newKeySet();
 
-    public GuestTypes(GuestAccess guestAccess, SubstrateAnnotationExtractor annotationExtractor, Platform platform) {
+    public GuestTypes(GuestAccess guestAccess, Platform platform) {
         this.guestAccess = guestAccess;
-        this.annotationExtractor = annotationExtractor;
         this.platform = platform;
     }
 
@@ -225,7 +228,7 @@ public final class GuestTypes {
         if (thePlatform == null) {
             return ImageClassLoader.PlatformSupportResult.YES;
         }
-        AnnotationValue av = annotationExtractor.getAnnotationValue(element, Platforms.class);
+        AnnotationValue av = GuestAnnotationAccess.getAnnotationValue(element, Platforms.class);
         if (av != null) {
             List<ResolvedJavaType> platforms = av.getList("value", ResolvedJavaType.class);
             if (platforms.contains(guestAccess.lookupType(Platform.HOSTED_ONLY.class))) {
@@ -278,10 +281,18 @@ public final class GuestTypes {
         return applicationTypes;
     }
 
+    /**
+     * Returns whether {@code type} was discovered from the application class path or module path,
+     * rather than from a Native Image builder container.
+     */
+    public boolean isUserType(ResolvedJavaType type) {
+        return !builderTypes.contains(type);
+    }
+
     public List<ResolvedJavaMethod> findAnnotatedMethods(Class<? extends Annotation> annotationClass) {
         ArrayList<ResolvedJavaMethod> result = new ArrayList<>();
         for (ResolvedJavaMethod method : applicationMethods) {
-            if (annotationExtractor.getAnnotationValue(method, annotationClass) != null) {
+            if (GuestAnnotationAccess.getAnnotationValue(method, annotationClass) != null) {
                 result.add(method);
             }
         }
@@ -415,7 +426,7 @@ public final class GuestTypes {
      */
     private boolean isInPlatform(Annotated element) {
         try {
-            AnnotationValue av = annotationExtractor.getAnnotationValue(element, Platforms.class);
+            AnnotationValue av = GuestAnnotationAccess.getAnnotationValue(element, Platforms.class);
             return av == null || NativeImageGenerator.includedIn(GuestAccess.get().lookupType(platform.getClass()), av.getList("value", ResolvedJavaType.class));
         } catch (LinkageError t) {
             ImageClassLoader.handleClassLoadingError(t, "guest: getting @Platforms annotation value for %s", element);
@@ -430,6 +441,7 @@ public final class GuestTypes {
                     boolean includeUnconditionally,
                     boolean classRequiresInit,
                     boolean preserveReflectionMetadata,
+                    boolean isBuilderContainer,
                     NativeImageClassLoaderSupport.PackageRequest includePackages,
                     NativeImageClassLoaderSupport.PackageRequest preservePackages) {
         recordDiscoveredClassName(container, className, packageName);
@@ -448,6 +460,9 @@ public final class GuestTypes {
         }
 
         if (type != null) {
+            if (isBuilderContainer) {
+                builderTypes.add(type);
+            }
             includedJavaPackages.add(packageName);
             if (includeUnconditionally || includePackages.shouldInclude(packageName)) {
                 typesToIncludeUnconditionally.add(type);
@@ -483,7 +498,7 @@ public final class GuestTypes {
     public List<ResolvedJavaField> findAnnotatedFields(Class<? extends Annotation> annotationClass) {
         ArrayList<ResolvedJavaField> result = new ArrayList<>();
         for (ResolvedJavaField field : applicationFields) {
-            if (annotationExtractor.getAnnotationValue(field, annotationClass) != null) {
+            if (GuestAnnotationAccess.getAnnotationValue(field, annotationClass) != null) {
                 result.add(field);
             }
         }
@@ -500,9 +515,9 @@ public final class GuestTypes {
         return types;
     }
 
-    private void addAnnotatedClasses(EconomicSet<ResolvedJavaType> types, Class<? extends Annotation> annotationClass, ArrayList<ResolvedJavaType> result) {
+    private static void addAnnotatedClasses(EconomicSet<ResolvedJavaType> types, Class<? extends Annotation> annotationClass, ArrayList<ResolvedJavaType> result) {
         for (ResolvedJavaType systemType : types) {
-            if (annotationExtractor.getAnnotationValue(systemType, annotationClass) != null) {
+            if (GuestAnnotationAccess.getAnnotationValue(systemType, annotationClass) != null) {
                 result.add(systemType);
             }
         }
