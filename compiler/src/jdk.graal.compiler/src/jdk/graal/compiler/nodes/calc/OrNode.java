@@ -82,7 +82,7 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicali
             return forX;
         }
         if (forX.isConstant() && !forY.isConstant()) {
-            // veriopt: OrShiftConstantRight: ((ConstantExpr x) | y) |-> (y | (ConstantExpr x)) when ~(is_ConstantExpr y)
+            // veriopt: OrShiftConstantRight: ((const x) | y) |-> (y | (const x)) when ~(is_ConstantExpr y)
             return new OrNode(forY, forX);
         }
 
@@ -92,11 +92,9 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicali
             IntegerStamp xStamp = (IntegerStamp) rawXStamp;
             IntegerStamp yStamp = (IntegerStamp) rawYStamp;
             if (((~xStamp.mustBeSet()) & yStamp.mayBeSet()) == 0) {
-
                 // veriopt: OrLeftFallthrough: (x | y) |-> x when (canBeZero x.stamp & canBeOne y.stamp) = 0
                 return forX;
             } else if (((~yStamp.mustBeSet()) & xStamp.mayBeSet()) == 0) {
-
                 // veriopt: OrRightFallthrough: (x | y) |-> y when (canBeZero y.stamp & canBeOne x.stamp) = 0
                 return forY;
             } else if (IntegerStamp.bitwiseDisjoint(xStamp, yStamp)) {
@@ -113,19 +111,19 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicali
         if (forY.isConstant()) {
             Constant c = forY.asConstant();
             if (op.isNeutral(c)) {
-                return forX;
                 // veriopt: EliminateRedundantFalse: (x | false) |-> x
+                return forX;
             }
             return reassociateMatchedValues(self != null ? self : (OrNode) new OrNode(forX, forY).maybeCommuteInputs(), ValueNode.isConstantPredicate(), forX, forY, view);
         }
 
         if (forX instanceof NotNode && forY instanceof NotNode) {
-
             // veriopt: OrNotOperands: (~x | ~y) |-> ~(x & y)
             return new NotNode(AndNode.create(((NotNode) forX).getValue(), ((NotNode) forY).getValue(), view));
         }
         if (forY instanceof NotNode && ((NotNode) forY).getValue() == forX) {
             // x | ~x |-> -1
+            // veriopt: OrInverse: (x | ~x) |-> const (not 0)
             return BinaryArithmeticNode.createIntegerConstant(rawXStamp, -1L);
         }
         return self != null ? self : new OrNode(forX, forY).maybeCommuteInputs();
