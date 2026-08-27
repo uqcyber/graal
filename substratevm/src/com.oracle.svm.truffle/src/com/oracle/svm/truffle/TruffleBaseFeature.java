@@ -66,9 +66,6 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
-import com.oracle.svm.core.stack.StackOverflowCheck;
-import com.oracle.svm.shared.util.ModuleSupport;
-import jdk.internal.misc.TerminatingThreadLocal;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Pair;
 import org.graalvm.home.HomeFinder;
@@ -84,11 +81,9 @@ import org.graalvm.polyglot.Engine;
 
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.core.AssertionsSupport;
 import com.oracle.svm.core.BuildArtifacts;
-import com.oracle.svm.shared.BuildPhaseProvider;
-import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.core.ParsingReason;
-import com.oracle.svm.core.RuntimeAssertionsSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.annotate.Alias;
@@ -103,13 +98,14 @@ import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
 import com.oracle.svm.core.graal.word.SubstrateWordTypes;
 import com.oracle.svm.core.heap.Pod;
-import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.reflect.target.ReflectionSubstitutionSupport;
+import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.graal.hosted.runtimecompilation.GraalGraphObjectReplacer;
 import com.oracle.svm.graal.hosted.runtimecompilation.SubstrateGraalCompilerSetup;
 import com.oracle.svm.graal.hosted.runtimecompilation.SubstrateRuntimeProviders;
 import com.oracle.svm.graal.meta.SubstrateUniverseFactory;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
@@ -118,15 +114,19 @@ import com.oracle.svm.hosted.GuestTypes;
 import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.hosted.heap.PodSupport;
 import com.oracle.svm.hosted.snippets.SubstrateGraphBuilderPlugins;
+import com.oracle.svm.shared.BuildPhaseProvider;
+import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.DisallowLayered;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.ModuleSupport;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.OriginalClassProvider;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -167,6 +167,7 @@ import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.phases.util.Providers;
 import jdk.graal.compiler.truffle.host.TruffleHostEnvironment;
 import jdk.graal.compiler.truffle.substitutions.TruffleInvocationPlugins;
+import jdk.internal.misc.TerminatingThreadLocal;
 import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -763,7 +764,7 @@ public final class TruffleBaseFeature implements InternalFeature {
 
         @Override
         public Object transform(Object receiver, Object originalValue) {
-            boolean assertionsEnabled = RuntimeAssertionsSupport.singleton().desiredAssertionStatus(clazz);
+            boolean assertionsEnabled = AssertionsSupport.singleton().desiredAssertionStatus(clazz);
             return assertionsEnabled;
         }
     }
@@ -881,7 +882,7 @@ public final class TruffleBaseFeature implements InternalFeature {
                 Class<?> type = field.getType();
                 if (Modifier.isFinal(type.getModifiers())) {
                     // optimization: there is only one possible value for fields with final types
-                    // -> registering as as accessed is enough
+                    // -> registering as accessed is enough
                 } else if (type == Node.class || type == NodeInterface.class) {
                     // optimization: there are always more than one node subclasses
                     // -> we need to register as unsafe accessed eagerly
@@ -980,7 +981,7 @@ public final class TruffleBaseFeature implements InternalFeature {
      * @see #registerTruffleLibrariesAsInHeap
      */
     private void initializeTruffleLibrariesAtBuildTime(DuringAnalysisAccessImpl access, AnalysisType type) {
-        if (AnnotationUtil.isAnnotationPresent(type, GenerateLibrary.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(type, GenerateLibrary.class)) {
             /* Eagerly resolve library type. */
             LibraryFactory<? extends Library> factory = LibraryFactory.resolve(type.getJavaClass().asSubclass(Library.class));
             /* Trigger computation of uncachedDispatch. */
@@ -988,7 +989,7 @@ public final class TruffleBaseFeature implements InternalFeature {
             /* Manually rescan the field since this is during analysis. */
             access.rescanField(factory, uncachedDispatchField, scanReason);
         }
-        if (AnnotationUtil.isAnnotationPresent(type, ExportLibrary.class) || AnnotationUtil.isAnnotationPresent(type, ExportLibrary.Repeat.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(type, ExportLibrary.class) || GuestAnnotationAccess.isAnnotationPresent(type, ExportLibrary.Repeat.class)) {
             Class<?> receiverClass = type.getJavaClass();
             if (registeredExportLibraryClasses.add(receiverClass)) {
                 access.registerSubtypeReachabilityHandler(this::registerConcreteTruffleLibraryReceiver, receiverClass);
@@ -1004,8 +1005,9 @@ public final class TruffleBaseFeature implements InternalFeature {
     }
 
     private static boolean hasExplicitReceiverExport(AnalysisType type) {
-        for (ExportLibrary export : AnnotationUtil.getAnnotationsByType(type, ExportLibrary.class, ExportLibrary.Repeat.class, ExportLibrary.Repeat::value)) {
-            if (export.receiverType() != Void.class) {
+        for (var annotationValue : GuestAnnotationAccess.getAnnotationValuesByType(type, ExportLibrary.class, ExportLibrary.Repeat.class)) {
+            ExportLibraryGuestValue export = ExportLibraryGuestValue.from(annotationValue);
+            if (!export.receiverType().equals(GuestAccess.elements().java_lang_Void)) {
                 return true;
             }
         }

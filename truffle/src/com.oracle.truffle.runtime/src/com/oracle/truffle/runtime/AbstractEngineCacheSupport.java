@@ -62,7 +62,7 @@ import java.util.function.Function;
 public abstract class AbstractEngineCacheSupport implements EngineCacheSupport {
 
     protected static final String COMPILE_HELP = ""//
-                    + "Policy to use to to force compilation for executed call targets before persisting the engine. "//
+                    + "Policy to use to force compilation for executed call targets before persisting the engine. "//
                     + "Possible values are:%n"//
                     + "  - 'none':     No compilations will be persisted and existing compilations will be invalidated.%n"//
                     + "  - 'compiled': No compilations will be forced but finished compilations will be persisted.%n"//
@@ -118,7 +118,7 @@ public abstract class AbstractEngineCacheSupport implements EngineCacheSupport {
         try {
             List<OptimizedCallTarget> compileQueue = prepareTargetsForCompilation(e, callTargets, mode, cancelledPredicate);
             if (compileQueue != null && !compileQueue.isEmpty()) {
-                compileTargets(e, compileQueue, useLastTier);
+                compileTargets(e, compileQueue, useLastTier, cancelledPredicate);
             }
         } finally {
             e.cancelledPredicate = previousCancelledPredicate;
@@ -143,11 +143,12 @@ public abstract class AbstractEngineCacheSupport implements EngineCacheSupport {
         }
     }
 
-    private void compileTargets(EngineData e, Collection<OptimizedCallTarget> compileQueue, boolean useLastTier) {
+    private void compileTargets(EngineData e, Collection<OptimizedCallTarget> compileQueue, boolean useLastTier, BooleanSupplier cancelledPredicate) {
         trace(e, "Force compiling %s roots for engine caching.", compileQueue.size());
         // enqueue missing compilations.
         List<OptimizedCallTarget> waitForTargets = new ArrayList<>();
         for (OptimizedCallTarget compilation : compileQueue) {
+            checkCancellation(cancelledPredicate);
             if (compilation.isValid()) {
                 continue;
             }
@@ -162,12 +163,11 @@ public abstract class AbstractEngineCacheSupport implements EngineCacheSupport {
         }
         for (OptimizedCallTarget waitTarget : waitForTargets) {
             try {
-                OptimizedTruffleRuntime.getRuntime().waitForCompilation(waitTarget, Long.MAX_VALUE);
-            } catch (CancellationException ex) {
-                continue;
+                OptimizedTruffleRuntime.getRuntime().waitForCompilation(waitTarget, Long.MAX_VALUE, cancelledPredicate);
             } catch (ExecutionException | TimeoutException ex) {
                 throw new AssertionError(ex);
             }
+            checkCancellation(cancelledPredicate);
         }
         for (OptimizedCallTarget waitTarget : waitForTargets) {
             if (waitTarget.isSubmittedForCompilation()) {

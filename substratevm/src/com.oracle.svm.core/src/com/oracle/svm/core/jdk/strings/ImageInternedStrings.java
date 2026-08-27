@@ -26,7 +26,7 @@ package com.oracle.svm.core.jdk.strings;
 
 import com.oracle.svm.shared.BuildPhaseProvider.AfterHeapLayout;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.heap.UnknownObjectField;
+import com.oracle.svm.guest.staging.core.heap.UnknownObjectField;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
@@ -45,9 +45,9 @@ public class ImageInternedStrings {
     /**
      * The native image contains a lot of interned strings. All Java String literals, and all class
      * names, are interned per Java specification. We don't want the memory overhead of a hash table
-     * entry, so we store them (sorted) in this String[] array. When a string is interned at run
-     * time, it is added to the real hash map, so we pay the (logarithmic) cost of the array access
-     * only once per string.
+     * entry, so we store them (sorted) in this String[] array. At run time, this array is searched
+     * before the runtime intern set. Image strings are returned directly and are not added to the
+     * runtime set.
      * <p>
      * The field is set late during image generation, so the value is not available during static
      * analysis and compilation.

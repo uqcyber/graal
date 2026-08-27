@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.hosted.image;
 
+import com.oracle.svm.hosted.CHeaderGuestValue;
 import static com.oracle.svm.shared.util.SubstrateUtil.mangleName;
 import static com.oracle.svm.shared.util.VMError.shouldNotReachHere;
 
@@ -34,6 +35,7 @@ import java.lang.reflect.AnnotatedType;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -67,6 +69,7 @@ import com.oracle.objectfile.ObjectFile.ProgbitsSectionImpl;
 import com.oracle.objectfile.ObjectFile.RelocationKind;
 import com.oracle.objectfile.ObjectFile.Section;
 import com.oracle.objectfile.SectionName;
+import com.oracle.objectfile.elf.ELFObjectFile;
 import com.oracle.svm.core.BuildArtifacts;
 import com.oracle.svm.core.BuildArtifacts.ArtifactType;
 import com.oracle.svm.core.BuilderUtil;
@@ -120,12 +123,13 @@ import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.pltgot.HostedPLTGOTConfiguration;
 import com.oracle.svm.hosted.pltgot.PLTSupport;
+import com.oracle.svm.hosted.util.CPUTypeAMD64;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.option.SubstrateOptionsParser;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.ReflectionUtil.ReflectionUtilError;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.graal.compiler.asm.aarch64.AArch64Assembler;
 import jdk.graal.compiler.code.CompilationResult;
@@ -196,7 +200,13 @@ public abstract class NativeImage extends AbstractImage {
             if (outFileParent != null) {
                 Files.createDirectories(outFileParent);
             }
-            objectFile.write(context, outputFile);
+            addELFGNUPropertyNote();
+            try {
+                objectFile.write(context, outputFile);
+            } catch (InternalError ex) {
+                String message = String.format("An internal error occurred while writing the image file. This can indicate that the file system is out of space. File path: %s", outputFile);
+                throw shouldNotReachHere(message, ex);
+            }
         } catch (Exception ex) {
             throw shouldNotReachHere(ex);
         }
@@ -214,6 +224,44 @@ public abstract class NativeImage extends AbstractImage {
                 System.out.printf("PrintImageElementSizes:  size: %15d  name: %s%n", e.getMemSize(objectFile.getDecisionsByElement()), e.getElementName());
             }
         }
+    }
+
+    private void addELFGNUPropertyNote() {
+        if (!OS.LINUX.isCurrent() || !(targetDescription.arch instanceof AMD64) || !(objectFile instanceof ELFObjectFile elfObjectFile)) {
+            return;
+        }
+        int x86ISAValue = CPUTypeAMD64.getSelectedFeaturesGNUPropertyValue();
+        if (x86ISAValue == 0) {
+            return;
+        }
+        String sectionName = ".note.gnu.property";
+        if (elfObjectFile.elementForName(sectionName) != null) {
+            return;
+        }
+        elfObjectFile.newNoteSection(sectionName, 4, new BasicProgbitsSectionImpl(createELFGNUPropertyNote(x86ISAValue)) {
+            @Override
+            public boolean isLoadable() {
+                return false;
+            }
+        });
+    }
+
+    private byte[] createELFGNUPropertyNote(int x86ISAValue) {
+        final int ntGNUPropertyType0 = 5;
+        final int gnuPropertyX86ISA1Needed = 0xc0008002;
+
+        byte[] name = "GNU\0".getBytes(StandardCharsets.US_ASCII);
+        ByteBuffer buffer = ByteBuffer.allocate(32).order(objectFile.getByteOrder());
+        buffer.putInt(name.length);
+        buffer.putInt(16);
+        buffer.putInt(ntGNUPropertyType0);
+        buffer.put(name);
+        buffer.putInt(gnuPropertyX86ISA1Needed);
+        buffer.putInt(Integer.BYTES);
+        buffer.putInt(x86ISAValue);
+        buffer.putInt(0);
+        assert !buffer.hasRemaining();
+        return buffer.array();
     }
 
     void writeHeaderFiles(Path outputDir, String imageName, boolean dynamic) {
@@ -278,21 +326,25 @@ public abstract class NativeImage extends AbstractImage {
     /**
      * Looks up the corresponding {@link CHeader} annotation for the {@link HostedMethod}. Returns
      * {@code null} if no annotation was found.
+     * <p>
+     * GR-78934: Header generation still instantiates {@link Header} in the builder. Remove
+     * this conversion when header callbacks execute in the guest context.
      */
+    @SuppressWarnings("unchecked")
     private static Class<? extends CHeader.Header> cHeader(HostedMethod entryPointStub) {
         /* check if method is annotated */
         AnalysisMethod entryPoint = CEntryPointCallStubSupport.singleton().getMethodForStub((CEntryPointCallStubMethod) entryPointStub.wrapped.wrapped);
-        CHeader methodAnnotation = AnnotationUtil.getAnnotation(entryPoint, CHeader.class);
+        CHeaderGuestValue methodAnnotation = CHeaderGuestValue.get(entryPoint);
         if (methodAnnotation != null) {
-            return methodAnnotation.value();
+            return (Class<? extends CHeader.Header>) OriginalClassProvider.getJavaClass(methodAnnotation.value());
         }
 
         /* check if enclosing classes are annotated */
         AnalysisType enclosingType = entryPoint.getDeclaringClass();
         while (enclosingType != null) {
-            CHeader enclosing = AnnotationUtil.getAnnotation(enclosingType, CHeader.class);
+            CHeaderGuestValue enclosing = CHeaderGuestValue.get(enclosingType);
             if (enclosing != null) {
-                return enclosing.value();
+                return (Class<? extends CHeader.Header>) OriginalClassProvider.getJavaClass(enclosing.value());
             }
             enclosingType = enclosingType.getEnclosingType();
         }
@@ -485,7 +537,7 @@ public abstract class NativeImage extends AbstractImage {
             // Define symbols for the sections.
             if (codeCache.definesTextSectionBoundarySymbols()) {
                 objectFile.createDefinedSymbol(textSection.getName(), textSection, 0, 0, false, false, false);
-                if (ImageLayerBuildingSupport.buildingSharedLayer() || SubstrateOptions.DeleteLocalSymbols.getValue()) {
+                if (ImageLayerBuildingSupport.buildingImageLayer() || SubstrateOptions.DeleteLocalSymbols.getValue()) {
                     /* add a dummy function symbol at the start of the code section */
                     objectFile.createDefinedSymbol(getTextSectionStartSymbol(), textSection, 0, 0, true, true, true);
                 }

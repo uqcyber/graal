@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.test.debug;
 
+import java.util.function.Predicate;
+
 import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.CContext;
 import org.graalvm.nativeimage.c.struct.CField;
@@ -38,6 +40,7 @@ import org.graalvm.word.PointerBase;
 import org.graalvm.word.SignedWord;
 import org.graalvm.word.WordBase;
 
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.shared.NeverInline;
 
 @CContext(CInterfaceDebugTestDirectives.class)
@@ -55,10 +58,18 @@ public class CStructTests {
         MyCIntPointer addressOf(SignedWord index);
     }
 
+    public static final class IncludeCStructAccessor implements Predicate<Class<?>> {
+        @Override
+        public boolean test(Class<?> originalClass) {
+            return originalClass == Weird.class;
+        }
+    }
+
     // Checkstyle: stop
     @CStruct("struct weird")
     interface Weird extends PointerBase {
 
+        @TargetElement(onlyWith = IncludeCStructAccessor.class)
         @CField
         short getf_short();
 
@@ -233,6 +244,7 @@ public class CStructTests {
         free(ss2);
     }
 
+    @NeverInline("For testing.")
     private static void testMixedArguments(String m1, short s, SimpleStruct ss1, long l, String m2, SimpleStruct2 ss2, String m3) {
         System.out.println("You find " + m1);
         System.out.println("You find " + m2);

@@ -145,8 +145,3 @@ public final class SystemInOutErrSupport {
         support.err = Objects.requireNonNull(err);
     }
 }
-
-@SuppressWarnings("unused")
-class SystemInOutErrFeature implements Feature {
-    /* Dummy for backward compatibility. */
-}

@@ -414,6 +414,9 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         if (model.loadIllegalLocalStrategy == LoadIllegalLocalStrategy.DEFAULT_VALUE) {
             CodeVariableElement var = this.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(Object.class), "DEFAULT_LOCAL_VALUE"));
             var.createInitBuilder().tree(DSLExpressionGenerator.write(model.defaultLocalValueExpression, null, Map.of()));
+        } else {
+            CodeVariableElement var = this.add(new CodeVariableElement(Set.of(PRIVATE, STATIC, FINAL), type(Object.class), "EXPECTED_FRAME_DESCRIPTOR_DEFAULT_VALUE"));
+            var.createInitBuilder().startStaticCall(types.FrameDescriptor, "newBuilder().defaultValueIllegal().build().getDefaultValue").end();
         }
 
         if (model.variadicStackLimitExpression != null) {
@@ -607,6 +610,11 @@ public final class BytecodeRootNodeElement extends AbstractElement {
             b.string("builder.build()");
         }
         b.end(2);
+
+        String expectedFrameDescriptorValue = model.loadIllegalLocalStrategy == LoadIllegalLocalStrategy.DEFAULT_VALUE ? "DEFAULT_LOCAL_VALUE" : "EXPECTED_FRAME_DESCRIPTOR_DEFAULT_VALUE";
+        b.startIf().string("getFrameDescriptor().getDefaultValue() != ").string(expectedFrameDescriptorValue).end().startBlock();
+        b.startThrow().startNew(type(IllegalStateException.class)).doubleQuote("The frame descriptor default value must not be changed by the bytecode root node constructor.").end().end();
+        b.end();
 
         b.statement("this.nodes = nodes");
         b.statement("this.stackBase = stackBase");
@@ -2958,6 +2966,11 @@ public final class BytecodeRootNodeElement extends AbstractElement {
      * with the source info table.
      */
     final class SourceInfoTable {
+        /*
+         * A table entry needs enough attributes to encode all source section kinds. For suffix
+         * sections, an unresolved entry also needs two attributes to encode a link in the patch
+         * list (node id + table index).
+         */
         static final int NUM_ATTRIBUTES = Math.max(SourceSectionKind.MAX_ATTRIBUTES, 2);
 
         private final List<CodeVariableElement> constants;
@@ -2965,11 +2978,6 @@ public final class BytecodeRootNodeElement extends AbstractElement {
         final CodeVariableElement sourceOffset;
         final CodeVariableElement startBciOffset;
         final CodeVariableElement endBciOffset;
-        /*
-         * A table entry needs enough attributes to encode all source section kinds. For suffix
-         * sections, an entry needs enough attributes to encode a link in the patch list (node id +
-         * table index).
-         */
         final List<CodeVariableElement> attributeOffsets;
         final int entryLength;
         final CodeVariableElement entryLengthVariable;

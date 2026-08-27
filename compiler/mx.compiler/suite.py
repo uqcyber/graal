@@ -33,7 +33,7 @@ suite = {
       {
         "name": "barista",
         "subdir": False,
-        "version": "0.7.8",
+        "version": "0.7.9",
         "foreign": True, # barista is not an mx suite
         "dynamic": True,
         "urls": [
@@ -198,7 +198,8 @@ suite = {
         "jdk.graal.compiler.truffle.substitutions.GraphBuilderInvocationPluginProvider",
         "jdk.graal.compiler.truffle.phases.inlining.InliningPolicyProvider",
         "jdk.graal.compiler.truffle.host.TruffleHostEnvironment.Lookup",
-        "jdk.graal.compiler.truffle.substitutions.GraphDecoderInvocationPluginProvider"
+        "jdk.graal.compiler.truffle.substitutions.GraphDecoderInvocationPluginProvider",
+        "jdk.graal.compiler.phases.common.priorityinline.PolicyFactory"
       ],
       "annotationProcessors" : [
         "GRAAL_PROCESSOR"

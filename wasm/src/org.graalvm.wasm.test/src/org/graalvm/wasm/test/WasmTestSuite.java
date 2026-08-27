@@ -47,6 +47,8 @@ import org.graalvm.wasm.test.suites.arithmetic.Float64Suite;
 import org.graalvm.wasm.test.suites.arithmetic.Integer32Suite;
 import org.graalvm.wasm.test.suites.arithmetic.Integer64Suite;
 import org.graalvm.wasm.test.suites.arithmetic.ReferenceTypeSuite;
+import org.graalvm.wasm.test.suites.arithmetic.WideArithmeticSuite;
+import org.graalvm.wasm.test.suites.bytecode.BranchHintSuite;
 import org.graalvm.wasm.test.suites.bytecode.BytecodeSuite;
 import org.graalvm.wasm.test.suites.bytecode.MultiInstantiationSuite;
 import org.graalvm.wasm.test.suites.bytecode.WasmLegacyCatchOSRSuite;
@@ -59,6 +61,7 @@ import org.graalvm.wasm.test.suites.control.LoopBlockSuite;
 import org.graalvm.wasm.test.suites.control.MultiValueSuite;
 import org.graalvm.wasm.test.suites.control.MultipleFunctionsSuite;
 import org.graalvm.wasm.test.suites.control.SimpleBlockSuite;
+import org.graalvm.wasm.test.suites.control.TailCallSuite;
 import org.graalvm.wasm.test.suites.debugging.DebugObjectFactorySuite;
 import org.graalvm.wasm.test.suites.debugging.DebugSourceLoadSuite;
 import org.graalvm.wasm.test.suites.debugging.DebugValidationSuite;
@@ -67,8 +70,8 @@ import org.graalvm.wasm.test.suites.memory.Memory64Suite;
 import org.graalvm.wasm.test.suites.memory.MemorySuite;
 import org.graalvm.wasm.test.suites.memory.MultiMemorySuite;
 import org.graalvm.wasm.test.suites.memory.ThreadsSuite;
-import org.graalvm.wasm.test.suites.table.TableSuite;
 import org.graalvm.wasm.test.suites.table.Table64Suite;
+import org.graalvm.wasm.test.suites.table.TableSuite;
 import org.graalvm.wasm.test.suites.validation.MultiValueValidationSuite;
 import org.graalvm.wasm.test.suites.validation.ReferenceTypesValidationSuite;
 import org.graalvm.wasm.test.suites.validation.ValidationSuite;
@@ -86,6 +89,7 @@ import org.junit.runners.Suite;
                 Float32Suite.class,
                 Float64Suite.class,
                 ReferenceTypeSuite.class,
+                WideArithmeticSuite.class,
                 SimpleBlockSuite.class,
                 BlockWithLocalsSuite.class,
                 BranchBlockSuite.class,
@@ -109,6 +113,7 @@ import org.junit.runners.Suite;
                 ReferenceTypesValidationSuite.class,
                 WasmLateLinkingSuite.class,
                 WasmImplementationLimitationsSuite.class,
+                BranchHintSuite.class,
                 BytecodeSuite.class,
                 MultiInstantiationSuite.class,
                 WasmLegacyCatchOSRSuite.class,
@@ -118,7 +123,8 @@ import org.junit.runners.Suite;
                 ExceptionSuite.class,
                 DebugValidationSuite.class,
                 DebugSourceLoadSuite.class,
-                DebugObjectFactorySuite.class
+                DebugObjectFactorySuite.class,
+                TailCallSuite.class
 })
 
 public class WasmTestSuite {

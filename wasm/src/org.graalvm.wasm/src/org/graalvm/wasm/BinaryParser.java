@@ -120,6 +120,7 @@ import org.graalvm.wasm.exception.WasmException;
 import org.graalvm.wasm.parser.bytecode.BytecodeGen;
 import org.graalvm.wasm.parser.bytecode.BytecodeParser;
 import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen;
+import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen.BranchHint;
 import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen.BranchOp.BrOnCast;
 import org.graalvm.wasm.parser.ir.CallNode;
 import org.graalvm.wasm.parser.ir.CodeEntry;
@@ -163,8 +164,11 @@ public class BinaryParser extends BinaryStreamParser {
     private final boolean tagBasedExceptionHandling;
     private final boolean typedFunctionReferences;
     private final boolean gc;
+    private final boolean tailCalls;
+    private final boolean tailCallLoops;
     private boolean usesCurrentExceptionHandling;
     private boolean usesLegacyExceptionHandling;
+    private BranchHintSection branchHintSection;
 
     @TruffleBoundary
     public BinaryParser(WasmModule module, WasmContext context, byte[] data) {
@@ -196,6 +200,8 @@ public class BinaryParser extends BinaryStreamParser {
         this.tagBasedExceptionHandling = exceptions || legacyExceptions;
         this.typedFunctionReferences = contextOptions.supportTypedFunctionReferences();
         this.gc = contextOptions.supportGC();
+        this.tailCalls = contextOptions.supportTailCalls();
+        this.tailCallLoops = contextOptions.supportTailCallLoops();
         this.usesCurrentExceptionHandling = false;
         this.usesLegacyExceptionHandling = false;
     }
@@ -241,7 +247,7 @@ public class BinaryParser extends BinaryStreamParser {
             final int endOffset = startOffset + size;
             switch (sectionID) {
                 case Section.CUSTOM:
-                    readCustomSection(size, customData);
+                    readCustomSection(size, customData, codeSectionOffset == -1);
                     break;
                 case Section.TYPE:
                     readTypeSection();
@@ -311,7 +317,7 @@ public class BinaryParser extends BinaryStreamParser {
         }
     }
 
-    private void readCustomSection(int size, BytecodeGen customData) {
+    private void readCustomSection(int size, BytecodeGen customData, boolean beforeCodeSection) {
         final int sectionEndOffset = offset + size;
         final String name = readName();
         Assert.assertUnsignedIntLessOrEqual(sectionEndOffset, data.length, Failure.LENGTH_OUT_OF_BOUNDS);
@@ -328,9 +334,186 @@ public class BinaryParser extends BinaryStreamParser {
                 assert ex.getExceptionType() == ExceptionType.PARSE_ERROR;
             }
         } else {
+            if (beforeCodeSection && BranchHintSection.SECTION_NAME.equals(name)) {
+                readBranchHintSection(offset, sectionEndOffset);
+            }
             readDebugSection(name, customDataSection, sectionSize, customData);
         }
         offset = sectionEndOffset;
+    }
+
+    private void readBranchHintSection(int startOffset, int endOffset) {
+        if (branchHintSection == null) {
+            final BranchHintSection section = BranchHintSection.read(data, startOffset, endOffset);
+            branchHintSection = section == null ? BranchHintSection.EMPTY : section;
+        }
+    }
+
+    private static final class BranchHintSection {
+        static final String SECTION_NAME = "metadata.code.branch_hint";
+        static final BranchHintSection EMPTY = new BranchHintSection(new BranchHintFunction[0]);
+
+        private final BranchHintFunction[] functions;
+
+        private BranchHintSection(BranchHintFunction[] functions) {
+            this.functions = functions;
+        }
+
+        static BranchHintSection read(byte[] data, int startOffset, int endOffset) {
+            final BranchHintReader reader = new BranchHintReader(data, startOffset, endOffset);
+            final int functionCount = reader.readVectorLength(2);
+            if (!reader.isValid()) {
+                return null;
+            }
+            final BranchHintFunction[] functions = new BranchHintFunction[functionCount];
+            int previousFunctionIndex = 0;
+            for (int i = 0; i < functionCount; i++) {
+                final int functionIndex = reader.readU32();
+                if (!reader.isValid() || i > 0 && compareUnsigned(functionIndex, previousFunctionIndex) <= 0) {
+                    return null;
+                }
+                previousFunctionIndex = functionIndex;
+                final int hintCount = reader.readVectorLength(3);
+                if (!reader.isValid()) {
+                    return null;
+                }
+                final BranchHintEntry[] hints = new BranchHintEntry[hintCount];
+                int previousInstructionOffset = 0;
+                for (int j = 0; j < hintCount; j++) {
+                    final int instructionOffset = reader.readU32();
+                    if (!reader.isValid() || j > 0 && compareUnsigned(instructionOffset, previousInstructionOffset) <= 0) {
+                        return null;
+                    }
+                    previousInstructionOffset = instructionOffset;
+                    final int reserved = reader.readU32();
+                    if (!reader.isValid()) {
+                        return null;
+                    }
+                    if (reserved != 1) {
+                        return null;
+                    }
+                    final int hint = reader.readU8();
+                    if (!reader.isValid() || hint != 0 && hint != 1) {
+                        return null;
+                    }
+                    hints[j] = new BranchHintEntry(instructionOffset, hint == 0 ? BranchHint.LIKELY_FALSE : BranchHint.LIKELY_TRUE);
+                }
+                functions[i] = new BranchHintFunction(functionIndex, hints);
+            }
+            return reader.isEOF() ? new BranchHintSection(functions) : null;
+        }
+
+        BranchHintState stateFor(int functionIndex) {
+            int low = 0;
+            int high = functions.length - 1;
+            while (low <= high) {
+                final int middle = low + ((high - low) >>> 1);
+                final BranchHintFunction function = functions[middle];
+                final int comparison = compareUnsigned(function.functionIndex(), functionIndex);
+                if (comparison < 0) {
+                    low = middle + 1;
+                } else if (comparison > 0) {
+                    high = middle - 1;
+                } else {
+                    return new BranchHintState(function.hints());
+                }
+            }
+            return BranchHintState.EMPTY;
+        }
+    }
+
+    private record BranchHintFunction(int functionIndex, BranchHintEntry[] hints) {
+    }
+
+    private record BranchHintEntry(int instructionOffset, BranchHint hint) {
+    }
+
+    private static final class BranchHintState {
+        static final BranchHintState EMPTY = new BranchHintState(new BranchHintEntry[0]);
+
+        private final BranchHintEntry[] hints;
+        private int index;
+
+        BranchHintState(BranchHintEntry[] hints) {
+            this.hints = hints;
+        }
+
+        BranchHint hintFor(int instructionOffset, int opcode) {
+            while (index < hints.length && compareUnsigned(hints[index].instructionOffset(), instructionOffset) < 0) {
+                index++;
+            }
+            if (index == hints.length || compareUnsigned(hints[index].instructionOffset(), instructionOffset) > 0) {
+                return BranchHint.NONE;
+            }
+            final BranchHint hint = hints[index++].hint();
+            return opcode == Instructions.IF || opcode == Instructions.BR_IF ? hint : BranchHint.NONE;
+        }
+    }
+
+    private static final class BranchHintReader {
+        private final byte[] data;
+        private final int endOffset;
+        private int offset;
+        private boolean valid = true;
+
+        BranchHintReader(byte[] data, int startOffset, int endOffset) {
+            this.data = data;
+            this.offset = startOffset;
+            this.endOffset = endOffset;
+        }
+
+        /**
+         * Reads a vector length and verifies that the remaining data can contain that many entries.
+         * {@code minimumEntrySize} is the minimum encoded size in bytes of one entry; actual
+         * entries may be larger due to multi-byte LEB128 values.
+         * <p>
+         * A function entry needs at least two bytes for its function index and hint-vector length.
+         * A hint entry needs at least three bytes for its instruction offset, reserved value, and
+         * hint value.
+         */
+        int readVectorLength(int minimumEntrySize) {
+            final int length = readU32();
+            if (!valid || length < 0 || compareUnsigned(length, (endOffset - offset) / minimumEntrySize) > 0) {
+                valid = false;
+            }
+            return length;
+        }
+
+        int readU8() {
+            if (!valid || offset >= endOffset) {
+                valid = false;
+                return 0;
+            }
+            return data[offset++] & 0xff;
+        }
+
+        int readU32() {
+            if (!valid || offset >= endOffset) {
+                valid = false;
+                return 0;
+            }
+            try {
+                final long valueAndLength = peekUnsignedInt32AndLength(data, offset);
+                final int length = BinaryStreamParser.length(valueAndLength);
+                if (compareUnsigned(length, endOffset - offset) > 0) {
+                    valid = false;
+                    return 0;
+                }
+                offset += length;
+                return BinaryStreamParser.value(valueAndLength);
+            } catch (WasmException | IndexOutOfBoundsException ex) {
+                valid = false;
+                return 0;
+            }
+        }
+
+        boolean isValid() {
+            return valid;
+        }
+
+        boolean isEOF() {
+            return valid && offset == endOffset;
+        }
     }
 
     /**
@@ -639,14 +822,14 @@ public class BinaryParser extends BinaryStreamParser {
             // Store the function start offset, instruction start offset, and function end offset.
             functionDebugData.add(startOffset - codeSectionOffset);
             functionDebugData.add(offset - codeSectionOffset);
-            codeEntries[entryIndex] = readCodeEntry(importedFunctionCount + entryIndex, locals, startOffset + codeEntrySize, entryIndex < codeEntryCount - 1, bytecode, entryIndex);
+            codeEntries[entryIndex] = readCodeEntry(importedFunctionCount + entryIndex, locals, startOffset, startOffset + codeEntrySize, entryIndex < codeEntryCount - 1, bytecode, entryIndex);
             functionDebugData.add(offset - codeSectionOffset);
             assertIntEqual(offset - startOffset, codeEntrySize, Failure.UNSPECIFIED_MALFORMED, "Code entry %d size is incorrect", entryIndex);
         }
         module.setCodeEntries(codeEntries);
     }
 
-    private CodeEntry readCodeEntry(int functionIndex, IntArrayList locals, int endOffset, boolean hasNextFunction, RuntimeBytecodeGen bytecode, int codeEntryIndex) {
+    private CodeEntry readCodeEntry(int functionIndex, IntArrayList locals, int startOffset, int endOffset, boolean hasNextFunction, RuntimeBytecodeGen bytecode, int codeEntryIndex) {
         final WasmFunction function = module.symbolTable().function(functionIndex);
         int paramCount = function.paramCount();
         int[] localTypes = new int[function.paramCount() + locals.size()];
@@ -656,7 +839,8 @@ public class BinaryParser extends BinaryStreamParser {
         for (int index = 0; index != locals.size(); index++) {
             localTypes[index + paramCount] = locals.get(index);
         }
-        return readFunction(functionIndex, localTypes, endOffset, hasNextFunction, bytecode, codeEntryIndex, null);
+        final BranchHintState branchHintState = branchHintSection == null ? BranchHintState.EMPTY : branchHintSection.stateFor(functionIndex);
+        return readFunction(functionIndex, localTypes, startOffset, endOffset, hasNextFunction, bytecode, codeEntryIndex, null, branchHintState);
     }
 
     private IntArrayList readCodeEntryLocals() {
@@ -717,8 +901,8 @@ public class BinaryParser extends BinaryStreamParser {
         };
     }
 
-    private CodeEntry readFunction(int functionIndex, int[] locals, int sourceCodeEndOffset, boolean hasNextFunction, RuntimeBytecodeGen bytecode,
-                    int codeEntryIndex, EconomicMap<Integer, Integer> offsetToLineIndexMap) {
+    private CodeEntry readFunction(int functionIndex, int[] locals, int sourceCodeStartOffset, int sourceCodeEndOffset, boolean hasNextFunction, RuntimeBytecodeGen bytecode,
+                    int codeEntryIndex, EconomicMap<Integer, Integer> offsetToLineIndexMap, BranchHintState branchHintState) {
         final ParserState state = new ParserState(bytecode, module);
         final ArrayList<CallNode> callNodes = new ArrayList<>();
         final int bytecodeStartOffset = bytecode.location();
@@ -736,7 +920,9 @@ public class BinaryParser extends BinaryStreamParser {
                 }
             }
 
+            final int instructionOffset = offset - sourceCodeStartOffset;
             opcode = read1() & 0xFF;
+            final BranchHint branchHint = branchHintState.hintFor(instructionOffset, opcode);
             switch (opcode) {
                 case Instructions.UNREACHABLE:
                     state.setUnreachable();
@@ -822,7 +1008,7 @@ public class BinaryParser extends BinaryStreamParser {
                     }
                     state.popChecked(I32_TYPE); // condition
                     state.popAll(ifParamTypes);
-                    state.enterIf(ifParamTypes, ifResultTypes);
+                    state.enterIf(ifParamTypes, ifResultTypes, branchHint);
                     break;
                 }
                 case Instructions.END: {
@@ -862,7 +1048,7 @@ public class BinaryParser extends BinaryStreamParser {
                 case Instructions.BR_IF: {
                     final int branchLabel = readTargetOffset();
                     state.popChecked(I32_TYPE); // condition
-                    state.addConditionalBranch(branchLabel);
+                    state.addConditionalBranch(branchLabel, branchHint);
 
                     break;
                 }
@@ -897,11 +1083,7 @@ public class BinaryParser extends BinaryStreamParser {
 
                     // Pop parameters
                     final WasmFunction function = module.function(callFunctionIndex);
-                    int[] params = new int[function.paramCount()];
-                    for (int i = function.paramCount() - 1; i >= 0; --i) {
-                        params[i] = function.paramTypeAt(i);
-                    }
-                    state.checkParamTypes(params);
+                    state.checkParamTypes(function.paramTypes());
 
                     // Push result values
                     if (!multiValue) {
@@ -935,6 +1117,67 @@ public class BinaryParser extends BinaryStreamParser {
                     state.pushAll(callResultTypes);
                     state.addIndirectCall(callNodes.size(), expectedFunctionTypeIndex, tableIndex);
                     callNodes.add(new CallNode(bytecode.location()));
+                    break;
+                }
+                case Instructions.RETURN_CALL: {
+                    checkTailCallSupport(opcode);
+                    final int callFunctionIndex = readDeclaredFunctionIndex();
+
+                    // Pop parameters
+                    final WasmFunction function = module.function(callFunctionIndex);
+                    state.checkParamTypes(function.paramTypes());
+
+                    // Push result value
+                    if (!multiValue) {
+                        assertIntLessOrEqual(function.resultCount(), 1, Failure.INVALID_RESULT_ARITY);
+                    }
+                    int[] callResultTypes = function.resultTypes();
+                    assertIntEqual(callResultTypes.length, resultTypes.length, Failure.TYPE_MISMATCH);
+                    state.pushAll(callResultTypes);
+                    state.popAll(resultTypes);
+                    /*
+                    * If this is a direct recursive call, i.e., we call the same function we are currently in,
+                    * we can transform the tail call into a jump to the start of the function, forming a loop.
+                    * Otherwise, we emit a return call.
+                    */
+                    if (tailCallLoops && callFunctionIndex == functionIndex) {
+                        state.addReturnCallBranch();
+                    } else {
+                        state.addReturnCall(callFunctionIndex);
+                        module.function(functionIndex).reportReturnCall();
+                    }
+                    state.setUnreachable();
+                    break;
+                }
+                case Instructions.RETURN_CALL_INDIRECT: {
+                    checkTailCallSupport(opcode);
+                    final int expectedFunctionTypeIndex = readFunctionTypeIndex();
+                    final int tableIndex = readTableIndex();
+                    // Pop the function index to call
+                    state.popChecked(module.tableHasIndexType64(tableIndex) ? I64_TYPE : I32_TYPE);
+                    Assert.assertTrue(module.matchesType(FUNCREF_TYPE, module.tableElementType(tableIndex)), Failure.TYPE_MISMATCH);
+
+                    // Pop parameters
+                    for (int i = module.functionTypeParamCount(expectedFunctionTypeIndex) - 1; i >= 0; --i) {
+                        state.popChecked(module.functionTypeParamTypeAt(expectedFunctionTypeIndex, i));
+                    }
+                    // Push result values
+                    final int resultCount = module.functionTypeResultCount(expectedFunctionTypeIndex);
+                    if (!multiValue) {
+                        assertIntLessOrEqual(resultCount, 1, Failure.INVALID_RESULT_ARITY);
+                    }
+                    int[] callResultTypes = new int[resultCount];
+                    for (int i = 0; i < resultCount; i++) {
+                        callResultTypes[i] = module.functionTypeResultTypeAt(expectedFunctionTypeIndex, i);
+                    }
+                    assertIntEqual(callResultTypes.length, resultTypes.length, Failure.TYPE_MISMATCH);
+                    state.pushAll(callResultTypes);
+                    state.popAll(resultTypes);
+
+                    state.addIndirectReturnCall(expectedFunctionTypeIndex, tableIndex);
+                    module.function(functionIndex).reportReturnCall();
+
+                    state.setUnreachable();
                     break;
                 }
                 case Instructions.DROP:
@@ -1087,9 +1330,9 @@ public class BinaryParser extends BinaryStreamParser {
                     final int localType = locals[localIndex];
                     state.push(localType);
                     if (WasmType.isNumberType(localType)) {
-                        state.addUnsignedInstruction(Bytecode.LOCAL_GET_U8, localIndex);
+                        state.addUnsignedInstructionWithMisc(Bytecode.LOCAL_GET_U8, localIndex);
                     } else {
-                        state.addUnsignedInstruction(Bytecode.LOCAL_GET_OBJ_U8, localIndex);
+                        state.addUnsignedInstructionWithMisc(Bytecode.LOCAL_GET_OBJ_U8, localIndex);
                     }
                     break;
                 }
@@ -1100,9 +1343,9 @@ public class BinaryParser extends BinaryStreamParser {
                     final int localType = locals[localIndex];
                     state.popChecked(localType);
                     if (WasmType.isNumberType(localType)) {
-                        state.addUnsignedInstruction(Bytecode.LOCAL_SET_U8, localIndex);
+                        state.addUnsignedInstructionWithMisc(Bytecode.LOCAL_SET_U8, localIndex);
                     } else {
-                        state.addUnsignedInstruction(Bytecode.LOCAL_SET_OBJ_U8, localIndex);
+                        state.addUnsignedInstructionWithMisc(Bytecode.LOCAL_SET_OBJ_U8, localIndex);
                     }
                     break;
                 }
@@ -1114,9 +1357,9 @@ public class BinaryParser extends BinaryStreamParser {
                     state.popChecked(localType);
                     state.push(localType);
                     if (WasmType.isNumberType(localType)) {
-                        state.addUnsignedInstruction(Bytecode.LOCAL_TEE_U8, localIndex);
+                        state.addUnsignedInstructionWithMisc(Bytecode.LOCAL_TEE_U8, localIndex);
                     } else {
-                        state.addUnsignedInstruction(Bytecode.LOCAL_TEE_OBJ_U8, localIndex);
+                        state.addUnsignedInstructionWithMisc(Bytecode.LOCAL_TEE_OBJ_U8, localIndex);
                     }
                     break;
                 }
@@ -1307,6 +1550,36 @@ public class BinaryParser extends BinaryStreamParser {
                     }
                     state.addRefCall(callNodes.size(), expectedFunctionTypeIndex);
                     callNodes.add(new CallNode(bytecode.location()));
+                    break;
+                }
+                case Instructions.RETURN_CALL_REF: {
+                    checkTailCallSupport(opcode);
+                    checkTypedFunctionReferencesSupport(opcode);
+                    final int expectedFunctionTypeIndex = readFunctionTypeIndex();
+                    final int functionReferenceType = WasmType.withNullable(true, expectedFunctionTypeIndex);
+                    state.popChecked(functionReferenceType);
+                    // Pop parameters
+                    final int paramCount = module.functionTypeParamCount(expectedFunctionTypeIndex);
+                    for (int i = paramCount - 1; i >= 0; i--) {
+                        state.popChecked(module.functionTypeParamTypeAt(expectedFunctionTypeIndex, i));
+                    }
+                    // Push result values
+                    final int resultCount = module.functionTypeResultCount(expectedFunctionTypeIndex);
+                    if (!multiValue) {
+                        assertIntLessOrEqual(resultCount, 1, Failure.INVALID_RESULT_ARITY);
+                    }
+                    int[] callResultTypes = new int[resultCount];
+                    for (int i = 0; i < resultCount; i++) {
+                        callResultTypes[i] = module.functionTypeResultTypeAt(expectedFunctionTypeIndex, i);
+                    }
+                    assertIntEqual(callResultTypes.length, resultTypes.length, Failure.TYPE_MISMATCH);
+                    state.pushAll(callResultTypes);
+                    state.popAll(resultTypes);
+
+                    state.addRefReturnCall(expectedFunctionTypeIndex);
+                    module.function(functionIndex).reportReturnCall();
+
+                    state.setUnreachable();
                     break;
                 }
                 case Instructions.REF_AS_NON_NULL: {
@@ -1849,6 +2122,28 @@ public class BinaryParser extends BinaryStreamParser {
                         state.addInstruction(Bytecode.TABLE_FILL, tableIndex);
                         break;
                     }
+                    case Instructions.I64_ADD128:
+                    case Instructions.I64_SUB128:
+                        checkWideArithmeticSupport(miscOpcode);
+                        state.popChecked(I64_TYPE);
+                        state.popChecked(I64_TYPE);
+                        state.popChecked(I64_TYPE);
+                        state.popChecked(I64_TYPE);
+                        state.push(I64_TYPE);
+                        state.push(I64_TYPE);
+                        state.addMiscFlag();
+                        state.addInstruction(miscOpcode == Instructions.I64_ADD128 ? Bytecode.I64_ADD128 : Bytecode.I64_SUB128);
+                        break;
+                    case Instructions.I64_MUL_WIDE_S:
+                    case Instructions.I64_MUL_WIDE_U:
+                        checkWideArithmeticSupport(miscOpcode);
+                        state.popChecked(I64_TYPE);
+                        state.popChecked(I64_TYPE);
+                        state.push(I64_TYPE);
+                        state.push(I64_TYPE);
+                        state.addMiscFlag();
+                        state.addInstruction(miscOpcode == Instructions.I64_MUL_WIDE_S ? Bytecode.I64_MUL_WIDE_S : Bytecode.I64_MUL_WIDE_U);
+                        break;
                     default:
                         fail(Failure.UNSPECIFIED_MALFORMED, "Unknown opcode: 0xFC 0x%02x", miscOpcode);
                 }
@@ -2886,6 +3181,10 @@ public class BinaryParser extends BinaryStreamParser {
         checkContextOption(bulkMemoryAndRefTypes, "Bulk memory operations and reference types are not enabled (opcode: 0x%02x)", opcode);
     }
 
+    private void checkWideArithmeticSupport(int opcode) {
+        checkContextOption(contextOptions.supportWideArithmetic(), "Wide arithmetic is not enabled (opcode: 0xFC 0x%02x)", opcode);
+    }
+
     private void checkThreadsSupport(int opcode) {
         checkContextOption(threads, "Threads and atomics are not enabled (opcode: 0x%02x)", opcode);
     }
@@ -2921,6 +3220,10 @@ public class BinaryParser extends BinaryStreamParser {
 
     private void checkGCSupport(int opcode) {
         checkContextOption(gc, "Garbage collected types are not enabled (opcode: 0x%02x)", opcode);
+    }
+
+    private void checkTailCallSupport(int opcode) {
+        checkContextOption(tailCalls, "Tail calls are not enabled (opcode: 0x%02x)", opcode);
     }
 
     private void noteLegacyExceptionHandlingUsage() {
@@ -3079,7 +3382,7 @@ public class BinaryParser extends BinaryStreamParser {
                     final int[] paramTypes = module.functionTypeParamTypesAsArray(typeIndex);
                     handlers[i] = state.enterCatchClause(opcode, tag, label);
                     state.pushAll(paramTypes);
-                    state.push(EXNREF_TYPE);
+                    state.push(WasmType.withNullable(false, EXN_HEAPTYPE));
                 }
                 case ExceptionHandlerType.CATCH_ALL -> {
                     final int label = readUnsignedInt32();
@@ -3088,7 +3391,7 @@ public class BinaryParser extends BinaryStreamParser {
                 case ExceptionHandlerType.CATCH_ALL_REF -> {
                     final int label = readUnsignedInt32();
                     handlers[i] = state.enterCatchClause(opcode, -1, label);
-                    state.push(EXNREF_TYPE);
+                    state.push(WasmType.withNullable(false, EXN_HEAPTYPE));
                 }
                 default -> Assert.fail(Failure.MALFORMED_CATCH, String.format("Invalid catch clause type: 0x%02X", opcode));
             }
@@ -4264,7 +4567,7 @@ public class BinaryParser extends BinaryStreamParser {
         final CodeEntry codeEntry = BytecodeParser.readCodeEntry(module, module.bytecode(), codeEntryIndex);
         offset = module.functionSourceCodeInstructionOffset(functionIndex);
         final int endOffset = module.functionSourceCodeEndOffset(functionIndex);
-        final CodeEntry result = readFunction(functionIndex, codeEntry.localTypes(), endOffset, true, bytecode, codeEntryIndex, offsetToLineIndexMap);
+        final CodeEntry result = readFunction(functionIndex, codeEntry.localTypes(), offset, endOffset, true, bytecode, codeEntryIndex, offsetToLineIndexMap, BranchHintState.EMPTY);
         return Pair.create(result, bytecode.toArray());
     }
 }

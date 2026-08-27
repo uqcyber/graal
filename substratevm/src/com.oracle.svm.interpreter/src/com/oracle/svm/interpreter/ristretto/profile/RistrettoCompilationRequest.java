@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@ import java.util.concurrent.Callable;
 import com.oracle.svm.graal.meta.SubstrateInstalledCodeImpl;
 import com.oracle.svm.interpreter.ristretto.RistrettoOptions;
 import com.oracle.svm.interpreter.ristretto.RistrettoUtils;
+import com.oracle.svm.interpreter.ristretto.compile.RistrettoInstalledCode;
 import com.oracle.svm.interpreter.ristretto.meta.RistrettoMethod;
 
 import jdk.vm.ci.code.BailoutException;
@@ -72,6 +73,17 @@ public class RistrettoCompilationRequest implements Comparable<RistrettoCompilat
      */
     private final int osrCompilationRequestId;
 
+    /// Monotonic time at which this request entered the compilation manager.
+    private volatile long submittedAtNanos;
+
+    /// Compilation requests are one-shot queue entries.
+    private boolean submitted;
+
+    /// Intrusive links used only while this request is tracked for watchdog diagnostics.
+    RistrettoCompilationRequest previousQueuedRequestToReport;
+    RistrettoCompilationRequest nextQueuedRequestToReport;
+    boolean sampledForCompilationWatchdog;
+
     public RistrettoCompilationRequest(RistrettoMethod rMethod, int priority) {
         this(rMethod, priority, RistrettoUtils.INVOCATION_ENTRY_BCI, RistrettoMethod.NO_OSR_COMPILATION_REQUEST);
     }
@@ -108,10 +120,13 @@ public class RistrettoCompilationRequest implements Comparable<RistrettoCompilat
              * dropped when a class is unloaded and the interpreter jvmci objects are collected.
              */
             boolean installCode = RistrettoCompilationManager.TestingBackdoor.installCode();
-            if (isOSR()) {
-                rMethod.onOSRCompilationSuccess(entryBCI, osrCompilationRequestId, code, installCode);
-            } else {
-                rMethod.onCompilationSuccess(code, installCode);
+            boolean published = publishCompiledCode(code, installCode);
+            if (!published) {
+                if (code.isValid()) {
+                    code.invalidate();
+                }
+                onCompilationFailure();
+                return null;
             }
             return code;
         } catch (BailoutException e) {
@@ -129,7 +144,23 @@ public class RistrettoCompilationRequest implements Comparable<RistrettoCompilat
     }
 
     protected SubstrateInstalledCodeImpl compileAndInstall() {
-        return RistrettoUtils.compileAndInstall(rMethod, entryBCI);
+        return RistrettoUtils.compileAndInstallForPublication(rMethod, entryBCI);
+    }
+
+    /** Publishes {@code code}, atomically with hierarchy validation when it carries such assumptions. */
+    private boolean publishCompiledCode(SubstrateInstalledCodeImpl code, boolean installCode) {
+        if (code instanceof RistrettoInstalledCode ristrettoCode) {
+            return ristrettoCode.registerHierarchyAssumptionsAndPublish(() -> publishCompiledCodeAfterHierarchyValidation(code, installCode));
+        }
+        return publishCompiledCodeAfterHierarchyValidation(code, installCode);
+    }
+
+    /** Performs the method-state publication step after hierarchy validation. */
+    protected boolean publishCompiledCodeAfterHierarchyValidation(SubstrateInstalledCodeImpl code, boolean installCode) {
+        if (isOSR()) {
+            return rMethod.onOSRCompilationSuccessAfterHierarchyValidation(entryBCI, osrCompilationRequestId, code, installCode);
+        }
+        return rMethod.onCompilationSuccess(code, installCode);
     }
 
     @Override
@@ -147,6 +178,26 @@ public class RistrettoCompilationRequest implements Comparable<RistrettoCompilat
 
     public boolean isOSR() {
         return entryBCI != RistrettoUtils.INVOCATION_ENTRY_BCI;
+    }
+
+    /**
+     * Records the monotonic time at which this request entered the compilation queue.
+     *
+     * @param nowNanos submission time obtained from {@link System#nanoTime()}
+     */
+    synchronized void markSubmitted(long nowNanos) {
+        if (submitted) {
+            throw new IllegalStateException("A Ristretto compilation request can only be submitted once.");
+        }
+        submitted = true;
+        submittedAtNanos = nowNanos;
+    }
+
+    /**
+     * Returns the monotonic time at which this request entered the compilation queue.
+     */
+    long getSubmittedAtNanos() {
+        return submittedAtNanos;
     }
 
     /**

@@ -25,6 +25,8 @@
 package com.oracle.svm.core.graal.aarch64;
 
 import static com.oracle.svm.core.graal.aarch64.SubstrateAArch64RegisterConfig.fp;
+import static com.oracle.svm.core.interpreter.InterpreterSupport.NATIVE_DOWNCALL_RETURNS_IN_BUFFER;
+import static com.oracle.svm.core.interpreter.InterpreterSupport.NATIVE_DOWNCALL_RETURNS_IN_FP_REGISTER;
 import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static jdk.graal.compiler.asm.aarch64.AArch64Address.createBaseRegisterOnlyAddress;
 import static jdk.graal.compiler.asm.aarch64.AArch64Address.createImmediateAddress;
@@ -34,14 +36,18 @@ import static jdk.graal.compiler.asm.aarch64.AArch64Address.AddressingMode.IMMED
 import static jdk.vm.ci.aarch64.AArch64.lr;
 import static jdk.vm.ci.aarch64.AArch64.r0;
 import static jdk.vm.ci.aarch64.AArch64.r1;
+import static jdk.vm.ci.aarch64.AArch64.r11;
+import static jdk.vm.ci.aarch64.AArch64.r19;
 import static jdk.vm.ci.aarch64.AArch64.r2;
 import static jdk.vm.ci.aarch64.AArch64.r3;
+import static jdk.vm.ci.aarch64.AArch64.r4;
 import static jdk.vm.ci.aarch64.AArch64.sp;
 import static jdk.vm.ci.aarch64.AArch64.v0;
 
 import java.util.List;
 
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.c.struct.RawField;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.nativeimage.c.struct.SizeOf;
@@ -61,6 +67,8 @@ import com.oracle.svm.core.graal.meta.InterpreterExecutionOffsets;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.interpreter.InterpreterEnterStub;
+import com.oracle.svm.core.interpreter.InterpreterJNIUpcallStub;
+import com.oracle.svm.core.jni.CallVariant;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.DisallowLayered;
@@ -71,7 +79,7 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.NumUtil;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.asm.Label;
@@ -80,11 +88,11 @@ import jdk.graal.compiler.asm.aarch64.AArch64Assembler;
 import jdk.graal.compiler.asm.aarch64.AArch64MacroAssembler;
 import jdk.graal.compiler.lir.aarch64.AArch64Move;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
-import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterConfig;
+import jdk.vm.ci.code.StackSlot;
 import jdk.vm.ci.code.ValueUtil;
 import jdk.vm.ci.meta.JavaKind;
 
@@ -97,7 +105,7 @@ public class AArch64InterpreterStubs {
         public InterpreterEnterStubContext(SharedMethod method) {
             super(method);
             boolean useRistretto = SubstrateOptions.useRistretto();
-            InterpreterEnterStub stubType = AnnotationUtil.getAnnotation(method, InterpreterEnterStub.class);
+            InterpreterEnterStub stubType = GuestAnnotationAccess.getAnnotation(method, InterpreterEnterStub.class);
             assert stubType != null : "Missing @InterpreterEnterStub annotation on interpreter enter stub.";
             assert !useRistretto || ImageSingletons.contains(InterpreterExecutionOffsets.class) : "Missing InterpreterExecutionOffsets singleton while Ristretto is enabled.";
             emitDirectFastPath = useRistretto && stubType.value() == InterpreterEnterStub.Kind.DIRECT;
@@ -276,7 +284,7 @@ public class AArch64InterpreterStubs {
 
             /*
              * Ristretto currently makes this frame context reachable during analysis. Explicitly
-             * avoid the singleton lookup in that case until GR-55022 is fixed.
+             * avoid the singleton lookup in that case until GR-74744 is fixed.
              */
             if (SubstrateUtil.HOSTED) {
                 try (AArch64MacroAssembler.ScratchRegister scratch1 = masm.getScratchRegister()) {
@@ -292,7 +300,7 @@ public class AArch64InterpreterStubs {
             }
 
             Register trampArg = SubstrateAArch64Backend.HIDDEN_ARGUMENT_REGISTER;
-            Register spCopy = AArch64.r11;
+            Register spCopy = r11;
 
             masm.mov(64, spCopy, sp);
 
@@ -327,6 +335,77 @@ public class AArch64InterpreterStubs {
         }
     }
 
+    /** Adapts incoming JNI arguments to the interpreter wrapper signature. */
+    public static class InterpreterJNIUpcallStubContext extends SubstrateAArch64Backend.SubstrateAArch64FrameContext {
+        private final CallVariant callVariant;
+        private final boolean nonVirtual;
+
+        public InterpreterJNIUpcallStubContext(SharedMethod method) {
+            super(method);
+            InterpreterJNIUpcallStub annotation = GuestAnnotationAccess.getAnnotation(method, InterpreterJNIUpcallStub.class);
+            assert annotation != null : "Missing @InterpreterJNIUpcallStub annotation on JNI interpreter wrapper.";
+            callVariant = annotation.callVariant();
+            nonVirtual = annotation.nonVirtual();
+        }
+
+        private static AArch64Address jniUpcallDataAddress(SubstrateAArch64Backend.SubstrateAArch64FrameMap frameMap, int offset) {
+            return createImmediateAddress(64, IMMEDIATE_UNSIGNED_SCALED, sp, frameMap.offsetForStackSlot(frameMap.getInterpreterJNIUpcallData()) + offset);
+        }
+
+        @Override
+        public void enter(CompilationResultBuilder crb) {
+            AArch64MacroAssembler masm = (AArch64MacroAssembler) crb.asm;
+            SubstrateAArch64Backend.SubstrateAArch64FrameMap frameMap = (SubstrateAArch64Backend.SubstrateAArch64FrameMap) crb.frameMap;
+            SubstrateAArch64RegisterConfig registerConfig = (SubstrateAArch64RegisterConfig) frameMap.getRegisterConfig();
+            StackSlot jniUpcallData = frameMap.getInterpreterJNIUpcallData();
+            boolean needsEnterData = callVariant == CallVariant.VARARGS && !Platform.includedIn(Platform.DARWIN.class);
+            assert needsEnterData == (jniUpcallData != null);
+
+            List<Register> gps = registerConfig.getJavaGeneralParameterRegs();
+            List<Register> fps = registerConfig.getFloatingPointParameterRegs();
+            Register originalSp = r11;
+
+            /* Preserve the caller stack pointer before the regular prologue allocates the frame. */
+            masm.mov(64, originalSp, sp);
+            super.enter(crb);
+
+            if (needsEnterData) {
+                /* Capture the original JNI arguments before adapting registers for the wrapper. */
+                masm.str(64, originalSp, jniUpcallDataAddress(frameMap, offsetAbiSpReg()));
+                for (int i = 0; i < gps.size(); i++) {
+                    masm.str(64, gps.get(i), jniUpcallDataAddress(frameMap, offsetAbiGpArg(i)));
+                }
+                for (int i = 0; i < fps.size(); i++) {
+                    masm.fstr(64, fps.get(i), jniUpcallDataAddress(frameMap, offsetAbiFpArg(i)));
+                }
+            }
+
+            if (nonVirtual) {
+                /* Drop the JNI clazz argument: methodID becomes the third argument. */
+                masm.mov(64, r2, r3);
+            }
+
+            if (needsEnterData) {
+                /* Pass the address of the dedicated frame slot that preserves the captured arguments. */
+                masm.add(64, r3, sp, frameMap.offsetForStackSlot(jniUpcallData));
+            } else if (callVariant == CallVariant.VARARGS) {
+                /* Darwin AArch64 represents the variable arguments directly on the caller stack. */
+                masm.mov(64, r3, originalSp);
+            } else if (nonVirtual) {
+                /* Due to the drop of the JNI clazz argument: payload becomes the fourth argument. */
+                masm.mov(64, r3, r4);
+            }
+        }
+
+        @Override
+        public void leave(CompilationResultBuilder crb) {
+            AArch64MacroAssembler masm = (AArch64MacroAssembler) crb.asm;
+            /* The wrapper returns raw bits in r0; JNI floating-point variants return them in v0. */
+            masm.fmov(64, v0, r0);
+            super.leave(crb);
+        }
+    }
+
     public static class InterpreterLeaveStubContext extends SubstrateAArch64Backend.SubstrateAArch64FrameContext {
 
         public InterpreterLeaveStubContext(SharedMethod method) {
@@ -352,7 +431,7 @@ public class AArch64InterpreterStubs {
             SubstrateAArch64RegisterConfig registerConfig = ((SubstrateAArch64RegisterConfig) crb.frameMap.getRegisterConfig());
             List<Register> gps = registerConfig.getJavaGeneralParameterRegs();
             List<Register> fps = registerConfig.getFloatingPointParameterRegs();
-            Register callTarget = AArch64.r11;
+            Register callTarget = r11;
 
             /* Save call target */
             masm.mov(64, callTarget, r0);
@@ -360,11 +439,11 @@ public class AArch64InterpreterStubs {
             /* Get pointer to InterpreterData struct */
             masm.mov(64, r0, r1);
 
-            Register stackSize = AArch64.r2;
+            Register stackSize = r2;
 
             /* Copy prepared outgoing args to the stack where the ABI expects it */
-            Register calleeSpArgs = AArch64.r4;
-            Register interpDataSp = AArch64.r1;
+            Register calleeSpArgs = r4;
+            Register interpDataSp = r1;
             masm.ldr(64, interpDataSp, createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, r0, offsetAbiSpReg()));
             masm.mov(64, calleeSpArgs, sp);
 
@@ -379,7 +458,7 @@ public class AArch64InterpreterStubs {
 
             /* Set fp argument registers */
             for (int i = 0; i < fps.size(); i++) {
-                masm.fldr(64, fps.get(i), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, AArch64.r0, offsetAbiFpArg(i)));
+                masm.fldr(64, fps.get(i), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, r0, offsetAbiFpArg(i)));
             }
 
             /*
@@ -387,7 +466,7 @@ public class AArch64InterpreterStubs {
              * register has to be set in the last iteration.
              */
             for (int i = gps.size() - 1; i >= 0; i--) {
-                masm.ldr(64, gps.get(i), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, AArch64.r0, offsetAbiGpArg(i)));
+                masm.ldr(64, gps.get(i), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, r0, offsetAbiGpArg(i)));
             }
 
             /* Call into target method */
@@ -416,9 +495,9 @@ public class AArch64InterpreterStubs {
         }
     }
 
-    public static class InterpreterLeaveJNIStubContext extends SubstrateAArch64Backend.SubstrateAArch64FrameContext {
+    public static class InterpreterNativeDowncallStubContext extends SubstrateAArch64Backend.SubstrateAArch64FrameContext {
 
-        public InterpreterLeaveJNIStubContext(SharedMethod method) {
+        public InterpreterNativeDowncallStubContext(SharedMethod method) {
             super(method);
         }
 
@@ -427,16 +506,25 @@ public class AArch64InterpreterStubs {
             super.enter(crb);
             AArch64MacroAssembler masm = (AArch64MacroAssembler) crb.asm;
 
-            /* sp points to one reserved stack slots for this stub */
+            /* sp points to two reserved stack slots for this stub */
 
-            /* arg3: true if the result of the function is in a floating-point register */
+            /* arg3: return flags used to preserve the required native return registers. */
             masm.str(64, r3, createImmediateAddress(64, IMMEDIATE_UNSIGNED_SCALED, sp, 0));
+
+            /*
+             * Interpreter data lives in the caller's stack. Do not preserve its absolute address
+             * across the native call because relocating a virtual-thread stack would make that
+             * address stale. Preserve its SP-relative offset instead.
+             */
+            masm.mov(64, r11, sp);
+            masm.sub(64, r11, r1, r11);
+            masm.str(64, r11, createImmediateAddress(64, IMMEDIATE_UNSIGNED_SCALED, sp, 8));
 
             /*
              * Variable stack size. Compared to Java calls we have no deopt stack slot available to
              * store the stack size, so we save it in a callee-saved register.
              */
-            masm.mov(64, AArch64.r19, r2);
+            masm.mov(64, r19, r2);
 
             masm.sub(64, sp, sp, r2 /* variable stack size */);
         }
@@ -447,7 +535,7 @@ public class AArch64InterpreterStubs {
             SubstrateAArch64RegisterConfig registerConfig = ((SubstrateAArch64RegisterConfig) crb.frameMap.getRegisterConfig());
             List<Register> gps = registerConfig.getJavaGeneralParameterRegs();
             List<Register> fps = registerConfig.getFloatingPointParameterRegs();
-            Register callTarget = AArch64.r11;
+            Register callTarget = r11;
 
             /* Save call target */
             masm.mov(64, callTarget, r0);
@@ -455,14 +543,14 @@ public class AArch64InterpreterStubs {
             /* Get pointer to InterpreterData struct */
             masm.mov(64, r0, r1);
 
-            Register stackSize = AArch64.r2;
+            Register stackSize = r2;
             Label regsHandling = new Label();
             /* if stackSize == 0 */
             masm.cbz(64, stackSize, regsHandling);
 
             /* Copy prepared outgoing args to the stack where the ABI expects it */
-            Register calleeSpArgs = AArch64.r4;
-            Register interpDataSp = AArch64.r1;
+            Register calleeSpArgs = r4;
+            Register interpDataSp = r1;
             masm.ldr(64, interpDataSp, createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, r0, offsetAbiSpReg()));
             masm.mov(64, calleeSpArgs, sp);
 
@@ -479,7 +567,7 @@ public class AArch64InterpreterStubs {
 
             /* Set fp argument registers */
             for (int i = 0; i < fps.size(); i++) {
-                masm.fldr(64, fps.get(i), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, AArch64.r0, offsetAbiFpArg(i)));
+                masm.fldr(64, fps.get(i), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, r0, offsetAbiFpArg(i)));
             }
 
             /*
@@ -487,23 +575,42 @@ public class AArch64InterpreterStubs {
              * register has to be set in the last iteration.
              */
             for (int i = gps.size() - 1; i >= 0; i--) {
-                masm.ldr(64, gps.get(i), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, AArch64.r0, offsetAbiGpArg(i)));
+                masm.ldr(64, gps.get(i), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, r0, offsetAbiGpArg(i)));
             }
 
             /* Call into target method */
             masm.blr(callTarget);
 
             try (AArch64MacroAssembler.ScratchRegister scratchRegister = masm.getScratchRegister()) {
-                Register resultCopy = scratchRegister.getRegister();
-                masm.mov(64, resultCopy, r0);
 
                 /* Restore stack pointer */
-                masm.add(64, sp, sp, AArch64.r19);
+                masm.add(64, sp, sp, r19);
+
+                Register returnFlags = r2;
+                masm.ldr(64, returnFlags, createImmediateAddress(64, IMMEDIATE_UNSIGNED_SCALED, sp, 0));
+
+                Label noReturnBuffer = new Label();
+                masm.tst(64, returnFlags, NATIVE_DOWNCALL_RETURNS_IN_BUFFER);
+                masm.branchConditionally(AArch64Assembler.ConditionFlag.EQ, noReturnBuffer);
+                /*
+                 * Outgoing argument slots are dead after the call. Reuse them to preserve every
+                 * return register needed by an FFM aggregate return.
+                 */
+                Register data = scratchRegister.getRegister();
+                masm.ldr(64, data, createImmediateAddress(64, IMMEDIATE_UNSIGNED_SCALED, sp, 8));
+                masm.add(64, data, sp, data);
+                masm.str(64, r0, createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, data, offsetAbiGpArg(0)));
+                masm.str(64, r1, createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, data, offsetAbiGpArg(1)));
+                masm.fstr(64, fps.get(0), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, data, offsetAbiFpArg(0)));
+                masm.fstr(64, fps.get(1), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, data, offsetAbiFpArg(1)));
+                masm.fstr(64, fps.get(2), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, data, offsetAbiFpArg(2)));
+                masm.fstr(64, fps.get(3), createImmediateAddress(64, IMMEDIATE_SIGNED_UNSCALED, data, offsetAbiFpArg(3)));
+                masm.bind(noReturnBuffer);
 
                 Label gpResult = new Label();
                 /* The leave stub returns a long, so check whether the actual call returned in v0. */
-                masm.ldr(64, r2, createImmediateAddress(64, IMMEDIATE_UNSIGNED_SCALED, sp, 0));
-                masm.cbz(64, r2, gpResult);
+                masm.tst(64, returnFlags, NATIVE_DOWNCALL_RETURNS_IN_FP_REGISTER);
+                masm.branchConditionally(AArch64Assembler.ConditionFlag.EQ, gpResult);
                 /* Return the raw float/double bits in r0. */
                 masm.fmov(64, r0, v0);
                 masm.bind(gpResult);
@@ -525,8 +632,8 @@ public class AArch64InterpreterStubs {
     }
 
     public static int additionalFrameSizeLeaveStub() {
-        /* Reserve one extra word to remember whether the actual call returns in the FP register. */
-        return 8;
+        /* Reserve words for the FP-return flag and the stable interpreter data pointer. */
+        return 16;
     }
 
     @RawStructure
@@ -695,11 +802,15 @@ public class AArch64InterpreterStubs {
 
         @Override
         @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-        public void setSp(Pointer data, int stackSize, Pointer stackBuffer, boolean saveStackSizeInDeoptSlot) {
+        public void setSp(Pointer data, Pointer stackBuffer) {
             VMError.guarantee(stackBuffer.isNonNull());
+            ((InterpreterDataAArch64) data).setAbiSpReg(stackBuffer.rawValue());
+        }
 
+        @Override
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+        public void setStackSize(Pointer data, int stackSize, boolean saveStackSizeInDeoptSlot) {
             InterpreterDataAArch64 p = (InterpreterDataAArch64) data;
-            p.setAbiSpReg(stackBuffer.rawValue());
             p.setStackSize(stackSize);
 
             if (saveStackSizeInDeoptSlot) {
@@ -713,6 +824,7 @@ public class AArch64InterpreterStubs {
                  * comment above `currentStackOffset` declaration.
                  */
                 assert stackSize % 0x10 == 0;
+                Pointer stackBuffer = Word.pointer(p.getAbiSpReg());
                 stackBuffer.writeLong(0, DeoptimizationSlotPacking.encodeVariableFrameSizeIntoDeoptSlot(stackSize));
             } else {
                 /*
@@ -766,7 +878,7 @@ public class AArch64InterpreterStubs {
             Pointer spVal = Word.pointer(p.getAbiSpReg());
             int offset = PreparedSignature.getStackOffset(cArgType);
             VMError.guarantee(spVal.isNonNull());
-            VMError.guarantee(incoming || offset < p.getStackSize());
+            VMError.guarantee(incoming || offset < InterpreterAccessStubData.getStackBufferSize());
 
             spVal.writeLong(offset, val);
         }
@@ -812,7 +924,7 @@ public class AArch64InterpreterStubs {
                     int offset = PreparedSignature.getStackOffset(cArgType);
 
                     VMError.guarantee(spVal.isNonNull());
-                    VMError.guarantee(offset < p.getStackSize());
+                    VMError.guarantee(offset < InterpreterAccessStubData.getStackBufferSize());
 
                     spVal.writeLong(offset, val);
                 }
@@ -841,6 +953,30 @@ public class AArch64InterpreterStubs {
         @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
         public void setFpReturn(Pointer data, long fpReturn) {
             ((InterpreterDataAArch64) data).setAbiFpRet(fpReturn);
+        }
+
+        @Override
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+        public long getGpResultAt(Pointer data, int index) {
+            InterpreterDataAArch64 p = (InterpreterDataAArch64) data;
+            return switch (index) {
+                case 0 -> p.getAbiGpArg0();
+                case 1 -> p.getAbiGpArg1();
+                default -> throw VMError.shouldNotReachHereAtRuntime();
+            };
+        }
+
+        @Override
+        @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+        public long getFpResultAt(Pointer data, int index) {
+            InterpreterDataAArch64 p = (InterpreterDataAArch64) data;
+            return switch (index) {
+                case 0 -> p.getAbiFpArg0();
+                case 1 -> p.getAbiFpArg1();
+                case 2 -> p.getAbiFpArg2();
+                case 3 -> p.getAbiFpArg3();
+                default -> throw VMError.shouldNotReachHereAtRuntime();
+            };
         }
 
         @Override

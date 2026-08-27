@@ -28,6 +28,7 @@ import static com.oracle.truffle.api.bytecode.test.basic_interpreter.AbstractBas
 import static com.oracle.truffle.api.bytecode.test.basic_interpreter.AbstractBasicInterpreterTest.parseNode;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
@@ -52,6 +53,8 @@ import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.Parameterized.Parameters;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.bytecode.BytecodeConfig;
 import com.oracle.truffle.api.bytecode.BytecodeFrame;
 import com.oracle.truffle.api.bytecode.BytecodeLocal;
@@ -61,6 +64,7 @@ import com.oracle.truffle.api.bytecode.BytecodeParser;
 import com.oracle.truffle.api.bytecode.BytecodeRootNodes;
 import com.oracle.truffle.api.bytecode.BytecodeTier;
 import com.oracle.truffle.api.bytecode.ContinuationResult;
+import com.oracle.truffle.api.bytecode.StackValue;
 import com.oracle.truffle.api.bytecode.test.AbstractInstructionTest;
 import com.oracle.truffle.api.bytecode.test.BytecodeDSLTestLanguage;
 import com.oracle.truffle.api.bytecode.test.basic_interpreter.AbstractBasicInterpreterTest;
@@ -90,7 +94,7 @@ public class BytecodeDSLCompilationTest extends TestWithSynchronousCompiling {
     public static List<TestRun> getParameters() {
         List<TestRun> result = new ArrayList<>();
         for (BytecodeVariant bc : AbstractBasicInterpreterTest.allVariants()) {
-            result.add(new TestRun(bc, false, false));
+            result.add(new TestRun(bc, false, false, false));
         }
         return result;
     }
@@ -1256,6 +1260,72 @@ public class BytecodeDSLCompilationTest extends TestWithSynchronousCompiling {
     }
 
     @Test
+    public void testExceptionClearsBlockLocalsAfterContinuationDeoptimization() {
+        assumeTrue(run.hasBlockScoping());
+        String clearedValue = "cleared block local after continuation deoptimization";
+        BasicInterpreter root = parseNodeForCompilation(run, "exceptionClearsBlockLocalsAfterContinuationDeoptimization", b -> {
+            b.beginRoot();
+
+            b.beginYield();
+            b.emitLoadNull();
+            b.endYield();
+
+            b.beginTryCatch();
+            b.beginBlock();
+            BytecodeLocal cleared = b.createLocal();
+            b.beginStoreLocal(cleared);
+            b.emitLoadConstant(clearedValue);
+            b.endStoreLocal();
+
+            b.beginTag(StatementTag.class);
+            b.beginThrowOperation();
+            b.emitLoadConstant(42L);
+            b.endThrowOperation();
+            b.endTag(StatementTag.class);
+            b.endBlock();
+
+            b.beginReturn();
+            b.emitLoadNull();
+            b.endReturn();
+            b.endTryCatch();
+            b.endRoot();
+        });
+        root.getBytecodeNode().setUncachedThreshold(0);
+
+        instrumenter.attachExecutionEventFactory(SourceSectionFilter.newBuilder().tagIs(StatementTag.class).build(), (_) -> new ExecutionEventNode() {
+            @Override
+            protected void onReturnExceptional(VirtualFrame frame, Throwable exception) {
+                // prevent deopt from floating.
+                blackhole();
+                // deopt in the tag exception handler.
+                // we should unwrap the locals frame in spite of the deopt.
+                CompilerDirectives.transferToInterpreterAndInvalidate();
+            }
+
+            @TruffleBoundary
+            public void blackhole() {
+            }
+        });
+
+        OptimizedCallTarget target = (OptimizedCallTarget) root.getCallTarget();
+        ContinuationResult warmup = (ContinuationResult) target.call();
+        assertNull(warmup.continueWith(null));
+
+        ContinuationResult continuation = (ContinuationResult) target.call();
+        OptimizedCallTarget continuationTarget = (OptimizedCallTarget) continuation.getContinuationCallTarget();
+        continuationTarget.compile(true);
+        assertCompiled(continuationTarget);
+
+        assertNull(continuation.continueWith(null));
+        assertNotCompiled(continuationTarget);
+        for (int i = 0; i < continuation.getFrame().getFrameDescriptor().getNumberOfSlots(); i++) {
+            if (continuation.getFrame().getTag(i) != FrameSlotKind.Illegal.tag) {
+                assertNotEquals(clearedValue, continuation.getFrame().getValue(i));
+            }
+        }
+    }
+
+    @Test
     public void testContinuationSecondYieldPreservesStackOperands() {
         testContinuationSecondYieldPreservesStackOperands("continuationSecondYieldPreservesStackOperandsYield", BasicInterpreterBuilder::beginYield, BasicInterpreterBuilder::endYield);
         testContinuationSecondYieldPreservesStackOperands("continuationSecondYieldPreservesStackOperandsCustomYield", BasicInterpreterBuilder::beginCustomYield,
@@ -1415,6 +1485,87 @@ public class BytecodeDSLCompilationTest extends TestWithSynchronousCompiling {
         assertEquals(3L, r2.continueWith(null));
         assertCompiled(contTarget1);
         assertCompiled(contTarget2);
+    }
+
+    @Test
+    public void testContinuationDeoptAfterMerge() {
+        testContinuationDeoptAfterMerge("continuationDeoptAfterMergeYield", BasicInterpreterBuilder::beginYield, BasicInterpreterBuilder::endYield);
+        testContinuationDeoptAfterMerge("continuationDeoptAfterMergeCustomYield", BasicInterpreterBuilder::beginCustomYield, BasicInterpreterBuilder::endCustomYield);
+    }
+
+    private void testContinuationDeoptAfterMerge(String rootName, Consumer<BasicInterpreterBuilder> beginYield, Consumer<BasicInterpreterBuilder> endYield) {
+        BasicInterpreter root = parseNodeForCompilation(run, rootName, b -> {
+            // @formatter:off
+            // deopt = arg0
+            // yield 0
+            // stackvalue x = 0
+            // if (arg1) {
+            //   x = arg2
+            // } else {
+            //   x = arg3
+            // }
+            // deoptimize(deopt)
+            // return x
+            // @formatter:on
+            b.beginRoot();
+
+            // Initialize the deopt condition before yielding so that the initial value is
+            // not available in the graph. This keeps Deoptimize dependent on the local load
+            // after the merge, preventing it from floating earlier.
+            BytecodeLocal deopt = b.createLocal("deopt", null);
+            b.beginStoreLocal(deopt);
+            b.emitLoadArgument(0);
+            b.endStoreLocal();
+
+            beginYield.accept(b);
+            b.emitLoadConstant(0L);
+            endYield.accept(b);
+
+            b.beginBlock();
+            b.beginBindStackValue();
+            b.emitLoadConstant(0L);
+            StackValue x = b.endBindStackValue();
+
+            // Split and merge control flow to introduce a frame state. Assign different stack values
+            // in either branch to ensure the post-merge frame state exists. The first instruction after
+            // the merge loads a local, which fails if it executes with the wrapped continuation frame.
+            b.beginIfThenElse();
+            b.emitLoadArgument(1);
+
+            b.beginStoreStackValue(x);
+            b.emitLoadArgument(2);
+            b.endStoreStackValue();
+
+            b.beginStoreStackValue(x);
+            b.emitLoadArgument(3);
+            b.endStoreStackValue();
+
+            b.endIfThenElse();
+
+            b.beginDeoptimize();
+            b.emitLoadLocal(deopt);
+            b.endDeoptimize();
+
+            b.beginReturn();
+            b.emitLoadStackValue(x);
+            b.endReturn();
+            b.endBlock();
+
+            b.endRoot();
+        });
+
+        OptimizedCallTarget target = (OptimizedCallTarget) root.getCallTarget();
+        ContinuationResult warmup = (ContinuationResult) target.call(true, true, 42L, 123L);
+        assertEquals(42L, warmup.continueWith(null));
+        warmup = (ContinuationResult) target.call(false, false, 42L, 123L);
+        assertEquals(123L, warmup.continueWith(null));
+
+        ContinuationResult continuation = (ContinuationResult) target.call(true, true, 42L, 123L);
+        OptimizedCallTarget continuationTarget = (OptimizedCallTarget) continuation.getContinuationCallTarget();
+        continuationTarget.compile(true);
+        assertCompiled(continuationTarget);
+
+        assertEquals(42L, continuation.continueWith(null));
     }
 
     @Test

@@ -45,6 +45,7 @@ import com.oracle.svm.hosted.ProgressReporter;
 import com.oracle.svm.hosted.c.CAnnotationProcessorCache;
 import com.oracle.svm.hosted.image.AbstractImage;
 import com.oracle.svm.hosted.option.HostedOptionParser;
+import com.oracle.svm.hosted.sboutlining.SBOutliningFeature;
 import com.oracle.svm.hosted.webimage.logging.visualization.VisualizationSupport;
 import com.oracle.svm.hosted.webimage.name.WebImageNamingConvention;
 import com.oracle.svm.hosted.webimage.options.WebImageOptions;
@@ -53,7 +54,6 @@ import com.oracle.svm.hosted.webimage.util.BenchmarkLogger;
 import com.oracle.svm.hosted.webimage.wasm.WebImageWasmLMJavaMainSupport;
 import com.oracle.svm.hosted.webimage.wasmgc.WebImageWasmGCJavaMainSupport;
 import com.oracle.svm.shared.option.ReplacingLocatableMultiOptionValue;
-import com.oracle.svm.util.AnnotatedObjectAccess;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
 import com.oracle.svm.webimage.WebImageJavaMainSupport;
@@ -132,6 +132,10 @@ public class NativeImageWasmGeneratorRunner extends NativeImageGeneratorRunner {
 
         // Forcibly turn off CAnnotation processor cache
         optionProvider.getHostedValues().put(CAnnotationProcessorCache.Options.UseCAPCache, false);
+
+        // Web Image does not support StringBuilder or StringBuffer outlining.
+        optionProvider.getHostedValues().put(SBOutliningFeature.Options.OutlineStringBuilderAppends, false);
+        optionProvider.getHostedValues().put(SBOutliningFeature.Options.OutlineStringBufferAppends, false);
 
         optionProvider.getHostedValues().put(SubstrateOptions.CompilerBackend, "webImage");
 
@@ -212,6 +216,6 @@ public class NativeImageWasmGeneratorRunner extends NativeImageGeneratorRunner {
     }
 
     @Override
-    protected void verifyMainEntryPoint(ResolvedJavaMethod mainEntryPoint, AnnotatedObjectAccess annotationAccess) {
+    protected void verifyMainEntryPoint(ResolvedJavaMethod mainEntryPoint) {
     }
 }

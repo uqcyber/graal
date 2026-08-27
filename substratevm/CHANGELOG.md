@@ -2,10 +2,21 @@
 
 This changelog summarizes major changes to GraalVM Native Image.
 
-## GraalVM 25.3 (Internal Version 25.3.4)
+## GraalVM 25.4 (Internal Version 25.4.4)
+* (GR-75824) When native executables are built with `-H:+StrictRuntimeJavaOptions`, runtime assertion options (for example, `-ea`, `-da`, `-esa`, and `-dsa`) are supported and configure the assertion status of runtime-loaded classes and runtime-initialized image classes. They do not affect build-time-initialized classes whose assertion status is *only* configured by `native-image -ea ...`.
+* (GR-71854) On Linux AMD64, Native Image now records the selected x86-64 ISA level in `.note.gnu.property` for `-march` values requiring x86-64-v2 or newer, so tools such as `readelf` report the requirement correctly.
+* (GR-78784) Default to optional identity hash code fields with SerialGC. Few objects need one, and this optimization adds them during garbage collection. It can be disabled with `-H:-OptionalIdentityHashCodes`.
+* (GR-78804) Added outlining for StringBuilder/StringBuffer append sequences and invokedynamic string concatenations. This reduces the binary size of native executables.
+
+## GraalVM 25.3 (Internal Version 25.3.4.1)
+* (GR-77137) Added `SubstratePriorityInliningPhase` to leverage the new priority inliner added to the compiler suite.
+* (GR-77637) Fast inline execution paths and optimized spinning for `synchronized`. This generally improves locking performance, but inlined fast paths might increase image size. They can be disabled with `-H:-UseMonitorFastPath`.
 * (GR-72095) Refactored the Native Image runtime bytecode interpreter to enable tail-call threading among outlined bytecode handlers, significantly improving interpreter performance.
 * (GR-77670) Chunk up digest generation for Native Image Layers, to allow for large layer files to be checked. This makes older layer files potentially incompabile with layers created after this change.
 * (GR-73199) When native executables are built with `-H:-LegacyJavaOptionMode`, VM options are parsed only before the first `--` argument. Arguments after `--` are passed unchanged to the application main method. The legacy behavior remains unchanged.
+* (GR-78832) Renamed `LegacyJavaOptionMode` to `StrictRuntimeJavaOptions` and inverted its polarity. The default remains permissive; use `-H:+StrictRuntimeJavaOptions` to enable strict runtime Java option handling.
+* (GR-77977) Added control flow integrity options, available via `-H:CFI`. Indirect branches on AMD64 can be guarded with software-based checks that ensure that they land on valid targets. On AArch64, PAC is supported to protect return addresses on the stack.
+* (GR-77766) Executable anonymous memory mapping locations are randomized by default. This can be disabled with -H:-RandomizeRuntimeCodeCache.
 
 ## GraalVM 25.2 (Internal Version 25.2.4)
 * (GR-77358) Introduced compressed (32-bit) references, enabled by default. This generally improves memory usage and performance, but limits heap memory to 32 GB. Disable with `-H:-UseCompressedReferences`.

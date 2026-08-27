@@ -205,6 +205,9 @@ public class BytecodeDSLModel extends Template implements PrettyPrintable {
     public OperationModel finallyHandlerOperation;
     public OperationModel loadConstantOperation;
     public OperationModel loadNullOperation;
+    public OperationModel bindStackValueOperation;
+    public OperationModel loadStackValueOperation;
+    public OperationModel storeStackValueOperation;
     public OperationModel loadLocalOperation;
     public OperationModel loadLocalMaterializedOperation;
     public OperationModel tagOperation;
@@ -230,6 +233,8 @@ public class BytecodeDSLModel extends Template implements PrettyPrintable {
     public InstructionModel throwInstruction;
     public InstructionModel loadConstantInstruction;
     public InstructionModel loadNullInstruction;
+    public InstructionModel loadStackValueInstruction;
+    public InstructionModel storeStackValueInstruction;
     public InstructionModel loadArgumentInstruction;
     public InstructionModel yieldInstruction;
     public InstructionModel loadVariadicInstruction;
@@ -459,7 +464,6 @@ public class BytecodeDSLModel extends Template implements PrettyPrintable {
             prolog = customOp;
         } else if (ElementUtils.typeEquals(mirror.getAnnotationType(), types.EpilogReturn)) {
             op.setInternal();
-            op.setTransparent(true);
             op.setDynamicOperands(new DynamicOperandModel(List.of("value"), true, false));
             if (epilogReturn != null) {
                 addError(typeElement, "%s is already annotated with @%s. A Bytecode DSL class can only declare one return epilog.", getSimpleName(epilogReturn.getTemplateType()),
@@ -674,6 +678,10 @@ public class BytecodeDSLModel extends Template implements PrettyPrintable {
         rules.add(rule(delete(p(loadConstantInstruction), p(popInstruction))));
         // load.null, pop -> _
         rules.add(rule(delete(p(loadNullInstruction), p(popInstruction))));
+        // load.stackvalue, pop -> _
+        rules.add(rule(delete(p(loadStackValueInstruction), p(popInstruction))));
+        // dup, pop -> _
+        rules.add(rule(delete(p(dupInstruction), p(popInstruction))));
         // Throwing an exception on illegal load makes load.local side-effecting.
         if (loadIllegalLocalStrategy != LoadIllegalLocalStrategy.CUSTOM_EXCEPTION) {
             // load.local x, pop -> _

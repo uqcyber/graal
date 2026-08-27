@@ -54,7 +54,7 @@ import com.oracle.svm.core.c.locale.LocaleSupport;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.libjvm.LibJVMSupport;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -447,8 +447,13 @@ public abstract class SystemPropertiesSupport implements RuntimeSystemProperties
         if (path == null) {
             return null;
         }
-        int separatorIndex = path.lastIndexOf(pathSeparator());
-        return separatorIndex < 0 ? null : path.substring(0, separatorIndex);
+        char separator = pathSeparator();
+        int separatorIndex = path.lastIndexOf(separator);
+        if (separatorIndex < 0) {
+            return null;
+        }
+        boolean isRoot = separatorIndex == 0 || (separator == '\\' && separatorIndex == 2 && path.charAt(1) == ':');
+        return path.substring(0, separatorIndex + (isRoot ? 1 : 0));
     }
 
     private static char pathSeparator() {

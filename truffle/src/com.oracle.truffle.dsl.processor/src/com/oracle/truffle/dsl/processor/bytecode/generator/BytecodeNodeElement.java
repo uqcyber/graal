@@ -154,6 +154,9 @@ final class BytecodeNodeElement extends AbstractElement {
             CodeExecutableElement constructor = this.add(createCopyConstructor());
             this.add(createCreate(constructor));
             this.add(createResolveHandler());
+            if (parent.model.enableBlockScoping) {
+                this.add(createClearBlockLocalsOnException());
+            }
 
             if (parent.model.epilogExceptional != null) {
                 this.add(createDoEpilogExceptional());
@@ -1687,6 +1690,20 @@ final class BytecodeNodeElement extends AbstractElement {
         }
 
         b.string("loop: ").startWhile().string("true").end().startBlock();
+        if (tier.isCached()) {
+            b.lineComment("Detect if a tier-down occurred.");
+            b.startIf().string("wasCompiled && ").startStaticCall(types.CompilerDirectives, "inInterpreter").end().end().startBlock();
+            b.lineComment("Leave slow deoptimized method and reenter continueAt for faster execution");
+            if (mayWrapLocalFrame()) {
+                b.lineComment("Re-entering also ensures deoptimized continuations restore the interpreter frame layout before continuing");
+            }
+            if (this.handlerLayout.isTailCall()) {
+                b.statement("return ", BytecodeRootNodeElement.encodeState("bci", "vstate.sp"));
+            } else {
+                b.statement("return ", BytecodeRootNodeElement.encodeState("bci", "sp"));
+            }
+            b.end();
+        }
         b.startStatement().startStaticCall(types.CompilerAsserts, "partialEvaluationConstant").string("bci").end().end();
         // filtered instructions
         List<InstructionModel> instructions = parent.model.getInstructions().stream().//
@@ -1804,18 +1821,6 @@ final class BytecodeNodeElement extends AbstractElement {
         }
 
         b.end(); // switch
-
-        if (tier.isCached()) {
-            b.lineComment("Detect if a tier-down occurred during the loop iteration");
-            b.startIf().string("wasCompiled && ").startStaticCall(types.CompilerDirectives, "inInterpreter").end().end().startBlock();
-            b.lineComment("Leave slow deoptimized method and reenter continueAt for faster execution");
-            if (this.handlerLayout.isTailCall()) {
-                b.statement("return ", BytecodeRootNodeElement.encodeState("bci", "vstate.sp"));
-            } else {
-                b.statement("return ", BytecodeRootNodeElement.encodeState("bci", "sp"));
-            }
-            b.end();
-        }
 
         b.end(); // try
 
@@ -2142,7 +2147,6 @@ final class BytecodeNodeElement extends AbstractElement {
          * AbstractTruffleException. An intercept method can produce a new exception that can be
          * intercepted by a subsequent intercept method.
          */
-        b.declaration(getStackPointerType(), "targetSp", "sp");
         b.declaration(type(Throwable.class), "throwable", "originalThrowable");
         if (parent.model.interceptControlFlowException != null) {
             b.startIf().string("throwable instanceof ").type(types.ControlFlowException).string(" cfe").end().startBlock();
@@ -2170,6 +2174,10 @@ final class BytecodeNodeElement extends AbstractElement {
 
         b.startDeclaration(type(int[].class), "handlerTable").string("this.handlers").end();
         b.startDeclaration(type(int.class), "handler").string("-EXCEPTION_HANDLER_LENGTH").end();
+        b.declaration(getStackPointerType(), "targetSp");
+        if (parent.model.enableBlockScoping) {
+            b.declaration(type(int.class), "targetLocalCount");
+        }
         b.startWhile().string("(handler = resolveHandler(bci, handler + EXCEPTION_HANDLER_LENGTH, handlerTable)) != -1").end().startBlock();
 
         boolean hasSpecialHandler = parent.model.enableTagInstrumentation || parent.model.epilogExceptional != null;
@@ -2223,6 +2231,9 @@ final class BytecodeNodeElement extends AbstractElement {
                 b.startIf().string("result == ").staticReference(types.ProbeNode, "UNWIND_ACTION_REENTER").end().startBlock();
                 b.lineComment("Reenter by jumping to the begin bci.");
                 b.statement("bci = node.enterBci");
+                if (parent.model.enableBlockScoping) {
+                    b.startAssign("targetLocalCount").startCall("getLocalCount").string(parent.castBytecodeIndexToInt("bci")).end().end();
+                }
                 b.end().startElseBlock();
 
                 b.startSwitch().string("readValidBytecode(bc, node.returnBci)").end().startBlock();
@@ -2277,6 +2288,9 @@ final class BytecodeNodeElement extends AbstractElement {
 
                     b.statement("targetSp = targetSp + 1");
                     b.statement("bci = node.returnBci + " + length);
+                    if (parent.model.enableBlockScoping) {
+                        b.startAssign("targetLocalCount").startCall("getLocalCount").string(parent.castBytecodeIndexToInt("bci")).end().end();
+                    }
 
                     b.statement("break");
                     b.end();
@@ -2285,6 +2299,9 @@ final class BytecodeNodeElement extends AbstractElement {
                     b.startCase().tree(parent.createInstructionConstant(instruction)).end();
                     b.startCaseBlock();
                     b.statement("bci = node.returnBci + " + instruction.getInstructionLength());
+                    if (parent.model.enableBlockScoping) {
+                        b.startAssign("targetLocalCount").startCall("getLocalCount").string(parent.castBytecodeIndexToInt("bci")).end().end();
+                    }
                     b.lineComment("discard return value");
                     b.statement("break");
                     b.end();
@@ -2307,6 +2324,9 @@ final class BytecodeNodeElement extends AbstractElement {
         b.startAssert().string("throwable instanceof ").type(types.AbstractTruffleException).end();
         b.statement("bci = handlerTable[handler + EXCEPTION_HANDLER_OFFSET_HANDLER_BCI]");
         b.statement("targetSp = handlerTable[handler + EXCEPTION_HANDLER_OFFSET_HANDLER_SP] + root.stackBase");
+        if (parent.model.enableBlockScoping) {
+            b.statement("targetLocalCount = handlerTable[handler + EXCEPTION_HANDLER_OFFSET_HANDLER_LOCAL_COUNT]");
+        }
         b.statement(BytecodeRootNodeElement.setFrameObject("targetSp - 1", "throwable"));
 
         if (hasSpecialHandler) {
@@ -2340,6 +2360,9 @@ final class BytecodeNodeElement extends AbstractElement {
         b.statement(BytecodeRootNodeElement.clearFrame("frame", "sp"));
         b.end();
         b.statement("sp = targetSp");
+        if (parent.model.enableBlockScoping) {
+            b.startStatement().startCall("clearBlockLocalsOnException").string("frame").string("originalBci").string("targetLocalCount").end().end();
+        }
         b.startReturn().string(BytecodeRootNodeElement.encodeState("bci", "sp")).end();
         b.end(); // while
 
@@ -2363,6 +2386,36 @@ final class BytecodeNodeElement extends AbstractElement {
         b.end(); // catch
         return method;
 
+    }
+
+    private CodeExecutableElement createClearBlockLocalsOnException() {
+        assert parent.model.enableBlockScoping;
+
+        CodeExecutableElement method = new CodeExecutableElement(Set.of(PRIVATE), type(void.class), "clearBlockLocalsOnException");
+        method.addParameter(new CodeVariableElement(types.FrameWithoutBoxing, "frame"));
+        method.addParameter(new CodeVariableElement(getBytecodeIndexType(), "originalBci"));
+        method.addParameter(new CodeVariableElement(type(int.class), "targetLocalCount"));
+        method.addAnnotationMirror(new CodeAnnotationMirror(types.ExplodeLoop));
+
+        CodeTreeBuilder b = method.createBuilder();
+        b.startDeclaration(type(int.class), "originalLocalCount").startCall("getLocalCount").string(parent.castBytecodeIndexToInt("originalBci")).end().end();
+        b.startStatement().startStaticCall(types.CompilerAsserts, "partialEvaluationConstant").string("targetLocalCount").end().end();
+        b.startStatement().startStaticCall(types.CompilerAsserts, "partialEvaluationConstant").string("originalLocalCount").end().end();
+        if (mayWrapLocalFrame()) {
+            startIfHasSeparateLocalFrame(b, false, true);
+            b.startDeclaration(types.FrameWithoutBoxing, "localFrame").tree(readContinuationFrame("frame", types.FrameWithoutBoxing)).end();
+            b.startFor().string("int localOffset = targetLocalCount; localOffset < originalLocalCount; localOffset++").end().startBlock();
+            b.statement(BytecodeRootNodeElement.clearFrame("localFrame", "USER_LOCALS_START_INDEX + localOffset"));
+            b.end();
+            b.end().startElseBlock();
+        }
+        b.startFor().string("int localOffset = targetLocalCount; localOffset < originalLocalCount; localOffset++").end().startBlock();
+        b.statement(BytecodeRootNodeElement.clearFrame("frame", "USER_LOCALS_START_INDEX + localOffset"));
+        b.end();
+        if (mayWrapLocalFrame()) {
+            b.end();
+        }
+        return method;
     }
 
     private CodeExecutableElement createHandleControlFlowException() {

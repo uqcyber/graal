@@ -25,11 +25,11 @@
 
 package com.oracle.svm.truffle;
 
-import static com.oracle.svm.core.UninterruptibleAnnotationUtils.UninterruptibleGuestValue;
 import static com.oracle.svm.graal.hosted.runtimecompilation.RuntimeCompilationFeature.AllowInliningPredicate.InlineDecision.INLINE;
 import static com.oracle.svm.graal.hosted.runtimecompilation.RuntimeCompilationFeature.AllowInliningPredicate.InlineDecision.INLINING_DISALLOWED;
 import static com.oracle.svm.graal.hosted.runtimecompilation.RuntimeCompilationFeature.AllowInliningPredicate.InlineDecision.NO_DECISION;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -114,6 +114,7 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.UninterruptibleAnnotationUtils;
+import com.oracle.svm.core.UninterruptibleGuestValue;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
@@ -126,7 +127,9 @@ import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.jdk.VectorAPIEnabled;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.core.jdk.resources.MissingResourceRegistrationUtils;
+import com.oracle.svm.core.reflect.MissingReflectionRegistrationUtils;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.util.UserError;
@@ -161,7 +164,7 @@ import com.oracle.svm.truffle.api.SubstrateThreadLocalHandshakeSnippets;
 import com.oracle.svm.truffle.api.SubstrateTruffleCompiler;
 import com.oracle.svm.truffle.api.SubstrateTruffleRuntime;
 import com.oracle.svm.truffle.api.SubstrateTruffleUniverseFactory;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.OriginalClassProvider;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -499,7 +502,7 @@ public class TruffleFeature implements InternalFeature {
         /*
          * This effectively initializes the Truffle fallback engine which does all the system
          * property option parsing to initialize the profilingEnabled flag correctly. A polyglot
-         * fallback engine can not stay in the the image though, so we clear it right after. We
+         * fallback engine can not stay in the image though, so we clear it right after. We
          * don't expect it to be used except for profiling enabled check.
          */
         TruffleBaseFeature.invokeStaticMethod("com.oracle.truffle.polyglot.PolyglotEngineImpl", "resetFallbackEngine", Collections.emptyList());
@@ -540,13 +543,13 @@ public class TruffleFeature implements InternalFeature {
                 return INLINING_DISALLOWED;
             } else if (invocationPlugins.lookupInvocation(target, builder.getOptions()) != null) {
                 return INLINING_DISALLOWED;
-            } else if (AnnotationUtil.getAnnotation(target, ExplodeLoop.class) != null) {
+            } else if (GuestAnnotationAccess.isAnnotationPresent(target, ExplodeLoop.class)) {
                 /*
                  * We cannot inline a method annotated with @ExplodeLoop, because then loops are no
                  * longer exploded.
                  */
                 return INLINING_DISALLOWED;
-            } else if (AnnotationUtil.getAnnotation(root, ExplodeLoop.class) != null && calleeBytecodeHasLoops(target)) {
+            } else if (GuestAnnotationAccess.isAnnotationPresent(root, ExplodeLoop.class) && calleeBytecodeHasLoops(target)) {
                 /*
                  * We cannot inline a method with loops into a method annotated with @ExplodeLoop,
                  * because then loops of the inlined callee are exploded too. This predicate is on
@@ -642,7 +645,7 @@ public class TruffleFeature implements InternalFeature {
     }
 
     private static boolean runtimeCompilationForbidden(ResolvedJavaMethod method) {
-        if (AnnotationUtil.getAnnotation(method, TruffleBoundary.class) != null) {
+        if (GuestAnnotationAccess.isAnnotationPresent(method, TruffleBoundary.class)) {
             return true;
         } else if (UninterruptibleAnnotationUtils.isUninterruptible(method)) {
             UninterruptibleGuestValue uninterruptibleAnnotation = UninterruptibleAnnotationUtils.getAnnotation(method);
@@ -653,7 +656,7 @@ public class TruffleFeature implements InternalFeature {
         }
         if (!method.canBeInlined()) {
             return true;
-        } else if (AnnotationUtil.getAnnotation(method, TruffleCallBoundary.class) != null) {
+        } else if (GuestAnnotationAccess.isAnnotationPresent(method, TruffleCallBoundary.class)) {
             return true;
         }
         return false;
@@ -672,7 +675,7 @@ public class TruffleFeature implements InternalFeature {
         if (method == null) {
             return false;
         }
-        TruffleBoundary truffleBoundary = AnnotationUtil.getAnnotation(method, TruffleBoundary.class);
+        TruffleBoundaryGuestValue truffleBoundary = TruffleBoundaryGuestValue.get(method);
         return truffleBoundary != null && truffleBoundary.transferToInterpreterOnException();
     }
 
@@ -776,6 +779,24 @@ public class TruffleFeature implements InternalFeature {
         warnAllMethods(metaAccess, JavaStackWalker.class);
         warnAllMethods(metaAccess, Deoptimizer.class);
         warnAllMethods(metaAccess, Heap.getHeap().getClass());
+
+        /*
+         * Missing registration diagnostics format JSON suggestions and use broad JDK library code.
+         * Keep these cold reporting paths outside Truffle runtime compilation.
+         */
+        markTruffleBoundary(metaAccess, MissingReflectionRegistrationUtils.class, "reportClassAccess", String.class);
+        markTruffleBoundary(metaAccess, MissingReflectionRegistrationUtils.class, "reportUnsafeAllocation", Class.class);
+        markTruffleBoundary(metaAccess, MissingReflectionRegistrationUtils.class, "reportFieldQuery", Class.class, String.class);
+        markTruffleBoundary(metaAccess, MissingReflectionRegistrationUtils.class, "reportInvokedExecutable", Executable.class);
+        markTruffleBoundary(metaAccess, MissingReflectionRegistrationUtils.class, "reportAccessedField", Field.class);
+        markTruffleBoundary(metaAccess, MissingReflectionRegistrationUtils.class, "reportMethodQuery", Class.class, String.class, Class[].class);
+        markTruffleBoundary(metaAccess, MissingReflectionRegistrationUtils.class, "reportClassQuery", Class.class, String.class);
+        markTruffleBoundary(metaAccess, MissingReflectionRegistrationUtils.class, "reportProxyAccess", Class[].class);
+        markTruffleBoundary(metaAccess, MissingReflectionRegistrationUtils.class, "reportArrayInstantiation", Class.class, int.class);
+        // Keep the intrinsified array diagnostic path outside runtime compilation.
+        markTruffleBoundary(metaAccess, Array.class, "newInstance", Class.class, int.class);
+        markTruffleBoundary(metaAccess, MissingResourceRegistrationUtils.class, "reportResourceAccess", Module.class, String.class);
+        markTruffleBoundary(metaAccess, MissingResourceRegistrationUtils.class, "reportResourceBundleAccess", Module.class, String.class);
 
         /*
          * GR-41564 These methods should become part of the blocklist once the Truffle language
@@ -1137,7 +1158,7 @@ public class TruffleFeature implements InternalFeature {
                 if (!(method instanceof AnalysisMethod)) {
                     throw VMError.shouldNotReachHere("method should be an analysis method");
                 }
-                if (AnnotationUtil.getAnnotation(method, TruffleBoundary.class) != null) {
+                if (GuestAnnotationAccess.isAnnotationPresent(method, TruffleBoundary.class)) {
                     throw VMError.shouldNotReachHere("method used during runtime compilation must never be annotated with a truffle boundary");
                 }
                 runtimeCompiledMethods.add((AnalysisMethod) method);
@@ -1151,7 +1172,7 @@ public class TruffleFeature implements InternalFeature {
         int calleeCount = 0;
         for (RuntimeCompiledMethod runtimeCompiledMethod : treeInfo.runtimeCompilations()) {
             for (ResolvedJavaMethod targetMethod : runtimeCompiledMethod.getInvokeTargets()) {
-                TruffleBoundary truffleBoundary = AnnotationUtil.getAnnotation(targetMethod, TruffleBoundary.class);
+                TruffleBoundaryGuestValue truffleBoundary = TruffleBoundaryGuestValue.get(targetMethod);
                 if (truffleBoundary != null) {
                     ++callSiteCount;
                     if (foundBoundaries.contains(targetMethod)) {

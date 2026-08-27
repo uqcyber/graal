@@ -25,6 +25,7 @@
 
 package com.oracle.svm.hosted.webimage.wasm.codegen;
 
+import com.oracle.svm.hosted.webimage.WasmExportGuestValue;
 import static com.oracle.svm.hosted.webimage.metrickeys.ImageBreakdownMetricKeys.ENTIRE_IMAGE_SIZE;
 import static com.oracle.svm.hosted.webimage.metrickeys.ImageBreakdownMetricKeys.WASM_IMAGE_SIZE;
 import static com.oracle.svm.hosted.webimage.metrickeys.UniverseMetricKeys.EMITTED_METHODS;
@@ -78,7 +79,7 @@ import com.oracle.svm.hosted.webimage.wasm.ast.visitors.WasmValidator;
 import com.oracle.svm.hosted.webimage.wasm.debug.WasmDebug;
 import com.oracle.svm.hosted.webimage.wasmgc.WasmGCFunctionTemplateFeature;
 import com.oracle.svm.hosted.webimage.wasmgc.types.WasmRefType;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.webimage.NamingConvention;
 import com.oracle.svm.webimage.functionintrinsics.JSFunctionDefinition;
 import com.oracle.svm.webimage.functionintrinsics.JSGenericFunctionDefinition;
@@ -279,12 +280,12 @@ public abstract class WebImageWasmCodeGen extends WebImageCodeGen {
         module.addFunctionExport(getProviders().idFactory.forMethod(mainEntryPoint), "main", "Main Entry Point");
 
         for (HostedMethod entryPoint : hostedEntryPoints) {
-            if (AnnotationUtil.isAnnotationPresent(entryPoint, WasmExport.class)) {
-                WasmExport annotation = AnnotationUtil.getAnnotation(entryPoint, WasmExport.class);
+            if (GuestAnnotationAccess.isAnnotationPresent(entryPoint, WasmExport.class)) {
+                WasmExportGuestValue annotation = WasmExportGuestValue.get(entryPoint);
                 module.addFunctionExport(getProviders().idFactory().forMethod(entryPoint), annotation.value(), annotation.comment().isEmpty() ? null : annotation.comment());
             }
 
-            if (AnnotationUtil.isAnnotationPresent(entryPoint, WasmStartFunction.class)) {
+            if (GuestAnnotationAccess.isAnnotationPresent(entryPoint, WasmStartFunction.class)) {
                 module.setStartFunction(new StartFunction(getProviders().idFactory().forMethod(entryPoint), null));
             }
         }

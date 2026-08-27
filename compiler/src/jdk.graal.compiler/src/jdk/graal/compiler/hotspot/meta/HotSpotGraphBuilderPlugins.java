@@ -185,11 +185,17 @@ import jdk.graal.compiler.replacements.nodes.BinaryMathIntrinsicNode;
 import jdk.graal.compiler.replacements.nodes.IntegerPolynomialAssignNode;
 import jdk.graal.compiler.replacements.nodes.IntegerPolynomialP256MontgomeryMultNode;
 import jdk.graal.compiler.replacements.nodes.MacroNode.MacroParams;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.MD5Node;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA1Node;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA256Node;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA3Node;
+import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA512Node;
 import jdk.graal.compiler.replacements.nodes.Poly1305ProcessBlocksNode;
 import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode;
 import jdk.graal.compiler.serviceprovider.GraalServices;
 import jdk.graal.compiler.serviceprovider.SpeculationReasonGroup;
 import jdk.graal.compiler.vector.replacements.vectorapi.VectorAPIIntrinsics;
+import jdk.graal.compiler.vector.replacements.VectorIntrinsics;
 import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.amd64.AMD64;
@@ -273,7 +279,7 @@ public class HotSpotGraphBuilderPlugins {
                 registerCallSitePlugins(invocationPlugins);
                 registerReflectionPlugins(invocationPlugins, config);
                 registerAESPlugins(invocationPlugins);
-                registerSHAPlugins(invocationPlugins, config);
+                registerSHAPlugins(invocationPlugins, target.arch);
                 registerUnsafePlugins(invocationPlugins, config);
                 registerArrayPlugins(invocationPlugins, config);
                 registerStringPlugins(invocationPlugins, wordTypes, foreignCalls, config);
@@ -284,6 +290,7 @@ public class HotSpotGraphBuilderPlugins {
                 registerPoly1305Plugin(invocationPlugins);
                 registerIntegerPolynomialPlugins(invocationPlugins);
                 registerDualPivotQuicksortPlugins(invocationPlugins, config, target.arch);
+                VectorIntrinsics.registerPlugins(invocationPlugins, options, false);
 
                 if (VectorAPIIntrinsics.intrinsificationSupported(options)) {
                     VectorAPIIntrinsics.registerPlugins(plugins.getInvocationPlugins());
@@ -1058,12 +1065,12 @@ public class HotSpotGraphBuilderPlugins {
         });
     }
 
-    private static void registerSHAPlugins(InvocationPlugins plugins, GraalHotSpotVMConfig config) {
-        boolean useMD5 = config.md5ImplCompressMultiBlock != 0L;
-        boolean useSha1 = config.sha1ImplCompressMultiBlock != 0L;
-        boolean useSha256 = config.sha256ImplCompressMultiBlock != 0L;
-        boolean useSha512 = config.sha512ImplCompressMultiBlock != 0L;
-        boolean useSha3 = config.sha3ImplCompressMultiBlock != 0L;
+    private static void registerSHAPlugins(InvocationPlugins plugins, Architecture arch) {
+        boolean useMD5 = MD5Node.isSupported(arch);
+        boolean useSha1 = SHA1Node.isSupported(arch);
+        boolean useSha256 = SHA256Node.isSupported(arch);
+        boolean useSha512 = SHA512Node.isSupported(arch);
+        boolean useSha3 = SHA3Node.isSupported(arch);
 
         boolean implCompressMultiBlock0Enabled = useMD5 || useSha1 || useSha256 || useSha512 || useSha3;
         Registration r = new Registration(plugins, "sun.security.provider.DigestBase");
@@ -1139,14 +1146,7 @@ public class HotSpotGraphBuilderPlugins {
                 return arch instanceof AArch64;
             }
         });
-        r.register(new StandardGraphBuilderPlugins.VectorizedHashCodeInvocationPlugin() {
-            @Override
-            public boolean isGraalOnly() {
-                // On AArch64 HotSpot, this intrinsic is not implemented and
-                // UseVectorizedHashCodeIntrinsic defaults to false.
-                return arch instanceof AArch64;
-            }
-        });
+        r.register(new StandardGraphBuilderPlugins.VectorizedHashCodeInvocationPlugin());
     }
 
     private static void registerReferencePlugins(InvocationPlugins plugins) {

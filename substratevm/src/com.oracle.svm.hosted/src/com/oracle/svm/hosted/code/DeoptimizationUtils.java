@@ -49,11 +49,11 @@ import com.oracle.svm.core.graal.nodes.DeoptTestNode;
 import com.oracle.svm.core.graal.nodes.LoweredDeadEndNode;
 import com.oracle.svm.core.graal.snippets.DeoptTester;
 import com.oracle.svm.core.graal.stackvalue.StackValueNode;
-import com.oracle.svm.core.heap.RestrictHeapAccess;
+import com.oracle.svm.guest.staging.core.heap.RestrictHeapAccess;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.hosted.meta.HostedMethod;
 import com.oracle.svm.hosted.meta.HostedUniverse;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.graph.Node;
@@ -136,7 +136,7 @@ public class DeoptimizationUtils {
             return false;
         }
 
-        if (AnnotationUtil.getAnnotation(method, DeoptTest.class) != null) {
+        if (GuestAnnotationAccess.isAnnotationPresent(method, DeoptTest.class)) {
             return true;
         }
 
@@ -169,7 +169,7 @@ public class DeoptimizationUtils {
         if (UninterruptibleAnnotationUtils.isUninterruptible(method)) {
             return false;
         }
-        if (AnnotationUtil.getAnnotation(method, RestrictHeapAccess.class) != null) {
+        if (GuestAnnotationAccess.isAnnotationPresent(method, RestrictHeapAccess.class)) {
             return false;
         }
         if (StubCallingConvention.Utils.hasStubCallingConvention(method)) {

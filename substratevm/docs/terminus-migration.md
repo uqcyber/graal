@@ -11,6 +11,63 @@ The primary API for working with the guest context is `GuestAccess`.
 
 When migrating code for Terminus, prefer JVMCI- and `VMAccess`-based APIs over Java core reflection whenever the code interacts with guest-loaded types, methods, fields, modules, or invocation paths.
 
+### Choose APIs by Context Ownership
+
+Before replacing reflection with JVMCI, identify which VM context owns the element being queried.
+
+Use core reflection for same-context queries:
+
+- builder-context code inspecting builder-owned elements;
+- guest-context code inspecting guest-owned elements.
+
+Use JVMCI, `GuestAccess`, and `VMAccess` for builder-to-guest queries.
+
+As a rule of thumb:
+
+- core reflection means "query an element owned by the current VM context";
+- JVMCI / `GuestAccess` means "query a guest-owned element from the builder context".
+
+`Cross-context` is the general term for communication across the builder/guest boundary, but the
+metadata and reflection migration APIs described here are directional: they support
+builder-to-guest queries. Guest-to-builder reflection is not a corresponding general-purpose
+operation. Exceptional communication in that direction must use an explicit host proxy, callback,
+or service boundary.
+
+Do not route hosted-only or builder-owned elements through `GuestAccess` just to get JVMCI-shaped metadata. Such elements may not exist in the guest context, and the lookup can fail or report false negatives.
+
+### Choose Annotation APIs By Ownership
+
+Choose the annotation API according to the context that owns the queried element. This API choice
+does not depend on whether the build is isolated:
+
+| Query direction | API |
+| --- | --- |
+| Builder to builder | `AnnotationAccess` |
+| Builder to guest | `GuestAnnotationAccess` |
+| Guest to guest | `AnnotationAccess` |
+
+Isolation only changes the implementation behind these APIs:
+
+| Mode | Builder `AnnotationAccess` | Builder `GuestAnnotationAccess` | Guest `AnnotationAccess` |
+| --- | --- | --- | --- |
+| Non-isolated | `SubstrateAnnotationExtractor` | The same `SubstrateAnnotationExtractor` | `SubstrateAnnotationExtractor` |
+| Fully isolated | `HostAnnotationExtractor` | `GuestAnnotationBackend` | Host proxy to `GuestAnnotationAccess`, backed by `GuestAnnotationBackend` |
+
+`AnnotationExtractor` is the low-level same-VM service behind `AnnotationAccess`. It may be used
+directly only during early bootstrap, before the context-local `AnnotationAccess` singleton is
+available. Normal annotation-query consumers must not use concrete extractor implementations.
+
+The fully isolated host backend uses core reflection for builder-owned metadata. Consequently, its
+annotation type enumeration can materialize annotations and initialize their interfaces. This is an
+accepted builder-only exception; non-isolated and guest metadata paths preserve the reduced class
+initialization behavior of `AnnotationAccess`.
+
+`GuestAnnotationAccess` is primarily a build-time builder-to-guest API. Existing Crema and Ristretto
+compiler paths are narrow runtime exceptions and do not make it a general runtime annotation API.
+Class-based convenience overloads require annotation classes shared by both contexts; use JVMCI
+types for guest-only annotations. Guest-to-guest `AnnotationAccess` remains a same-context API even
+when its fully isolated implementation delegates through a host proxy.
+
 ## Reflection And Metadata Replacements
 
 | Core reflection / hosted API                                                                 | Terminus-safe replacement                                                                                | Notes |
@@ -21,14 +78,16 @@ When migrating code for Terminus, prefer JVMCI- and `VMAccess`-based APIs over J
 | `JNIAccess`                                                                                  | `JVMCIJNIAccess`                                                                                         | Same class name pattern with `JVMCI` prefix. |
 | `AccessCondition`                                                                            | `JVMCIAccessCondition`                                                                                   | Use the JVMCI-aware variant. |
 | `FeatureAccess.findClassByName()`                                                            | `InternalFeatureAccess.findTypeByName()`                                                                 | Use type lookup instead of host `Class<?>` lookup. |
-| `Class.getDeclaredMethod()`                                                                  | `JVMCIReflectionUtil.getUniqueDeclaredMethod(...)`                                                       | Returns `null` when name and parameter types do not uniquely identify a method. |
+| `Class.getDeclaredMethod()`                                                                  | `JVMCIReflectionUtil.getDeclaredMethod(...)` or `JVMCIReflectionUtil.getUniqueDeclaredMethod(...)`        | Use `getDeclaredMethod(...)` with an explicit return type when covariant-return bridge methods can share a name and parameter types. Use `getUniqueDeclaredMethod(...)` when name and parameter types must identify exactly one method. |
 | `Class.getDeclaredConstructor()`                                                             | `JVMCIReflectionUtil.getDeclaredConstructor(...)`                                                        | Same uniqueness caveat as method lookup. |
 | `Class.getConstructors()`                                                                    | `JVMCIReflectionUtil.getConstructors(...)`                                                               | Keep lookup in JVMCI space. |
 | `Class.getDeclaredMethods()`                                                                 | `ResolvedJavaType.getAllMethods(true)`                                                                   | The `true` value for `forceLink` is important so methods with bytecodes have non-null `ResolvedJavaMethod.getCode()`. |
 | `Class.getDeclaredFields()`                                                                  | `JVMCIReflectionUtil.getAllFields(ResolvedJavaType)`                                                     | JVMCI includes internal fields (`ResolvedJavaField.isInternal()`), unlike core reflection. |
 | `Class.getTypeName()`                                                                        | `JVMCIReflectionUtil.getTypeName(ResolvedJavaType)`                                                      | Direct type-name replacement. |
+| `Class.getModifiers()`                                                                       | `JVMCIReflectionUtil.getJavaLanguageModifiers(ResolvedJavaType)`                                         | Use when member-class modifiers from the `InnerClasses` attribute, such as `static`, are required. Prefer `ResolvedJavaType.getModifiers()` when class access flags are sufficient. |
+| `Class.getDeclaringClass()`                                                                  | `JVMCIReflectionUtil.getDeclaringType(ResolvedJavaType)`                                                 | Unlike `ResolvedJavaType.getEnclosingType()`, returns `null` for local and anonymous types. |
 | `Class.getCanonicalName()`                                                                   | No direct replacement                                                                                    | Usually only needed for reporting; prefer suitable `JavaType` / `ResolvedJavaType` naming helpers. |
-| `Class.getSimpleName()`                                                                      | `JavaType.toJavaName()`                                                                                  | Not a 1:1 semantic replacement; use mainly for reporting. |
+| `Class.getSimpleName()`                                                                      | `JVMCIReflectionUtil.getSimpleName(ResolvedJavaType)`                                                    | Preserves simple-name semantics for arrays, top-level, member, local, and anonymous classes. |
 | `Module`, `ModuleLayer`, `Package`                                                           | `ResolvedJavaModule`, `ResolvedJavaModuleLayer`, `ResolvedJavaPackage`                                   | These are the JVMCI-side equivalents used during Terminus migration. |
 | `ModuleLayer.boot()`                                                                         | `JVMCIReflectionUtil.bootModuleLayer()`                                                                  | Use the JVMCI boot layer view. |
 | `ModuleLayer.boot().findModule(moduleName)`                                                  | `JVMCIReflectionUtil.bootModuleLayer().findModule(moduleName)`                                           | Common in `afterRegistration`; transitional and expected to become less important after migration. |
@@ -133,11 +192,13 @@ If existing hosted code uses `Method.invoke(...)` or helper wrappers around core
 
 ## Migration Checklist
 
-- Identify whether the code is operating on guest-loaded types or known hosted types.
+- Identify whether each query is same-context or builder-to-guest.
+- Keep same-context queries on core reflection.
 - Use `JVMCIFeatureAccess.*Access` methods through the matching `FeatureImpl.*AccessImpl` cast when migrating feature access operations.
-- Replace core reflection lookups with `JVMCIReflectionUtil` or JVMCI metadata APIs.
-- Replace class-based assignability checks with `ResolvedJavaType.isAssignableFrom(...)` when dealing with guest/runtime types.
-- Replace reflective invocation with `GuestAccess.get().invoke(...)`.
-- Replace module-layer queries with JVMCI module-layer APIs.
+- Replace builder-to-guest core reflection lookups with `JVMCIReflectionUtil` or JVMCI metadata APIs.
+- Replace builder-to-guest class-based assignability checks with `ResolvedJavaType.isAssignableFrom(...)`.
+- Replace builder-to-guest reflective invocation with `GuestAccess.get().invoke(...)`.
+- Replace builder-to-guest module-layer queries with JVMCI module-layer APIs.
+- Use explicit host proxies, callbacks, or services for exceptional guest-to-builder communication; do not reflect over builder classes from the guest.
 - Document and handle cases where JVMCI helpers can return `null` instead of assuming reflection-style success.
 - Confirm that guest and guest-staging packages are not open to the builder; redesign the boundary instead of adding an `opens` edge.

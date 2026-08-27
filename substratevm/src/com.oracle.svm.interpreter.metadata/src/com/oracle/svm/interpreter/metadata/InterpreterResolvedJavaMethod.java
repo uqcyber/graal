@@ -62,7 +62,7 @@ import com.oracle.svm.core.MethodRefHolder;
 import com.oracle.svm.core.SubstrateMetadata;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.code.PreparedSignature;
-import com.oracle.svm.core.heap.UnknownObjectField;
+import com.oracle.svm.guest.staging.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
@@ -72,6 +72,7 @@ import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
 import com.oracle.svm.core.meta.MethodOffset;
 import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.meta.MethodRef;
+import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.espresso.classfile.Constants;
 import com.oracle.svm.espresso.classfile.JavaVersion;
 import com.oracle.svm.espresso.classfile.ParserMethod;
@@ -88,7 +89,7 @@ import com.oracle.svm.interpreter.metadata.serialization.VisibleForSerialization
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ExceptionHandler;
@@ -450,22 +451,22 @@ public class InterpreterResolvedJavaMethod extends InterpreterAnnotated implemen
         if (isSubstitutedNative) {
             newModifiers |= ACC_SUBSTITUTED_NATIVE;
         }
-        if (AnnotationUtil.isAnnotationPresent(originalMethod, CALLER_SENSITIVE_CLASS)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(originalMethod, CALLER_SENSITIVE_CLASS)) {
             newModifiers |= ACC_CALLER_SENSITIVE;
         }
-        if (AnnotationUtil.isAnnotationPresent(originalMethod, LAMBDA_FORM_COMPILED_CLASS)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(originalMethod, LAMBDA_FORM_COMPILED_CLASS)) {
             newModifiers |= ACC_LAMBDA_FORM_COMPILED;
         }
-        if (AnnotationUtil.isAnnotationPresent(originalMethod, jdk.internal.vm.annotation.Hidden.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(originalMethod, jdk.internal.vm.annotation.Hidden.class)) {
             newModifiers |= ACC_HIDDEN;
         }
-        if (AnnotationUtil.isAnnotationPresent(originalMethod, jdk.internal.vm.annotation.ForceInline.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(originalMethod, jdk.internal.vm.annotation.ForceInline.class)) {
             newModifiers |= ACC_FORCE_INLINE;
         }
-        if (AnnotationUtil.isAnnotationPresent(originalMethod, jdk.internal.vm.annotation.DontInline.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(originalMethod, jdk.internal.vm.annotation.DontInline.class)) {
             newModifiers |= ACC_DONT_INLINE;
         }
-        if (AnnotationUtil.isAnnotationPresent(originalMethod, SCOPED_MEMORY_SCOPED_CLASS)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(originalMethod, SCOPED_MEMORY_SCOPED_CLASS)) {
             newModifiers |= ACC_SCOPED;
         }
         return newModifiers;
@@ -1015,12 +1016,24 @@ public class InterpreterResolvedJavaMethod extends InterpreterAnnotated implemen
 
     @Override
     public final void loadingConstraints(InterpreterResolvedJavaType accessingClass) {
-        ClassLoader loader1 = accessingClass.getClassLoader();
-        ClassLoader loader2 = getDeclaringClass().getClassLoader();
-        checkLoadingConstraints(loader1, loader2);
+        /*
+         * Loading-constraint checks can update shared VM state and therefore must not be interrupted
+         * by a StackOverflowError. Make the yellow zone available before doing any constraint work
+         * so a check that starts near the regular stack boundary can finish. No application code is
+         * invoked while the yellow zone is available.
+         */
+        StackOverflowCheck.singleton().makeYellowZoneAvailable();
+        try {
+            ClassLoader loader1 = accessingClass.getClassLoader();
+            ClassLoader loader2 = getDeclaringClass().getClassLoader();
+            checkLoadingConstraints(loader1, loader2);
+        } finally {
+            StackOverflowCheck.singleton().protectYellowZone();
+        }
     }
 
-    public final void checkLoadingConstraints(ClassLoader loader1, ClassLoader loader2) {
+    final void checkLoadingConstraints(ClassLoader loader1, ClassLoader loader2) {
+        assert StackOverflowCheck.singleton().isYellowZoneAvailable();
         if (loader1 != loader2) {
             for (Symbol<Type> type : SymbolsSupport.getSignatures().parsed(getSymbolicSignature())) {
                 CremaSupport.singleton().checkLoadingConstraint(type, loader1, loader2);

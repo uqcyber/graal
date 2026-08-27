@@ -68,7 +68,7 @@ import com.oracle.svm.sdk.staging.hosted.layeredimage.LayeredCompilationSupport;
 import com.oracle.svm.sdk.staging.layeredimage.LayeredCompilationBehavior;
 import com.oracle.svm.sdk.staging.layeredimage.LayeredCompilationBehavior.Behavior;
 import com.oracle.svm.common.meta.MethodVariant;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.OriginalMethodProvider;
 
 import jdk.graal.compiler.debug.DebugContext;
@@ -124,6 +124,7 @@ public abstract class AnalysisMethod extends AnalysisElement implements WrappedJ
                     .newUpdater(AnalysisMethod.class, Boolean.class, "reachableInCurrentLayer");
 
     public static final AnalysisMethod[] EMPTY_ARRAY = new AnalysisMethod[0];
+    private static final ExceptionHandler[] EMPTY_EXCEPTION_HANDLERS = new ExceptionHandler[0];
 
     public record Signature(String name, AnalysisType[] parameterTypes) {
     }
@@ -257,12 +258,16 @@ public abstract class AnalysisMethod extends AnalysisElement implements WrappedJ
         }
         analyzedInPriorLayer = isInSharedLayer && hostVM.analyzedInPriorLayer(this);
 
-        ExceptionHandler[] original = wrapped.getExceptionHandlers();
-        exceptionHandlers = new ExceptionHandler[original.length];
-        for (int i = 0; i < original.length; i++) {
-            ExceptionHandler h = original[i];
-            JavaType catchType = getCatchType(universe, wrapped, h);
-            exceptionHandlers[i] = new ExceptionHandler(h.getStartBCI(), h.getEndBCI(), h.getHandlerBCI(), h.catchTypeCPI(), catchType);
+        ExceptionHandler[] originalHandlers = wrapped.getExceptionHandlers();
+        if (originalHandlers.length == 0) {
+            exceptionHandlers = EMPTY_EXCEPTION_HANDLERS;
+        } else {
+            exceptionHandlers = new ExceptionHandler[originalHandlers.length];
+            for (int i = 0; i < originalHandlers.length; i++) {
+                ExceptionHandler h = originalHandlers[i];
+                JavaType catchType = getCatchType(universe, wrapped, h);
+                exceptionHandlers[i] = new ExceptionHandler(h.getStartBCI(), h.getEndBCI(), h.getHandlerBCI(), h.catchTypeCPI(), catchType);
+            }
         }
 
         LocalVariableTable analysisLocalVariableTable = null;
@@ -295,7 +300,7 @@ public abstract class AnalysisMethod extends AnalysisElement implements WrappedJ
         this.enableReachableInCurrentLayer = universe.hostVM.enableReachableInCurrentLayer();
         compilationBehavior = LayeredCompilationBehavior.Behavior.DEFAULT;
         if (universe.hostVM.buildingImageLayer()) {
-            LayeredCompilationBehavior behavior = AnnotationUtil.getAnnotation(wrapped, LayeredCompilationBehavior.class);
+            LayeredCompilationBehaviorGuestValue behavior = LayeredCompilationBehaviorGuestValue.get(wrapped);
             if (behavior != null) {
                 compilationBehavior = behavior.value();
                 if (compilationBehavior == LayeredCompilationBehavior.Behavior.PINNED_TO_INITIAL_LAYER && universe.hostVM.buildingExtensionLayer() && !isInSharedLayer) {
@@ -400,7 +405,7 @@ public abstract class AnalysisMethod extends AnalysisElement implements WrappedJ
     }
 
     public boolean isGuaranteeFolded() {
-        return isGuaranteeFolded || AnnotationUtil.getAnnotation(this, GuaranteeFolded.class) != null;
+        return isGuaranteeFolded || GuestAnnotationAccess.isAnnotationPresent(this, GuaranteeFolded.class);
     }
 
     public void setGuaranteeFolded() {

@@ -29,7 +29,6 @@ import java.util.List;
 
 import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.hosted.annotation.AnnotationWrapper;
 import com.oracle.svm.util.AnnotatedWrapper;
 import com.oracle.svm.util.OriginalClassProvider;
 
@@ -51,7 +50,7 @@ import jdk.vm.ci.meta.annotation.Annotated;
  *
  * @see SubstitutionType
  */
-public class InjectedFieldsType implements ResolvedJavaType, OriginalClassProvider, AnnotationWrapper, AnnotatedWrapper {
+public class InjectedFieldsType implements ResolvedJavaType, OriginalClassProvider, AnnotatedWrapper {
 
     private final ResolvedJavaType original;
 
@@ -60,7 +59,9 @@ public class InjectedFieldsType implements ResolvedJavaType, OriginalClassProvid
     public InjectedFieldsType(ResolvedJavaType original) {
         this.original = original;
 
-        this.instanceFields = new ResolvedJavaField[][]{original.getInstanceFields(false), original.getInstanceFields(true)};
+        this.instanceFields = new ResolvedJavaField[][]{
+                        SubstitutionType.canonicalizeInstanceFields(original.getInstanceFields(false)),
+                        SubstitutionType.canonicalizeInstanceFields(original.getInstanceFields(true))};
     }
 
     public ResolvedJavaType getOriginal() {

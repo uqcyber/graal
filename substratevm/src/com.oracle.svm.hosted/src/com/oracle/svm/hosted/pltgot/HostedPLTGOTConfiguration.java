@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.hosted.pltgot;
 
+import com.oracle.svm.core.ExplicitCallingConventionGuestValue;
 import java.lang.reflect.Method;
 
 import com.oracle.objectfile.ObjectFile;
@@ -32,7 +33,6 @@ import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CFunction;
 
 import com.oracle.objectfile.SectionName;
-import com.oracle.svm.core.graal.code.ExplicitCallingConvention;
 import com.oracle.svm.core.graal.code.StubCallingConvention;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionKind;
 import com.oracle.svm.core.meta.SharedMethod;
@@ -40,7 +40,7 @@ import com.oracle.svm.core.pltgot.PLTGOTConfiguration;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedMethod;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.GuestAccess;
 
 import jdk.vm.ci.code.Register;
@@ -65,25 +65,25 @@ public abstract class HostedPLTGOTConfiguration extends PLTGOTConfiguration {
     }
 
     public static boolean canBeCalledViaPLTGOT(SharedMethod method) {
-        if (AnnotationUtil.isAnnotationPresent(method, CEntryPoint.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(method, CEntryPoint.class)) {
             return false;
         }
-        if (AnnotationUtil.isAnnotationPresent(method, CFunction.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(method, CFunction.class)) {
             return false;
         }
-        if (AnnotationUtil.isAnnotationPresent(method, StubCallingConvention.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(method, StubCallingConvention.class)) {
             return false;
         }
-        if (AnnotationUtil.isAnnotationPresent(method, GuestAccess.elements().Uninterruptible)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(method, GuestAccess.elements().Uninterruptible)) {
             return false;
         }
-        if (AnnotationUtil.isAnnotationPresent(method, SubstrateForeignCallTarget.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(method, SubstrateForeignCallTarget.class)) {
             return false;
         }
-        if (AnnotationUtil.isAnnotationPresent(method.getDeclaringClass(), GuestAccess.elements().InternalVMMethod)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(method.getDeclaringClass(), GuestAccess.elements().InternalVMMethod)) {
             return false;
         }
-        ExplicitCallingConvention ecc = AnnotationUtil.getAnnotation(method, ExplicitCallingConvention.class);
+        ExplicitCallingConventionGuestValue ecc = ExplicitCallingConventionGuestValue.get(method);
         if (ecc != null && ecc.value().equals(SubstrateCallingConventionKind.ForwardReturnValue)) {
             /*
              * Methods that use ForwardReturnValue calling convention can't be resolved with PLT/GOT

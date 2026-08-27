@@ -42,10 +42,10 @@
 package org.graalvm.wasm.parser.bytecode;
 
 import org.graalvm.wasm.WasmType;
-import org.graalvm.wasm.vector.Vector128;
 import org.graalvm.wasm.constants.Bytecode;
 import org.graalvm.wasm.constants.BytecodeBitEncoding;
 import org.graalvm.wasm.constants.SegmentMode;
+import org.graalvm.wasm.vector.Vector128;
 
 /**
  * A data structure for generating the GraalWasm runtime bytecode.
@@ -88,8 +88,33 @@ public class RuntimeBytecodeGen extends BytecodeGen {
         return Long.compareUnsigned(value, 4294967295L) <= 0;
     }
 
+    /**
+     * Branch hint derived from entries in the {@code metadata.code.branch_hint} custom section.
+     * Used to initialize the true and false branch profile counters for {@code if}/{@code br_if}.
+     * Runtime profiling remains adaptive and updates these counters as the branch executes.
+     */
+    public enum BranchHint {
+        NONE(0),
+        LIKELY_FALSE(0xff00), // true:false profile = 0:255
+        LIKELY_TRUE(0x00ff);  // true:false profile = 255:0
+
+        private final int profile;
+
+        BranchHint(int profile) {
+            this.profile = profile;
+        }
+
+        int profile() {
+            return profile;
+        }
+    }
+
     private void addProfile() {
-        add2(0);
+        addProfile(BranchHint.NONE);
+    }
+
+    private void addProfile(BranchHint branchHint) {
+        add2(branchHint.profile());
     }
 
     /**
@@ -212,6 +237,26 @@ public class RuntimeBytecodeGen extends BytecodeGen {
             add1(value);
         } else {
             add1(opcodeI32);
+            add4(value);
+        }
+    }
+
+    /**
+     * Adds an opcode and an immediate value to the bytecode. If the value fits into a u8 value, the
+     * opcode and a u8 value are added. Otherwise, the misc flag, the opcode, and an i32 value are added.
+     * The u8 opcode and i32 opcode must be identical. See {@link Bytecode} for a list of opcode.
+     *
+     * @param opcode The opcode
+     * @param value The immediate value
+     */
+    public void addUnsignedWithMisc(int opcode, int value) {
+        assert fitsIntoUnsignedByte(opcode) : "opcode does not fit into byte";
+        if (fitsIntoUnsignedByte(value)) {
+            add1(opcode);
+            add1(value);
+        } else {
+            add1(Bytecode.MISC);
+            add1(opcode);
             add4(value);
         }
     }
@@ -386,16 +431,17 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * Adds an if opcode to the bytecode and reserves an i32 value for the jump offset and a 2-byte
      * profile.
      *
+     * @param branchHint Optional branch hint used to initialize the branch profile.
      * @return The location of the jump offset to be patched later. (see
      *         {@link #patchLocation(int, int)}.
      */
-    public int addIfLocation() {
+    public int addIfLocation(BranchHint branchHint) {
         add1(Bytecode.IF);
         final int location = location();
         // target
         add4(0);
         // profile
-        addProfile();
+        addProfile(branchHint);
         return location;
     }
 
@@ -490,8 +536,12 @@ public class RuntimeBytecodeGen extends BytecodeGen {
         public abstract void emitOpcodesI32(RuntimeBytecodeGen bytecode);
 
         public void emitProfile(RuntimeBytecodeGen bytecode) {
+            emitProfile(bytecode, BranchHint.NONE);
+        }
+
+        public void emitProfile(RuntimeBytecodeGen bytecode, BranchHint branchHint) {
             if (profiled) {
-                bytecode.addProfile();
+                bytecode.addProfile(branchHint);
             }
         }
     }
@@ -523,17 +573,24 @@ public class RuntimeBytecodeGen extends BytecodeGen {
      * Adds a branch opcode to the bytecode and reserves an i32 value for the jump offset. In
      * addition, a profile with a size of 2-byte is added.
      *
+     * @param branchOp The branch operation to add.
+     * @param branchHint Optional branch hint used to initialize the branch profile.
      * @return The location of the jump offset to be patched later. (see
      *         {@link #patchLocation(int, int)})
      */
-    public int addBranchLocation(BranchOp branchOp) {
+    public int addBranchLocation(BranchOp branchOp, BranchHint branchHint) {
+        assert branchHint == BranchHint.NONE || branchOp == BranchOp.BR_IF : branchOp;
         branchOp.emitOpcodesI32(this);
         final int location = location();
         // target
         add4(0);
         // profile
-        branchOp.emitProfile(this);
+        branchOp.emitProfile(this, branchHint);
         return location;
+    }
+
+    public int addBranchLocation(BranchOp branchOp) {
+        return addBranchLocation(branchOp, BranchHint.NONE);
     }
 
     /**
@@ -669,6 +726,67 @@ public class RuntimeBytecodeGen extends BytecodeGen {
             add4(nodeIndex);
             add4(typeIndex);
         }
+    }
+
+    /**
+     * Adds a reference return-call instruction to the bytecode. If typeIndex fits into a u8 value,
+     * a return_call_ref_u8 and a u8 value are added. Otherwise, a return_call_ref_i32 and a
+     * i32 value are added.
+     *
+     * @param typeIndex The type index of the reference call
+     */
+    public void addRefReturnCall(int typeIndex) {
+        if (fitsIntoUnsignedByte(typeIndex)) {
+            add1(Bytecode.RETURN_CALL_REF_U8);
+            add1(typeIndex);
+        } else {
+            add1(Bytecode.RETURN_CALL_REF_I32);
+            add4(typeIndex);
+        }
+    }
+
+    /**
+     * Adds a return-call instruction to the bytecode. If the functionIndex fits into a u8 value,
+     * a return_call_u8 and a u8 value are added. Otherwise, a return_call_i32 and a i32 value are added.
+     *
+     * @param functionIndex The function index of the return call
+     */
+    public void addReturnCall(int functionIndex) {
+        if (fitsIntoUnsignedByte(functionIndex)) {
+            add1(Bytecode.RETURN_CALL_U8);
+            add1(functionIndex);
+        } else {
+            add1(Bytecode.RETURN_CALL_I32);
+            add4(functionIndex);
+        }
+    }
+
+    /**
+     * Adds an indirect return-call instruction to the bytecode. If the typeIndex
+     * and tableIndex both fit into a u8 value, a return_call_indirect_u8 and two u8 values are added.
+     * Otherwise, a return_call_indirect_i32 and two i32 values are added.
+     *
+     * @param typeIndex The type index of the indirect tail call
+     * @param tableIndex The table index of the indirect tail call
+     */
+    public void addIndirectReturnCall(int typeIndex, int tableIndex) {
+        if (fitsIntoUnsignedByte(typeIndex) && fitsIntoUnsignedByte(tableIndex)) {
+            add1(Bytecode.RETURN_CALL_INDIRECT_U8);
+            add1(typeIndex);
+            add1(tableIndex);
+        } else {
+            add1(Bytecode.RETURN_CALL_INDIRECT_I32);
+            add4(typeIndex);
+            add4(tableIndex);
+        }
+    }
+
+    /**
+     * Adds a return-call branch instruction targeting the function entry point to the bytecode.
+     */
+    public void addReturnCallBranch() {
+        add1(Bytecode.MISC);
+        add1(Bytecode.BR_RETURN_CALL);
     }
 
     public void addSelect(int instruction) {

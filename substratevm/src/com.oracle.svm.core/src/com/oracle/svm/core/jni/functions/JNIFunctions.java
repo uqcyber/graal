@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.jni.functions;
 
-import static com.oracle.svm.core.heap.RestrictHeapAccess.Access.NO_ALLOCATION;
+import static com.oracle.svm.guest.staging.core.heap.RestrictHeapAccess.Access.NO_ALLOCATION;
 import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 
 import java.lang.invoke.MethodType;
@@ -66,14 +66,15 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.config.ObjectLayout;
-import com.oracle.svm.core.graal.stackvalue.UnsafeStackValue;
+import com.oracle.svm.guest.staging.core.graal.stackvalue.UnsafeStackValue;
 import com.oracle.svm.core.handles.PrimitiveArrayView;
-import com.oracle.svm.core.heap.RestrictHeapAccess;
+import com.oracle.svm.guest.staging.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.hub.RuntimeClassLoading.ClassDefinitionInfo;
 import com.oracle.svm.core.hub.RuntimeReflectionMetadata;
 import com.oracle.svm.core.hub.crema.CremaJNIFieldIds;
+import com.oracle.svm.core.hub.crema.CremaJNIMethodIds;
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaField;
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaMethod;
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaType;
@@ -83,7 +84,6 @@ import com.oracle.svm.core.interpreter.InterpreterSupport;
 import com.oracle.svm.core.jdk.DirectByteBufferUtil;
 import com.oracle.svm.core.jdk.StackTraceUtils;
 import com.oracle.svm.core.jdk.Target_jdk_internal_loader_NativeLibraries_RespectsClassLoader;
-import com.oracle.svm.core.jni.JNIObjectFieldAccess;
 import com.oracle.svm.core.jni.JNIObjectHandles;
 import com.oracle.svm.core.jni.JNIThreadLocalPendingException;
 import com.oracle.svm.core.jni.JNIThreadLocalPrimitiveArrayViews;
@@ -124,7 +124,7 @@ import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.monitor.MonitorInflationCause;
 import com.oracle.svm.core.monitor.MonitorSupport;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.ContinuationSupport;
 import com.oracle.svm.core.thread.JavaThreads;
@@ -1042,13 +1042,11 @@ public final class JNIFunctions {
     @CEntryPoint(exceptionHandler = JNIExceptionHandlerReturnNullHandle.class, include = CEntryPoint.NotIncludedAutomatically.class, publishAs = Publish.NotPublished)
     @CEntryPointOptions(prologue = JNIEnvEnterPrologue.class, prologueBailout = ReturnNullPointer.class)
     static JNIObjectHandle ToReflectedMethod(JNIEnvironment env, JNIObjectHandle classHandle, JNIMethodId methodId, boolean isStatic) {
-        if (RuntimeClassLoading.isSupported()) {
-            Executable result = CremaSupport.singleton().getCremaMethodExecutable(methodId);
-            if (result != null) {
-                Class<?> clazz = result.getDeclaringClass();
-                assert DynamicHub.fromClass(clazz).isJNIAccessible() : clazz.getName();
-                return JNIObjectHandles.createLocal(result);
-            }
+        if (RuntimeClassLoading.isSupported() && CremaJNIMethodIds.isCremaMethodId(methodId)) {
+            Executable result = RuntimeReflectionMetadata.fromResolvedMethod(CremaJNIMethodIds.getMethod(methodId));
+            Class<?> clazz = result.getDeclaringClass();
+            assert DynamicHub.fromClass(clazz).isJNIAccessible() : clazz.getName();
+            return JNIObjectHandles.createLocal(result);
         }
 
         Executable result = null;
@@ -1382,7 +1380,10 @@ public final class JNIFunctions {
     @CEntryPoint(exceptionHandler = JNIExceptionHandlerReturnNullWord.class, include = CEntryPoint.NotIncludedAutomatically.class, publishAs = Publish.NotPublished)
     @CEntryPointOptions(prologue = JNIEnvEnterFatalOnFailurePrologue.class)
     static JNIObjectHandle GetObjectField(JNIEnvironment env, JNIObjectHandle obj, JNIFieldId fieldId) {
-        return JNIObjectFieldAccess.singleton().getObjectField(obj, fieldId);
+        Object object = JNIObjectHandles.getObject(obj);
+        long offset = Support.getInstanceFieldOffset(fieldId);
+        Object result = U.getReference(object, offset);
+        return JNIObjectHandles.createLocal(result);
     }
 
     @Uninterruptible(reason = "Must not throw any exceptions.")
@@ -1911,6 +1912,7 @@ public final class JNIFunctions {
                 if (resolvedJavaMethod instanceof CremaResolvedJavaMethod cremaResolvedJavaMethod) {
                     if (resolvedJavaMethod.isStatic() == isStatic) {
                         methodID = cremaResolvedJavaMethod.getOrCreateJNIMethodId();
+                        assert CremaJNIMethodIds.isCremaMethodId(methodID);
                     } else {
                         methodFoundWithOppositeStaticKind = true;
                     }
@@ -1928,6 +1930,7 @@ public final class JNIFunctions {
             if (lookupInDictionary) {
                 assert methodID.isNull();
                 methodID = JNIReflectionDictionary.getMethodID(origClazz, name, signature, isStatic);
+                assert methodID.isNull() || !CremaJNIMethodIds.isCremaMethodId(methodID);
                 if (methodID.isNull()) {
                     methodFoundWithOppositeStaticKind = JNIReflectionDictionary.getMethodID(origClazz, name, signature, !isStatic).isNonNull();
                 }

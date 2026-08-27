@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -61,16 +61,12 @@ import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.hosted.code.CompileQueue;
 import com.oracle.svm.hosted.config.DynamicHubLayout;
 import com.oracle.svm.hosted.config.HybridLayout;
-import com.oracle.svm.hosted.config.HybridLayoutSupport;
 import com.oracle.svm.hosted.image.LIRNativeImageCodeCache;
 import com.oracle.svm.hosted.image.NativeImageCodeCache;
 import com.oracle.svm.hosted.image.NativeImageCodeCacheFactory;
 import com.oracle.svm.hosted.image.NativeImageHeap;
 import com.oracle.svm.hosted.image.ObjectFileFactory;
-import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
-import com.oracle.svm.hosted.imagelayer.SVMImageLayerLoader;
 import com.oracle.svm.hosted.imagelayer.SVMImageLayerSnapshotUtil;
-import com.oracle.svm.hosted.imagelayer.SVMImageLayerWriter;
 import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedInstanceClass;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
@@ -81,7 +77,7 @@ import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.ReflectionUtil;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.graal.compiler.core.common.CompressEncoding;
 import jdk.graal.compiler.core.common.spi.MetaAccessExtensionProvider;
@@ -116,12 +112,8 @@ public class HostedConfiguration {
         }
 
         if (!ImageSingletons.contains(ObjectLayout.class)) {
-            ObjectLayout objectLayout = createObjectLayout(IdentityHashMode.TYPE_SPECIFIC);
+            ObjectLayout objectLayout = createObjectLayout();
             ImageSingletons.add(ObjectLayout.class, objectLayout);
-        }
-
-        if (!ImageSingletons.contains(HybridLayoutSupport.class)) {
-            ImageSingletons.add(HybridLayoutSupport.class, new HybridLayoutSupport());
         }
     }
 
@@ -135,7 +127,23 @@ public class HostedConfiguration {
         return new CompressEncoding(compressBase, compressShift);
     }
 
-    public static ObjectLayout createObjectLayout(IdentityHashMode identityHashMode) {
+    /**
+     * Defines the serial/epsilon GC object layout.
+     *
+     * The identity hash code field is optional by default (see
+     * {@link SubstrateOptions#OptionalIdentityHashCodes}) and it is only materialized
+     * during garbage collection. The field materialization may change the object size (unless there
+     * is an otherwise unused gap in the object that can be used instead) and writes a valid
+     * identity hash code into the field. Note that non-GC code may only access the identity hash
+     * code field after it was materialized (regardless if the field is placed in an unused gap or
+     * not).
+     *
+     * @see #createObjectLayout(JavaKind, IdentityHashMode)
+     */
+    public static ObjectLayout createObjectLayout() {
+        boolean useOptionalIdentityHashField = SubstrateOptions.canUseOptionalIdentityHashCodes() &&
+                        !Boolean.FALSE.equals(SubstrateOptions.OptionalIdentityHashCodes.getValue());
+        IdentityHashMode identityHashMode = useOptionalIdentityHashField ? IdentityHashMode.OPTIONAL : IdentityHashMode.TYPE_SPECIFIC;
         JavaKind referenceKind = JavaKind.Object;
         if (SubstrateOptions.useCompressedReferences()) {
             referenceKind = JavaKind.Int;
@@ -144,16 +152,18 @@ public class HostedConfiguration {
     }
 
     /**
-     * Defines the serial/epsilon GC object layout. The monitor slot and the identity hash code
-     * fields are appended to instance objects (unless there is an otherwise unused gap in the
-     * object that can be used).
+     * Defines the serial/epsilon GC object layout, using the given identity hash mode. The monitor
+     * slot is appended to instance objects unless there is an otherwise unused gap in the object
+     * that can be used.
      *
      * The layout of instance objects is:
      * <ul>
      * <li>32/64 bit hub reference</li>
      * <li>instance fields (references, primitives)</li>
-     * <li>32/64 bit object monitor reference (if needed)</li>
-     * <li>32 bit identity hashcode (if needed)</li>
+     * <li>32/64 bit object monitor reference (if needed; may be placed in a gap between instance
+     * fields instead)</li>
+     * <li>32 bit identity hashcode (if needed; may be added at runtime or placed in a gap between
+     * instance fields instead)</li>
      * </ul>
      *
      * The layout of array objects is:
@@ -251,27 +261,14 @@ public class HostedConfiguration {
         return HybridLayout.isHybrid(clazz) || DynamicHubLayout.singleton().isDynamicHub(clazz);
     }
 
-    /**
-     * The hybrid array field and the type fields of the dynamic hub are directly inlined to the
-     * object to remove a level of indirection.
-     */
+    /** The type fields of the dynamic hub are directly inlined into the object. */
     public static boolean isInlinedField(HostedField field) {
-        return HybridLayout.isHybridField(field) || DynamicHubLayout.singleton().isInlinedField(field);
+        return DynamicHubLayout.singleton().isInlinedField(field);
     }
 
     public SVMHost createHostVM(OptionValues options, ImageClassLoader loader, ClassInitializationSupport classInitializationSupport, AnnotationSubstitutionProcessor annotationSubstitutions,
                     MissingRegistrationSupport missingRegistrationSupport) {
         return new SVMHost(options, loader, classInitializationSupport, annotationSubstitutions, missingRegistrationSupport);
-    }
-
-    public SVMImageLayerWriter createSVMImageLayerWriter(SVMImageLayerSnapshotUtil imageLayerSnapshotUtil, boolean useSharedLayerGraphs, boolean useSharedLayerStrengthenedGraphs) {
-        return new SVMImageLayerWriter(imageLayerSnapshotUtil, useSharedLayerGraphs, useSharedLayerStrengthenedGraphs);
-    }
-
-    public SVMImageLayerLoader createSVMImageLayerLoader(SVMImageLayerSnapshotUtil imageLayerSnapshotUtil, HostedImageLayerBuildingSupport imageLayerBuildingSupport,
-                    boolean useSharedLayerGraphs, boolean useSharedLayerStrengthenedGraphs) {
-        return new SVMImageLayerLoader(imageLayerSnapshotUtil, imageLayerBuildingSupport, imageLayerBuildingSupport.getSnapshot(),
-                        imageLayerBuildingSupport.getLoadLayerArchiveSupport().getSnapshotGraphsPath(), useSharedLayerGraphs, useSharedLayerStrengthenedGraphs);
     }
 
     public SVMImageLayerSnapshotUtil createSVMImageLayerSnapshotUtil(ImageClassLoader imageClassLoader) {
@@ -280,6 +277,14 @@ public class HostedConfiguration {
 
     public CompileQueue createCompileQueue(DebugContext debug, FeatureHandler featureHandler, HostedUniverse hostedUniverse, RuntimeConfiguration runtimeConfiguration, boolean deoptimizeAll) {
         return new CompileQueue(debug, featureHandler, hostedUniverse, runtimeConfiguration, deoptimizeAll, Collections.emptyList());
+    }
+
+    /**
+     * Invoked in a separate active executor pass after the normal compile queue and before later
+     * image-building phases consume compilation results. Implementations may compile additional
+     * methods.
+     */
+    public void afterCompileQueue(@SuppressWarnings("unused") DebugContext debug, @SuppressWarnings("unused") CompileQueue compileQueue) {
     }
 
     public MethodTypeFlowBuilder createMethodTypeFlowBuilder(PointsToAnalysis bb, PointsToAnalysisMethod method, MethodFlowsGraph flowsGraph, MethodFlowsGraph.GraphKind graphKind) {
@@ -307,11 +312,6 @@ public class HostedConfiguration {
                 if (dynamicHubLayout.isIgnoredField(hField)) {
                     /*
                      * Ignored fields do not need a field offset.
-                     */
-                    allFields.add(hField);
-                } else if (HybridLayout.isHybridField(hField)) {
-                    /*
-                     * The array field of a hybrid is not materialized, so it needs no field offset.
                      */
                     allFields.add(hField);
                 } else if (hField.isAccessed()) {
@@ -369,7 +369,7 @@ public class HostedConfiguration {
      * Types that must be immutable cannot have a monitor field.
      */
     protected static void maybeSetMonitorField(HostedUniverse hUniverse, EconomicSet<AnalysisType> immutableTypes, AnalysisType type) {
-        if (!type.isArray() && !immutableTypes.contains(type) && !AnnotationUtil.isAnnotationPresent(type, ValueBased.class)) {
+        if (!type.isArray() && !immutableTypes.contains(type) && !GuestAnnotationAccess.isAnnotationPresent(type, ValueBased.class)) {
             setMonitorField(hUniverse, type);
         }
     }

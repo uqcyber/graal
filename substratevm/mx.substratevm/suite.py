@@ -479,6 +479,34 @@ suite = {
             "jacoco" : "exclude",
         },
 
+        "com.oracle.svm.core.g1": {
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "com.oracle.svm.core.windows",
+                "OBJECTFILE",
+                "com.oracle.svm.core.posix",
+            ],
+            "requires" : [
+                "jdk.management",
+            ],
+            "requiresConcealed" : {
+                "jdk.internal.vm.ci" : [
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
+                    "jdk.vm.ci.code",
+                ],
+            },
+            "checkstyle": "com.oracle.svm.core",
+            "javaCompliance" : "24+",
+            "annotationProcessors": [
+                "compiler:GRAAL_PROCESSOR",
+                "SVM_PROCESSOR",
+            ],
+            "workingSets" : "SVM",
+            "jacoco" : "exclude",
+        },
+
         "com.oracle.svm.core.graal.amd64": {
             "subDir": "src",
             "sourceDirs": ["src"],
@@ -664,6 +692,7 @@ suite = {
             "javaCompliance" : "21+",
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
+                "SVM_PROCESSOR",
             ],
             "workingSets": "SVM",
             "jacoco" : "include",
@@ -1195,6 +1224,7 @@ suite = {
             ],
             "requiresConcealed" : {
                 "jdk.internal.vm.ci" : [
+                    "jdk.vm.ci.code.stack",
                     "jdk.vm.ci.meta",
                     "jdk.vm.ci.meta.annotation",
                 ],
@@ -1256,7 +1286,8 @@ suite = {
                     "sun.security.jca",
                 ],
                 "jdk.internal.vm.ci": [
-                    "jdk.vm.ci.meta"
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation"
                 ]
             },
             "checkstyle": "com.oracle.svm.test",
@@ -1439,6 +1470,7 @@ suite = {
             ],
             "requiresConcealed" : {
                 "jdk.internal.vm.ci" : [
+                    "jdk.vm.ci.code.stack",
                     "jdk.vm.ci.meta",
                     "jdk.vm.ci.meta.annotation",
                 ],
@@ -1810,6 +1842,7 @@ suite = {
                 ],
                 "jdk.internal.vm.ci" : [
                     "jdk.vm.ci.code",
+                    "jdk.vm.ci.common",
                     "jdk.vm.ci.meta",
                     "jdk.vm.ci.meta.annotation",
                 ],
@@ -1962,6 +1995,7 @@ suite = {
                 "com.oracle.svm.core.posix",
                 "com.oracle.svm.core.windows",
                 "com.oracle.svm.core.genscavenge",
+                "com.oracle.svm.core.g1",
                 "com.oracle.svm.jdwp.resident",
             ],
             "distDependencies": [

@@ -60,6 +60,9 @@ public class RistrettoOptions {
     @Option(help = "Number of threads to use for Graal JIT compilation.")//
     public static final RuntimeOptionKey<Integer> JITCompilerThreadCount = new RuntimeOptionKey<>(1);
 
+    @Option(help = "Report a diagnostic message for a Ristretto compilation that runs longer than this many seconds and prevent this watcher from exiting the VM (0 leaves the generic CompilationWatchDog configuration unchanged).")//
+    public static final RuntimeOptionKey<Integer> JITCompilationWatchdogTimeoutSeconds = new RuntimeOptionKey<>(0, RistrettoOptions::validateCompilationWatchdogTimeout);
+
     @Option(help = "Trace decisions about when to compile what.")//
     public static final RuntimeOptionKey<Boolean> JITTraceCompilationQueuing = new RuntimeOptionKey<>(false);
 
@@ -68,6 +71,9 @@ public class RistrettoOptions {
 
     @Option(help = "Trace compilation events.")//
     public static final RuntimeOptionKey<Boolean> JITTraceCompilation = new RuntimeOptionKey<>(false);
+
+    @Option(help = "Trace installed Ristretto JIT code address ranges.")//
+    public static final RuntimeOptionKey<Boolean> JITTraceCodeInstallations = new RuntimeOptionKey<>(false);
 
     @Option(help = "Print stack traces of compiler exceptions.")//
     public static final RuntimeOptionKey<Boolean> JITPrintExceptions = new RuntimeOptionKey<>(false);
@@ -91,6 +97,7 @@ public class RistrettoOptions {
     @Platforms(HOSTED_ONLY.class)
     public static void registerRuntimeOptionValidations() {
         RuntimeOptionValidationSupport.singleton().register(new RuntimeOptionValidation<>(RistrettoOptions::validateOSRBackedgeThreshold, JITCompilerOSRBackedgeThreshold));
+        RuntimeOptionValidationSupport.singleton().register(new RuntimeOptionValidation<>(RistrettoOptions::validateCompilationWatchdogTimeout, JITCompilationWatchdogTimeoutSeconds));
     }
 
     private static void validateOSRBackedgeThreshold(RuntimeOptionKey<Integer> optionKey) {
@@ -100,6 +107,16 @@ public class RistrettoOptions {
     private static void validateOSRBackedgeThresholdValue(int threshold) {
         if (threshold < 0) {
             throw new IllegalArgumentException("Option '" + JITCompilerOSRBackedgeThreshold.getName() + "' must be greater than or equal to 0.");
+        }
+    }
+
+    private static void validateCompilationWatchdogTimeout(RuntimeOptionKey<Integer> optionKey) {
+        validateCompilationWatchdogTimeoutValue(optionKey.getValue());
+    }
+
+    static void validateCompilationWatchdogTimeoutValue(int value) {
+        if (value < 0) {
+            throw new IllegalArgumentException("Option '" + JITCompilationWatchdogTimeoutSeconds.getName() + "' must be greater than or equal to 0.");
         }
     }
 

@@ -317,7 +317,7 @@ public class CommonOptionParser {
             } else if (valueString.equals("false")) {
                 value = false;
             } else {
-                return OptionParseResult.error("Boolean option " + option + " must have value 'true' or 'false'");
+                return OptionParseResult.error("Boolean option " + option + " must have value 'true' or 'false': '" + valueString + "'");
             }
         } else if (optionType == String.class || optionType == Path.class) {
             Object defaultValue = optionKey.getDefaultValue();
@@ -428,6 +428,10 @@ public class CommonOptionParser {
     }
 
     private static String wrap(String s, int width) {
+        return wrap(s, width, System.lineSeparator());
+    }
+
+    static String wrap(String s, int width, String lineSeparator) {
         StringBuilder sb = new StringBuilder(s);
         int cursor = 0;
         while (cursor + width < sb.length()) {
@@ -436,8 +440,9 @@ public class CommonOptionParser {
                 i = sb.indexOf(" ", cursor + width);
             }
             if (i != -1) {
-                sb.replace(i, i + 1, System.lineSeparator());
-                cursor = i;
+                sb.replace(i, i + 1, lineSeparator);
+                /* Keep cursor at the character before the next line's text. */
+                cursor = i + lineSeparator.length() - 1;
             } else {
                 break;
             }

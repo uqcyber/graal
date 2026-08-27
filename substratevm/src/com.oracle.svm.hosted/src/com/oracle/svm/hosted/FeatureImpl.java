@@ -44,7 +44,6 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
-import com.oracle.svm.core.image.ImageHeapLayoutInfo;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
@@ -72,6 +71,7 @@ import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
+import com.oracle.graal.pointsto.meta.JVMCIObjectReachableCallback;
 import com.oracle.graal.pointsto.meta.ObjectReachableCallback;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.svm.common.meta.MethodVariant;
@@ -80,6 +80,7 @@ import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.feature.JVMCIFeatureAccess;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
+import com.oracle.svm.core.image.ImageHeapLayoutInfo;
 import com.oracle.svm.core.meta.SharedField;
 import com.oracle.svm.core.meta.SharedMethod;
 import com.oracle.svm.core.meta.SharedType;
@@ -105,8 +106,8 @@ import com.oracle.svm.hosted.option.HostedOptionProvider;
 import com.oracle.svm.hosted.reflect.ReflectionDataBuilder;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
-import com.oracle.svm.util.AnnotationUtil;
 import com.oracle.svm.util.GuestAccess;
+import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.JVMCIFieldValueTransformer;
 import com.oracle.svm.util.OriginalFieldProvider;
 import com.oracle.svm.util.dynamicaccess.JVMCIJNIAccess;
@@ -446,6 +447,16 @@ public class FeatureImpl {
             });
         }
 
+        @Override
+        public void registerBuildTimeBootstrapIndy(ResolvedJavaMethod method) {
+            BootstrapMethodConfiguration.singleton().addBuildTimeIndy(method);
+        }
+
+        @Override
+        public void registerBuildTimeBootstrapCondy(ResolvedJavaMethod method) {
+            BootstrapMethodConfiguration.singleton().addBuildTimeCondy(method);
+        }
+
         /**
          * Register an object replacer which may return an ImageHeapConstant. Note only one replacer
          * can be triggered for a given object; otherwise an error will be thrown. Too, if the
@@ -474,19 +485,20 @@ public class FeatureImpl {
          * @since 24.0
          */
         public <T> void registerObjectReachableCallback(Class<T> clazz, ObjectReachableCallback<T> callback) {
-            getMetaAccess().lookupJavaType(clazz).registerObjectReachableCallback(callback);
+            // GR-78902: migrate all clients to JVMCI or guest callbacks.
+            getMetaAccess().lookupJavaType(clazz).registerObjectReachableCallback(new LegacyObjectReachableCallbackAdapter<>(callback));
         }
 
         @Override
         public <T> void registerObjectReachabilityHandler(Consumer<T> callback, Class<T> clazz) {
-            ObjectReachableCallback<T> wrapper = (_, obj, _) -> callback.accept(obj);
-            getMetaAccess().lookupJavaType(clazz).registerObjectReachableCallback(wrapper);
+            // GR-78928: migrate builder-side clients to JVMCI or guest callbacks.
+            JavaConstant guestCallback = GuestAccess.get().getSnippetReflection().forObject(callback);
+            registerObjectReachabilityHandler(new WrappedObjectReachabilityHandler(guestCallback), getMetaAccess().lookupJavaType(clazz));
         }
 
         @Override
         public void registerObjectReachabilityHandler(Consumer<JavaConstant> callback, ResolvedJavaType type) {
-            // TODO GR-73228: make the object reachability pipeline pass JavaConstant directly.
-            ObjectReachableCallback<Object> wrapper = (_, obj, _) -> callback.accept(bb.getSnippetReflectionProvider().forObject(obj));
+            JVMCIObjectReachableCallback wrapper = (_, object, _) -> callback.accept(object);
             asAnalysisType(type).registerObjectReachableCallback(wrapper);
         }
 
@@ -515,27 +527,13 @@ public class FeatureImpl {
             getHostVM().registerClassReachabilityListener(listener);
         }
 
-        /**
-         * Registers a method that is allowed to be executed at build time if called as the
-         * bootstrap method for an invokedynamic, in which case each call site outputted will be
-         * constant-folded. Other bootstrap methods will be executed at run time by default,
-         * creating the call site at run time.
-         *
-         * @since 25.1
-         */
-        public void registerBuildTimeIndyIncludeList(Executable method) {
+        @Override
+        public void registerBuildTimeBootstrapIndy(Executable method) {
             BootstrapMethodConfiguration.singleton().addBuildTimeIndy(getUniverse().getOriginalMetaAccess().lookupJavaMethod(method));
         }
 
-        /**
-         * Registers a method that is allowed to be executed at build time if called as the
-         * bootstrap method for a constantdynamic, in which case each call site outputted will be
-         * constant-folded. Other bootstrap methods will be executed at run time by default,
-         * creating the call site at run time.
-         *
-         * @since 25.1
-         */
-        public void registerBuildTimeCondyIncludeList(Executable method) {
+        @Override
+        public void registerBuildTimeBootstrapCondy(Executable method) {
             BootstrapMethodConfiguration.singleton().addBuildTimeCondy(getUniverse().getOriginalMetaAccess().lookupJavaMethod(method));
         }
 
@@ -653,7 +651,7 @@ public class FeatureImpl {
         }
 
         public boolean registerAsUnsafeAccessed(AnalysisField aField, Object reason) {
-            assert !AnnotationUtil.isAnnotationPresent(aField, Delete.class);
+            assert !GuestAnnotationAccess.isAnnotationPresent(aField, Delete.class);
             return aField.registerAsUnsafeAccessed(reason);
         }
 

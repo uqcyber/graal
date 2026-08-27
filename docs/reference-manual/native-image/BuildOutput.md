@@ -159,8 +159,13 @@ This can also improve latency in some cases.
 Use the `-R:MaxHeapSize` option when building with Native Image to preconfigure the maximum heap size.
 
 #### <a name="glossary-image-assertions"></a>Assertions in the Generated Image
-This shows whether Java assertions and system assertions are enabled in the generated image.
-Enabling them can help identifying and debugging problems in the Java code built into the image.
+This shows the hosted Java assertion defaults configured in the generated image.
+Build-time-initialized classes always use these defaults.
+When you build with `-H:-StrictRuntimeJavaOptions`, runtime-initialized image classes also use the build-time options
+and runtime-loaded classes have assertions disabled unconditionally.
+When you build with `-H:+StrictRuntimeJavaOptions`, runtime-initialized image classes and
+runtime-loaded classes have their assertion status set by runtime `-ea`, `-da`, `-esa`, and `-dsa` options.
+Enabling assertions can help identify and debug problems in the Java code built into the image.
 
 #### <a name="glossary-experimental-options"></a>Experimental Options
 A list of all active experimental options, including their origin and possible API option alternatives if available.
@@ -269,7 +274,7 @@ The total size of all `byte[]` objects used for storing resources (for example, 
 The number of resources is shown in the [Heap](#glossary-image-heap) section.
 A list of all resources including additional information such as their module, name, origin, and size are included in the [build reports](BuildOptions.md#build-output-and-build-report).
 This information can also be requested in the JSON format using the `-H:+GenerateEmbeddedResourcesFile` option.
-Such a JSON file validates against the JSON schema defined in [`embedded-resources-schema-v1.0.0.json`](https://github.com/oracle/graal/tree/master/docs/reference-manual/native-image/assets/embedded-resources-schema-v1.0.0.json).
+Such a JSON file validates against the JSON schema defined in [`embedded-resources-schema-v1.1.0.json`](https://github.com/oracle/graal/tree/master/docs/reference-manual/native-image/assets/embedded-resources-schema-v1.1.0.json).
 
 ##### <a name="glossary-code-metadata"></a>Code Metadata Stored in `byte[]`
 The total size of all `byte[]` objects used for metadata for the [code area](#glossary-code-area).

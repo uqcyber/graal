@@ -24,10 +24,10 @@
  */
 package com.oracle.svm.hosted.c.info;
 
-import org.graalvm.nativeimage.c.struct.CStruct;
+import com.oracle.svm.hosted.CStructGuestValue;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.vm.ci.meta.ResolvedJavaType;
 
@@ -40,10 +40,10 @@ public class StructInfo extends SizableInfo {
 
     public static StructInfo create(String typeName, ResolvedJavaType annotatedType) {
         String typedefAnnotation = InfoTreeBuilder.getTypedefName(annotatedType);
-        if (AnnotationUtil.getAnnotation(annotatedType, RawStructure.class) != null) {
+        if (GuestAnnotationAccess.isAnnotationPresent(annotatedType, RawStructure.class)) {
             return new RawStructureInfo(typeName, typedefAnnotation, annotatedType);
         } else {
-            return new StructInfo(typeName, typedefAnnotation, annotatedType, AnnotationUtil.getAnnotation(annotatedType, CStruct.class).isIncomplete());
+            return new StructInfo(typeName, typedefAnnotation, annotatedType, CStructGuestValue.get(annotatedType).isIncomplete());
         }
     }
 

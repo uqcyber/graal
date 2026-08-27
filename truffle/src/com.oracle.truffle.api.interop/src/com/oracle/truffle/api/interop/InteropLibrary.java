@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -2060,13 +2060,20 @@ public abstract class InteropLibrary extends Library {
     }
 
     /**
-     * Returns <code>true</code> if the receiver value represents a throwable exception/error}.
+     * Returns <code>true</code> if the receiver value represents a throwable exception/error.
      * Invoking this message does not cause any observable side-effects. Returns <code>false</code>
      * by default.
      * <p>
      * Objects must only return <code>true</code> if they support {@link #throwException} as well.
      * If this method is implemented then also {@link #throwException(Object)} must be implemented.
-     *
+     * <p>
+     * Note that a receiver that {@linkplain #isHostObject(Object) is also a host object} may have
+     * {@link #asHostObject(Object)} return an object that is <em>not</em> a {@link Throwable}. This
+     * is the case when a guest exception wraps an arbitrary host object (or
+     * {@linkplain ExportLibrary#delegateTo() delegates to} another object for that matter), so
+     * {@link #isHostObject(Object)} returns true and {@link #asHostObject(Object)} returns the
+     * underlying host object, whereas {@link #throwException(Object)} throws the guest exception.
+     * <p>
      * The following simplified {@code TryCatchNode} shows how the exceptions should be handled by
      * languages.
      *
@@ -2520,7 +2527,7 @@ public abstract class InteropLibrary extends Library {
     }
 
     /**
-     * Returns the the original language of the receiver value. The returned language class must be
+     * Returns the original language of the receiver value. The returned language class must be
      * non-null and represent a valid {@link Registration registered} language class. For more
      * details see {@link #hasLanguage(Object)}.
      * <p>
@@ -2907,7 +2914,7 @@ public abstract class InteropLibrary extends Library {
     }
 
     /**
-     * Returns <code>true</code> if two values represent the the identical value, else
+     * Returns <code>true</code> if two values represent the identical value, else
      * <code>false</code>. Two values are identical if and only if they have specified identity
      * semantics in the target language and refer to the identical instance.
      * <p>

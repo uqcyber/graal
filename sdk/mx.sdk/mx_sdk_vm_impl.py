@@ -1329,15 +1329,19 @@ class NativePropertiesBuildTask(mx.ProjectBuildTask):
                 ]
 
             if isinstance(image_config, mx_sdk.LauncherConfig) or (isinstance(image_config, mx_sdk.LanguageLibraryConfig) and image_config.launchers):
+                monitoring_features = ['jvmstat', 'heapdump', 'jfr', 'threaddump']
+                if mx.is_windows():
+                    monitoring_features.remove('jvmstat')
                 build_args += [
                     '-R:+EnableSignalHandling',
                     '-R:+InstallSegfaultHandler',
-                    '--enable-monitoring=jvmstat,heapdump,jfr,threaddump',
+                    '--enable-monitoring=' + ','.join(monitoring_features),
                 ] + svm_experimental_options([
                     '-H:+InstallExitHandlers',
-                    '-H:+DumpRuntimeCompilationOnSignal',
                     '-H:+ReportExceptionStackTraces',
                 ])
+                if not mx.is_windows():
+                    build_args += svm_experimental_options(['-H:+DumpRuntimeCompilationOnSignal'])
 
             if isinstance(image_config, (mx_sdk.LauncherConfig, mx_sdk.LanguageLibraryConfig)):
                 if image_config.is_sdk_launcher:
@@ -1565,7 +1569,8 @@ class GraalVmJImage(mx.Project):
         return join(self.get_output_base(), self.name)
 
     def output_witness(self):
-        return join(self.output_directory(), 'lib', 'modules')
+        # The release file is written at the end of every build, making it a reliable witness for the generated JDK.
+        return join(self.output_directory(), 'release')
 
     def getArchivableResults(self, use_relpath=True, single=False):
         if single:
@@ -1911,7 +1916,7 @@ class NativeImageResourcesFileListBuildTask(mx.ProjectBuildTask, metaclass=ABCMe
                             for line in fp:
                                 contents.append(line.strip())
 
-            self._native_image_resources_filelist_contents = os.linesep.join(contents)
+            self._native_image_resources_filelist_contents = '\n'.join(contents)
         return self._native_image_resources_filelist_contents
 
     def newestOutput(self):
@@ -2155,7 +2160,8 @@ class GraalVmSVMNativeImageBuildTask(GraalVmNativeImageBuildTask):
         self.svm_support.native_image(build_args, output_file)
 
         with open(self._get_command_file(), 'w', encoding='utf-8') as f:
-            f.writelines(l + os.linesep for l in build_args)
+            # Use '\n' and let text mode translate it to the platform-native line ending.
+            f.writelines(l + '\n' for l in build_args)
 
     def native_image_needs_build(self, out_file):
         sup = super().native_image_needs_build(out_file)

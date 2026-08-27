@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.hosted.heap;
 
+import com.oracle.svm.hosted.PodFactoryGuestValue;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
@@ -48,7 +49,7 @@ import com.oracle.svm.hosted.code.SubstrateCompilationDirectives;
 import com.oracle.svm.hosted.nodes.DeoptProxyNode;
 import com.oracle.svm.hosted.phases.HostedGraphKit;
 import com.oracle.svm.common.meta.MethodVariant;
-import com.oracle.svm.util.AnnotationUtil;
+import com.oracle.svm.util.GuestAnnotationAccess;
 
 import jdk.graal.compiler.core.common.type.StampFactory;
 import jdk.graal.compiler.debug.DebugContext;
@@ -106,8 +107,8 @@ final class PodFactorySubstitutionMethod extends CustomSubstitutionMethod {
         }
 
         AnalysisType factoryType = method.getDeclaringClass();
-        PodFactory annotation = AnnotationUtil.getAnnotation(factoryType, PodFactory.class);
-        AnalysisType podConcreteType = kit.getMetaAccess().lookupJavaType(annotation.podClass());
+        PodFactoryGuestValue annotation = PodFactoryGuestValue.get(factoryType);
+        AnalysisType podConcreteType = kit.getMetaAccess().getUniverse().lookup(annotation.podClass());
         AnalysisMethod targetCtor = findMatchingConstructor(method, podConcreteType.getSuperclass());
 
         /*
@@ -118,7 +119,7 @@ final class PodFactorySubstitutionMethod extends CustomSubstitutionMethod {
         int instanceLocal = kit.getFrameState().localsSize() - 1; // reserved when generating class
         int nextDeoptIndex = startMethod(kit, deoptInfo, 0);
         instantiatePod(kit, factoryType, podConcreteType, instanceLocal);
-        if (AnnotationUtil.isAnnotationPresent(this, DeoptTest.class)) {
+        if (GuestAnnotationAccess.isAnnotationPresent(this, DeoptTest.class)) {
             if (!SubstrateCompilationDirectives.isDeoptTarget(method)) {
                 kit.append(new TestDeoptimizeNode());
             }
@@ -303,7 +304,7 @@ final class PodFactorySubstitutionProcessor extends SubstitutionProcessor {
 
     @Override
     public ResolvedJavaMethod lookup(ResolvedJavaMethod method) {
-        if (method.isSynthetic() && AnnotationUtil.isAnnotationPresent(method.getDeclaringClass(), PodFactory.class) && !method.isConstructor()) {
+        if (method.isSynthetic() && GuestAnnotationAccess.isAnnotationPresent(method.getDeclaringClass(), PodFactory.class) && !method.isConstructor()) {
             assert !(method instanceof CustomSubstitutionMethod);
             return substitutions.computeIfAbsent(method, PodFactorySubstitutionMethod::new);
         }

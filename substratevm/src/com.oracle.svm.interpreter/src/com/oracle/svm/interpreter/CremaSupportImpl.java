@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -85,10 +85,10 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
+import com.oracle.svm.core.MethodRefHolder;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.graal.meta.KnownOffsets;
-import com.oracle.svm.core.heap.UnknownPrimitiveField;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.DynamicHubUtils;
 import com.oracle.svm.core.hub.DynamicHubUtils.TypeCheckData;
@@ -98,7 +98,6 @@ import com.oracle.svm.core.hub.RuntimeDynamicHubMetadata;
 import com.oracle.svm.core.hub.RuntimeReflectionMetadata;
 import com.oracle.svm.core.hub.crema.CremaJNIFieldIds;
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaField;
-import com.oracle.svm.core.hub.crema.CremaResolvedJavaMethod;
 import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.hub.registry.AbstractClassRegistry;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
@@ -108,14 +107,8 @@ import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.core.invoke.ResolvedMember;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
 import com.oracle.svm.core.jni.CallVariant;
-import com.oracle.svm.core.jni.JNIObjectHandles;
 import com.oracle.svm.core.jni.headers.JNIFieldId;
-import com.oracle.svm.core.jni.headers.JNIMethodId;
-import com.oracle.svm.core.jni.headers.JNIObjectHandle;
-import com.oracle.svm.core.jni.headers.JNIObjectRefType;
-import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.core.metaspace.Metaspace;
-import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.espresso.classfile.ConstantPool;
 import com.oracle.svm.espresso.classfile.Constants;
 import com.oracle.svm.espresso.classfile.JavaKind;
@@ -150,7 +143,10 @@ import com.oracle.svm.espresso.shared.vtable.TableEntry;
 import com.oracle.svm.espresso.shared.vtable.TableEntryRef;
 import com.oracle.svm.espresso.shared.vtable.Tables;
 import com.oracle.svm.espresso.shared.vtable.VTable;
+import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
+import com.oracle.svm.guest.staging.core.heap.UnknownPrimitiveField;
 import com.oracle.svm.guest.staging.jdk.InternalVMMethod;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.hosted.substitute.DeletedElementException;
 import com.oracle.svm.interpreter.fieldlayout.FieldLayout;
 import com.oracle.svm.interpreter.metadata.AccessChecks;
@@ -165,6 +161,7 @@ import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaType;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedObjectType;
 import com.oracle.svm.interpreter.metadata.InterpreterUnresolvedSignature;
+import com.oracle.svm.interpreter.metadata.RuntimeLoadedClassHierarchy;
 import com.oracle.svm.shared.BuildPhaseProvider.ReadyForCompilation;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
@@ -186,6 +183,7 @@ public class CremaSupportImpl implements CremaSupport {
     private final MethodHandleIntrinsics<InterpreterResolvedJavaType, InterpreterResolvedJavaMethod, InterpreterResolvedJavaField> methodHandleIntrinsics = new MethodHandleIntrinsics<>();
     private final CremaLoadingConstraints loadingConstraints = new CremaLoadingConstraints();
     private final CanonicalMetaspaceIntArrayCache canonicalMetaspaceInterfaceHashTableCache = new CanonicalMetaspaceIntArrayCache();
+    private final CremaSubstitutions cremaSubstitutions = new CremaSubstitutions();
 
     @UnknownPrimitiveField(availability = ReadyForCompilation.class) //
     private CFunctionPointer enterDirectInterpreterStubEntryPoint;
@@ -229,7 +227,7 @@ public class CremaSupportImpl implements CremaSupport {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    private static List<InterpreterResolvedJavaMethod> buildInterpreterMethods(AnalysisType analysisType, AnalysisUniverse analysisUniverse, BuildTimeInterpreterUniverse btiUniverse) {
+    private List<InterpreterResolvedJavaMethod> buildInterpreterMethods(AnalysisType analysisType, AnalysisUniverse analysisUniverse, BuildTimeInterpreterUniverse btiUniverse) {
         List<InterpreterResolvedJavaMethod> methods = new ArrayList<>();
 
         // add declared methods
@@ -245,7 +243,7 @@ public class CremaSupportImpl implements CremaSupport {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    private static void addSupportedElements(BuildTimeInterpreterUniverse btiUniverse, AnalysisUniverse analysisUniverse, List<InterpreterResolvedJavaMethod> methods,
+    private void addSupportedElements(BuildTimeInterpreterUniverse btiUniverse, AnalysisUniverse analysisUniverse, List<InterpreterResolvedJavaMethod> methods,
                     ResolvedJavaMethod wrappedMethod) {
         if (!analysisUniverse.hostVM().platformSupported(wrappedMethod)) {
             /* ignore e.g. hosted methods */
@@ -264,7 +262,12 @@ public class CremaSupportImpl implements CremaSupport {
         }
         InterpreterResolvedJavaMethod method = btiUniverse.getOrCreateMethod(analysisMethod, shouldRetainMethodCode(analysisMethod));
         if (!method.isAbstract()) {
-            method.setNativeEntryPoint(InterpreterResolvedJavaMethod.createMethodRef(analysisMethod));
+            MethodRefHolder substitution = cremaSubstitutions.get(method);
+            if (substitution != null) {
+                method.setNativeEntryPoint(substitution);
+            } else {
+                method.setNativeEntryPoint(InterpreterResolvedJavaMethod.createMethodRef(analysisMethod));
+            }
         } else {
             method.setNativeEntryPoint(InterpreterKnownCompiledEntryPoints.getThrowAbstractMethodErrorStub());
         }
@@ -475,6 +478,9 @@ public class CremaSupportImpl implements CremaSupport {
 
         // Ensure all metadata is stored before publication
         MembarNode.memoryBarrier(MembarNode.FenceKind.STORE_STORE);
+        if (SubstrateOptions.useRistretto()) {
+            RuntimeLoadedClassHierarchy.registerRuntimeType(thisType);
+        }
 
         return hub;
     }
@@ -739,6 +745,9 @@ public class CremaSupportImpl implements CremaSupport {
 
         // Ensure all metadata is stored before publication
         MembarNode.memoryBarrier(MembarNode.FenceKind.STORE_STORE);
+        if (SubstrateOptions.useRistretto()) {
+            RuntimeLoadedClassHierarchy.registerRuntimeType(thisType);
+        }
 
         componentHub.setArrayHub(arrayHub);
         return arrayHub;
@@ -1608,18 +1617,6 @@ public class CremaSupportImpl implements CremaSupport {
         }
         if (resolvedField instanceof CremaResolvedJavaField cremaField) {
             return cremaField;
-        }
-        return null;
-    }
-
-    @Override
-    public Executable getCremaMethodExecutable(JNIMethodId methodId) {
-        if (JNIObjectHandles.getHandleType((JNIObjectHandle) methodId) != JNIObjectRefType.WeakGlobal) {
-            return null;
-        }
-        Object object = JNIObjectHandles.getObject((JNIObjectHandle) methodId);
-        if (object instanceof CremaResolvedJavaMethod method) {
-            return RuntimeReflectionMetadata.fromResolvedMethod(method);
         }
         return null;
     }

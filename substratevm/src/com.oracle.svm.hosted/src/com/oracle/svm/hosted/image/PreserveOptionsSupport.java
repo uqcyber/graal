@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -227,7 +227,7 @@ public class PreserveOptionsSupport extends IncludeOptionsSupport {
             registerPreservedClass(reflection, resources, proxy, always, c);
         });
 
-        if (SubstrateOptions.JNI.getValue()) {
+        if (SubstrateOptions.JNI.getValue() && SubstrateOptions.PreserveIncludesJNI.getValue()) {
             RuntimeJNIAccessSupport jni = ImageSingletons.lookup(RuntimeJNIAccessSupport.class);
             for (Class<?> primitive : new Class<?>[]{boolean.class, byte.class, char.class, short.class, int.class, long.class, float.class, double.class}) {
                 Class<?> arrayType = primitive.arrayType();
@@ -279,8 +279,8 @@ public class PreserveOptionsSupport extends IncludeOptionsSupport {
         registerType(reflection, c.arrayType().arrayType());
 
         /* Register every single-interface proxy */
-        // GR-62293 can't register proxies from jdk modules.
-        if (c.getModule() == null && c.isInterface()) {
+        // GR-62293 can't register proxies from named JDK modules.
+        if (!c.getModule().isNamed() && c.isInterface()) {
             proxy.registerProxy(always, true, c);
         }
 
@@ -291,7 +291,7 @@ public class PreserveOptionsSupport extends IncludeOptionsSupport {
         } catch (LinkageError e) {
             /* If we can't link we can not register for reflection */
         }
-        if (SubstrateOptions.JNI.getValue()) {
+        if (SubstrateOptions.JNI.getValue() && SubstrateOptions.PreserveIncludesJNI.getValue()) {
             final RuntimeJNIAccessSupport jni = ImageSingletons.lookup(RuntimeJNIAccessSupport.class);
             jni.register(always, true, c);
             jni.register(always, true, c.arrayType());

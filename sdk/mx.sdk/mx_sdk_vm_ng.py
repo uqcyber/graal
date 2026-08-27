@@ -43,7 +43,7 @@ import os
 import shutil
 import sys
 from abc import ABCMeta, abstractmethod
-from os import listdir, linesep
+from os import listdir
 from os.path import join, exists, isfile, basename, relpath, isdir, isabs, dirname, normpath
 from typing import Tuple
 
@@ -384,12 +384,17 @@ class LanguageLibraryProject(NativeImageLibraryProject):
 
         # Monitoring flags
         if get_bootstrap_graalvm_version() >= mx.VersionSpec("24.0"):
-            build_args += ['--enable-monitoring=jvmstat,heapdump,jfr,threaddump']
+            monitoring_features = ['jvmstat', 'heapdump', 'jfr', 'threaddump']
         else:
-            build_args += ['--enable-monitoring=jvmstat,heapdump,jfr']
+            monitoring_features = ['jvmstat', 'heapdump', 'jfr']
+        if mx.is_windows():
+            monitoring_features.remove('jvmstat')
+        build_args += ['--enable-monitoring=' + ','.join(monitoring_features)]
+        if get_bootstrap_graalvm_version() < mx.VersionSpec("24.0"):
             build_args += mx_sdk_vm_impl.svm_experimental_options(['-H:+DumpThreadStacksOnSignal'])
 
-        build_args += mx_sdk_vm_impl.svm_experimental_options(['-H:+DumpRuntimeCompilationOnSignal'])
+        if not mx.is_windows():
+            build_args += mx_sdk_vm_impl.svm_experimental_options(['-H:+DumpRuntimeCompilationOnSignal'])
         build_args += [
             '-R:-UsePerfData', # See GR-25329, reduces startup instructions significantly
         ]
@@ -538,7 +543,8 @@ class NativeImageBuildTask(mx.BuildTask):
         mx.run(run_command, nonZeroIsFatal=True, out=out, err=err)
 
         with open(self._get_command_file(), 'w', encoding='utf-8') as f:
-            f.writelines(l + linesep for l in native_image_command)
+            # Use '\n' and let text mode translate it to the platform-native line ending.
+            f.writelines(l + '\n' for l in native_image_command)
 
 
     def _get_command_file(self):
@@ -590,6 +596,7 @@ class ThinLauncherProject(mx_native.DefaultNativeProject):
         self.relative_extracted_lib_paths = {k: v.replace('/', os.sep) for k, v in kw_args.pop('relative_extracted_lib_paths', {}).items()}
         self.liblang_relpath = _pop_path(kw_args, 'relative_liblang_path', None)
         self.setup_relative_resources = kw_args.pop('setup_relative_resources', None)
+        self.windows_manifest = join(_suite.dir, 'src', 'org.graalvm.launcher.native', 'manifest', 'launcher.manifest')
 
         if not kw_args.get('multitarget'):
             # We use our LLVM toolchain on Linux by default because we want to statically link the C++ standard library,
@@ -757,6 +764,8 @@ class ThinLauncherProject(mx_native.DefaultNativeProject):
     @property
     def ldflags(self):
         _dynamic_ldflags = []
+        if mx.is_windows():
+            _dynamic_ldflags += ['/MANIFEST:EMBED', '/MANIFESTINPUT:' + self.windows_manifest]
         if not mx.is_windows():
             _dynamic_ldflags += ['-pthread']
         if self.uses_musl_swcfi_toolchain:
