@@ -134,6 +134,7 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
 
     private static ValueNode canonical(LeftShiftNode leftShiftNode, ArithmeticOpTable.ShiftOp<Shl> op, Stamp stamp, ValueNode forX, ValueNode forY) {
         if (forY.isConstant() && op.isNeutral(forY.asConstant())) {
+            // veriopt: EliminateShift: x << const 0 |-> x
             return forX;
         }
 
@@ -144,10 +145,8 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
             int mask = op.getShiftAmountMask(stamp);
             amount &= mask;
             if (amount == 0) {
-
-                // veriopt: EliminateRHS: "(x << const(IntVal by vy)) |-> x when
-                //                               wf_stamp x & stamp_expr x = IntegerStamp b lo hi &
-                //                               (shift_amount b vy = 0)"
+                // veriopt: EliminateRHS: "(x << const (IntVal yb yv)) |-> x
+                //          when (wf_stamp x && stamp_expr x = IntegerStamp b lo hi && shift_amount b yv = 0)"
                 return forX;
             }
             if (forX instanceof ShiftNode) {
@@ -156,22 +155,20 @@ public final class LeftShiftNode extends ShiftNode<Shl> {
                     int otherAmount = other.getY().asJavaConstant().asInt() & mask;
                     if (other instanceof LeftShiftNode) {
                         int total = amount + otherAmount;
+                        // veriopt-definition: total: ((shift_amount b zv) + (shift_amount b yv))
 
-                        // veriopt-alias: x = (a << const(b))
-
-                        // veriopt-definition: total: (y & mask(x << y)) + (b & mask(x << y))
+                        // TODO for LeftShiftBecomesZero and EliminateOtherLeftShift, verify:
+                        //      b <= total <--> total != (total & shift_mask b)
 
                         if (total != (total & mask)) {
-                            // veriopt: LeftShiftBecomesZero: "((x << const(IntVal by vy)) << const(IntVal bz vz)) |-> const(IntVal b 0)
-                            //                          when wf_stamp x & stamp_expr x = IntegerStamp b lo hi &
-                            //                               1 =< b & b =< 64 &
-                            //                               (b < (shift_amount b vy + shift_amount b vz))"
-
-                            // Todo: b =< (shift_amount b vy + shift_amount b vz) <--> total != (total & mask)
+                            // veriopt: LeftShiftBecomesZero:
+                            //          "(x << const (IntVal yb yv)) << const (IntVal zb zv) |-> const (new_int b 0)
+                            //           when (wf_stamp x && stamp_expr x = IntegerStamp b lo hi && b <= total))"
                             return ConstantNode.forIntegerBits(PrimitiveStamp.getBits(stamp), 0);
                         }
-                        // veriopt: EliminateOtherLeftShift: ((a << const(b)) << const(y)) |-> (a << total)
-                        //                              when (total == (total & (mask(x << y))))
+                        // veriopt: EliminateOtherLeftShift:
+                        //          (x << const (IntVal yb yv)) << const (IntVal zb zv) |-> (x << (IntVal b total))
+                        //          when (wf_stamp x && stamp_expr x = IntegerStamp b lo hi && b > total)
                         return new LeftShiftNode(other.getX(), ConstantNode.forInt(total));
                     } else if ((other instanceof RightShiftNode || other instanceof UnsignedRightShiftNode) && otherAmount == amount) {
                         if (stamp.getStackKind() == JavaKind.Long) {
