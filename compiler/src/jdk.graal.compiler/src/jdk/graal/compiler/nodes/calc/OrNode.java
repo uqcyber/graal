@@ -103,6 +103,9 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicali
                  * However, don't destroy bit rotate patterns.
                  */
                 if (!(forX instanceof ShiftNode<?> && forY instanceof ShiftNode<?>)) {
+                    // veriopt: OrDisjointToAdd: (x | y) |-> (x + y)
+                    //          when (stamp_expr x = IntegerStamp b xl xh && stamp_expr y = IntegerStamp b yl yh &&
+                    //                wf_stamp x && wf_stamp y && is_bitwise_disjoint x y)
                     return AddNode.create(forX, forY, view);
                 }
             }
