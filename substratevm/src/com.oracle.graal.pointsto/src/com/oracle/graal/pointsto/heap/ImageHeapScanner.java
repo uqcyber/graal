@@ -104,6 +104,9 @@ public abstract class ImageHeapScanner {
     /** Reserved for constants that are only known late, e.g., like interned strings array. */
     public static final ScanReason LATE_SCAN = new OtherReason("Constant scanned manually after sealing the heap.");
 
+    /** Used when creating a constant for immutable-object registration. */
+    public static final ScanReason IMMUTABLE_REGISTRATION = new OtherReason("Constant created for immutable-object registration.");
+
     public ImageHeapScanner(BigBang bb, ImageHeap heap, AnalysisMetaAccess aMetaAccess, SnippetReflectionProvider aSnippetReflection,
                     ConstantReflectionProvider aConstantReflection, ObjectScanningObserver aScanningObserver, HostedValuesProvider aHostedValuesProvider) {
         this.bb = bb;
@@ -450,9 +453,9 @@ public abstract class ImageHeapScanner {
         /* Run all registered object replacers. */
         if (constant.getJavaKind() == JavaKind.Object) {
             try {
-                JavaConstant replaced = universe.replaceConstantWithConstant(constant, (JavaConstant value) -> unwrapConstantForReplacement(value, reason));
+                JavaConstant replaced = universe.replaceConstantWithAllReplacers(constant);
                 if (!replaced.equals(constant)) {
-                    return Optional.of(hostedValuesProvider.validateReplacedConstant(replaced));
+                    return Optional.of(replaced);
                 }
             } catch (UnsupportedFeatureException e) {
                 /* Enhance the unsupported feature message with the object trace and rethrow. */
@@ -463,20 +466,6 @@ public abstract class ImageHeapScanner {
 
         }
         return Optional.empty();
-    }
-
-    /**
-     * Unwraps a hosted constant so object replacers can operate on the original hosted object. This
-     * is temporary code that should be removed once GR-72093 is resolved.
-     */
-    private Object unwrapConstantForReplacement(JavaConstant value, ScanReason reason) {
-        Object unwrapped = snippetReflection.asObject(Object.class, value);
-        if (unwrapped == null) {
-            throw GraalError.shouldNotReachHere(formatReason("Could not unwrap constant", reason)); // ExcludeFromJacocoGeneratedReport
-        } else if (unwrapped instanceof ImageHeapConstant) {
-            throw GraalError.shouldNotReachHere(formatReason("Double wrapping of constant. Most likely, the reachability analysis code itself is seen as reachable.", reason)); // ExcludeFromJacocoGeneratedReport
-        }
-        return unwrapped;
     }
 
     public void maybeForceHashCodeComputation(JavaConstant constant) {

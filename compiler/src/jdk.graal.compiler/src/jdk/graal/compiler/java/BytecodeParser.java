@@ -2469,7 +2469,7 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
         if (returnStamp == null) {
             returnStamp = StampFactory.forDeclaredType(getAssumptions(), returnType, false);
         }
-        ValueNode node = new PluginReplacementNode(returnStamp.getTrustedStamp(), args, replacementFunction, plugin.getClass().getSimpleName());
+        ValueNode node = new PluginReplacementNode(returnStamp.getTrustedStamp(), args, replacementFunction, targetMethod, plugin.getClass().getSimpleName());
         if (returnType.getJavaKind() == JavaKind.Void) {
             add(node);
         } else {
@@ -2684,6 +2684,8 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
                     ValueNode receiver = invocationPluginReceiver.init(targetMethod, args).get(true);
                     ResolvedJavaField resolvedField = (ResolvedJavaField) field;
                     try (DebugCloseable context = openNodeContext(targetMethod, 1)) {
+                        // A nested BytecodeParser would record this dependency in build().
+                        graph.recordMethod(targetMethod);
                         genGetField(resolvedField, receiver);
                         notifyBeforeInline(targetMethod);
                         String reason = "inline accessor method (bytecode parsing)";

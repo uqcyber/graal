@@ -28,6 +28,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.lang.annotation.Annotation;
+import java.lang.annotation.AnnotationFormatError;
+import java.lang.reflect.AnnotatedElement;
 import java.net.URL;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -41,6 +43,7 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import com.oracle.svm.shared.option.HostedOptionValues;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.ImageSingletons;
@@ -170,6 +173,14 @@ public final class ImageClassLoader {
         }
     }
 
+    private static Class<?> getEnclosingClassOrNull(Class<?> clazz) {
+        try {
+            return clazz.getEnclosingClass();
+        } catch (LinkageError e) {
+            return null;
+        }
+    }
+
     public ClassLoader getDynamicHubClassLoader(Class<?> clazz) {
         if (isCoreType(clazz)) {
             /*
@@ -244,6 +255,57 @@ public final class ImageClassLoader {
         return guestTypes.isPlatformSupported(element, thePlatform);
     }
 
+    /* GR-79036: Unify this core-reflection path with guest type platform filtering. */
+    private static PlatformSupportResult isBuilderPlatformSupported(Class<?> clazz, Platform thePlatform) {
+        PlatformSupportResult res = isBuilderPlatformSupported0(clazz, thePlatform);
+        if (res == PlatformSupportResult.NO) {
+            return res;
+        }
+        Package p = clazz.getPackage();
+        if (p != null) {
+            res = res.and(isBuilderPlatformSupported0(p, thePlatform));
+            if (res == PlatformSupportResult.NO) {
+                return res;
+            }
+        }
+        Class<?> enclosingClass = getEnclosingClassOrNull(clazz);
+        while (enclosingClass != null && res != PlatformSupportResult.NO) {
+            res = res.and(isBuilderPlatformSupported0(enclosingClass, thePlatform));
+            enclosingClass = getEnclosingClassOrNull(enclosingClass);
+        }
+        return res;
+    }
+
+    private static PlatformSupportResult isBuilderPlatformSupported0(AnnotatedElement element, Platform thePlatform) {
+        if (thePlatform == null) {
+            return PlatformSupportResult.YES;
+        }
+        Platforms platforms = getPlatformsAnnotation(element);
+        if (platforms != null) {
+            for (Class<? extends Platform> platformGroup : platforms.value()) {
+                if (platformGroup == Platform.HOSTED_ONLY.class) {
+                    return PlatformSupportResult.HOSTED;
+                }
+            }
+            if (!NativeImageGenerator.includedIn(thePlatform, platforms)) {
+                return PlatformSupportResult.NO;
+            }
+        }
+        return PlatformSupportResult.YES;
+    }
+
+    private static Platforms getPlatformsAnnotation(AnnotatedElement element) {
+        try {
+            Platforms platforms;
+            // Checkstyle: allow direct annotation access
+            platforms = element.getAnnotation(Platforms.class);
+            // Checkstyle: disallow direct annotation access
+            return platforms;
+        } catch (LinkageError | AnnotationFormatError e) {
+            return null;
+        }
+    }
+
     /**
      * Registers a class loaded from the image class-path or module-path.
      */
@@ -257,6 +319,17 @@ public final class ImageClassLoader {
             res = PlatformSupportResult.NO;
         }
 
+        registerClass(clazz, res);
+    }
+
+    /**
+     * Registers a class loaded from a builder module that is not visible to the guest context.
+     */
+    void registerBuilderClass(Class<?> clazz) {
+        registerClass(clazz, isBuilderPlatformSupported(clazz, platform));
+    }
+
+    private void registerClass(Class<?> clazz, PlatformSupportResult res) {
         if (res == PlatformSupportResult.HOSTED) {
             synchronized (hostedOnlyClasses) {
                 hostedOnlyClasses.add(clazz);
@@ -455,7 +528,10 @@ public final class ImageClassLoader {
             modules.add(guestAccess.getModule(guestAccess.lookupType(SVMHost.class)));
         }
         ResolvedJavaModuleLayer guestModuleLayer = guestModuleLayer(guestAccess);
-        HostedModuleSupport.GUEST_MODULES.forEach(moduleName -> addCoreModule(modules, guestModuleLayer, moduleName));
+        HostedModuleSupport.STANDARD_GUEST_MODULES.forEach(moduleName -> addCoreModule(modules, guestModuleLayer, moduleName));
+        if (SubstrateOptions.EnableJVMCIGuest.getValue(HostedOptionValues.singleton().get())) {
+            HostedModuleSupport.JVMCI_GUEST_MODULES.forEach(moduleName -> addCoreModule(modules, guestModuleLayer, moduleName));
+        }
         if (SubstrateOptions.useLLVMBackend()) {
             String llvmBackendModule = "org.graalvm.nativeimage.llvm";
             modules.add(guestAccess.bootModuleLayer().findModule(llvmBackendModule)

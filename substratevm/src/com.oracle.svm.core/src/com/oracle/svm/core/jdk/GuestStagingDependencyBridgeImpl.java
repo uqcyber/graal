@@ -26,12 +26,14 @@ package com.oracle.svm.core.jdk;
 
 import java.io.PrintStream;
 
+import org.graalvm.nativeimage.RuntimeStateTrimConfig;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.AssertionsSupport;
 import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.Isolates;
+import com.oracle.svm.core.RuntimeStateTrimSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.heap.Heap;
@@ -74,6 +76,11 @@ final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBr
     @Override
     public boolean useSerialGC() {
         return SubstrateOptions.useSerialGC();
+    }
+
+    @Override
+    public boolean useG1GC() {
+        return SubstrateOptions.useG1GC();
     }
 
     @Override
@@ -176,6 +183,11 @@ final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBr
     }
 
     @Override
+    public boolean useRistretto() {
+        return SubstrateOptions.useRistretto();
+    }
+
+    @Override
     public void enableTraceClassLoading() {
         RuntimeClassLoading.Options.TraceClassLoading.update(true);
     }
@@ -188,6 +200,11 @@ final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBr
     @Override
     public void updateRuntimeSystemAssertionStatus(boolean enable) {
         AssertionsSupport.singleton().updateRuntimeSystemAssertionStatus(enable);
+    }
+
+    @Override
+    public void setVerifyMode(String mode) {
+        RuntimeClassLoading.Options.ClassVerification.update(RuntimeClassLoading.VerifyMode.valueOf(mode));
     }
 
     @Override
@@ -204,5 +221,10 @@ final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBr
                 }
             });
         }
+    }
+
+    @Override
+    public void trimRuntimeState(RuntimeStateTrimConfig config) {
+        RuntimeStateTrimSupport.singleton().trimRuntimeState(config);
     }
 }

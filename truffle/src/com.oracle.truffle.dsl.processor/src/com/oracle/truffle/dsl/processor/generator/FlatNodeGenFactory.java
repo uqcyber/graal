@@ -1656,6 +1656,13 @@ public class FlatNodeGenFactory {
                     builder.startBlock();
                 }
 
+                int cachedCount = 0;
+                for (CacheExpression cache : specialization.getCaches()) {
+                    if (!cache.isAlwaysInitialized()) {
+                        cachedCount++;
+                    }
+                }
+
                 builder.startStatement().startCall("cached", "add");
                 builder.startStaticCall(context.getType(Arrays.class), "<Object>asList");
                 for (CacheExpression cache : specialization.getCaches()) {
@@ -1667,6 +1674,14 @@ public class FlatNodeGenFactory {
                         builder.staticReference(createLibraryConstant(constants, cache.getParameter().getType()));
                         builder.startCall(".getUncached").end();
                     } else {
+                        if (cachedCount == 1 && isAssignable(cache.getParameter().getType(), context.getType(Object[].class))) {
+                            /*
+                             * A single reference array cache must be passed as an Object, otherwise
+                             * Arrays.asList is resolved as a non-varargs call and spreads the array
+                             * contents.
+                             */
+                            builder.cast(context.getType(Object.class));
+                        }
                         builder.tree(createCacheAccess(innerFrameState, specialization, cache, null));
                     }
                     builder.end();
@@ -1822,6 +1837,12 @@ public class FlatNodeGenFactory {
         if (specialization.hasMultipleInstances()) {
             return true;
         } else if (specialization.isGuardBindsExclusiveCache()) {
+            return true;
+        } else if (useSpecializationClass(specialization) && hasExclusiveWeakReferenceCache(specialization)) {
+            /*
+             * Duplication checking reuses a live referent and counts a collected referent towards
+             * the single-instance limit.
+             */
             return true;
         }
         return false;
@@ -6653,6 +6674,16 @@ public class FlatNodeGenFactory {
             b.tree(createCacheAccess(frameState, specialization, cache, null));
 
             useValue = b.build();
+        } else if (mode.isSlowPath() && cache.isWeakReference() && isExclusiveWeakReferenceCache(specialization, cache) && !needsDuplicationCheck(specialization)) {
+            /*
+             * A non-null weak-reference field represents a consumed single-instance cache slot,
+             * even after its referent was collected. Reuse the wrapper so the synthetic get()
+             * cache can reject a collected referent instead of initializing a new slot.
+             */
+            builder.declaration(type, refName, createCacheAccess(frameState, specialization, cache, null));
+            builder.startIf().string(refName).string(" == null").end().startBlock();
+            builder.startStatement().string(refName, " = ").tree(useValue).end();
+            builder.end();
         } else if (cache.isAlwaysInitialized() && frameState.getMode().isSlowPath()) {
             builder.startStatement().string(refName, " = ").tree(useValue).end();
         } else {
@@ -6664,6 +6695,24 @@ public class FlatNodeGenFactory {
         List<IfTriple> triples = new ArrayList<>();
         triples.add(new IfTriple(builder.build(), null, null));
         return triples;
+    }
+
+    private static boolean hasExclusiveWeakReferenceCache(SpecializationData specialization) {
+        for (CacheExpression cache : specialization.getCaches()) {
+            if (cache.isWeakReference() && isExclusiveWeakReferenceCache(specialization, cache)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isExclusiveWeakReferenceCache(SpecializationData specialization, CacheExpression weakReferenceCache) {
+        for (CacheExpression cache : specialization.getCaches()) {
+            if (cache.isWeakReferenceGet() && specialization.getBoundCaches(cache.getDefaultExpression(), true).contains(weakReferenceCache)) {
+                return cache.getSharedGroup() == null && cache.getDisabledSharingGroup() == null;
+            }
+        }
+        throw new AssertionError("Weak-reference get cache not found for " + weakReferenceCache);
     }
 
     private static boolean cacheNeedsSpecializationClass(FrameState frameState, SpecializationData specialization, CacheExpression cache) {

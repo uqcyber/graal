@@ -22,6 +22,30 @@
       "allDeclaredFields": true
     },
     {
+      "type": "com.sun.tools.javac.Main",
+      "jniAccessible": true,
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": [
+            "java.lang.String[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "jdk.internal.jshell.tool.JShellToolProvider",
+      "jniAccessible": true,
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": [
+            "java.lang.String[]"
+          ]
+        }
+      ]
+    },
+    {
       "type": "com.sun.tools.javac.launcher.SourceLauncher",
       "jniAccessible": true,
       "methods": [
@@ -35,13 +59,7 @@
     }
   ],
   "resources": [
-    {
-      "glob": "META-INF/services/javax.tools.JavaCompiler"
-    },
-    { "module": "java.base", "bundle": "sun.launcher.resources.launcher" },
-    { "module": "jdk.compiler", "bundle": "com.sun.tools.javac.resources.compiler" },
-    { "module": "jdk.compiler", "bundle": "com.sun.tools.javac.resources.launcher" },
-    { "module": "jdk.compiler", "bundle": "com.sun.tools.javac.resources.javac" }
+    { "module": "java.base", "bundle": "sun.launcher.resources.launcher" }
   ],
   "foreign": {
     "downcalls": [

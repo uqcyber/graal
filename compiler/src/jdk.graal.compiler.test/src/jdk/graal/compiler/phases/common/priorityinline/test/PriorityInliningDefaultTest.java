@@ -81,11 +81,16 @@ public class PriorityInliningDefaultTest extends PriorityInliningTest {
         Assert.assertNotNull(highTier.findPhase(InliningPhase.class));
     }
 
+    /// Verifies that the high tier includes a [MethodDuplicationPhase] exactly when
+    /// [MethodDuplicationPhase.Options#OptMethodDuplication] is enabled. This protects the
+    /// imperative option-to-phase wiring rather than the behavior of the phase itself.
     @Test
-    public void testMethodDuplicationCanBeSelected() {
-        Assert.assertNull(createSuites(getInitialOptions()).getHighTier().findPhase(MethodDuplicationPhase.class));
-        OptionValues options = new OptionValues(getInitialOptions(), MethodDuplicationPhase.Options.OptMethodDuplication, true);
-        Assert.assertNotNull(createSuites(options).getHighTier().findPhase(MethodDuplicationPhase.class));
+    public void testMethodDuplicationPhaseFollowsOption() {
+        OptionValues disabledOptions = new OptionValues(getInitialOptions(),
+                        MethodDuplicationPhase.Options.OptMethodDuplication, false);
+        Assert.assertNull(createSuites(disabledOptions).getHighTier().findPhase(MethodDuplicationPhase.class));
+        OptionValues enabledOptions = new OptionValues(getInitialOptions(), MethodDuplicationPhase.Options.OptMethodDuplication, true);
+        Assert.assertNotNull(createSuites(enabledOptions).getHighTier().findPhase(MethodDuplicationPhase.class));
     }
 
     @Test
@@ -199,6 +204,32 @@ public class PriorityInliningDefaultTest extends PriorityInliningTest {
             return 0;
         }
         return value + recursiveForceInlineTarget(value - 1);
+    }
+
+    @Test
+    public void testForceInliningDeletesSiblingInvoke() {
+        OptionValues options = new OptionValues(getInitialOptions(),
+                        AbstractPriorityInliningPhase.Options.PriorityForceInline, "constantFalseTarget,deletedForceInlineTarget",
+                        PriorityInliningPhase.Options.InlinedCompilerNodeLimit, 1,
+                        BytecodeParserOptions.InlineDuringParsing, false);
+        StructuredGraph graph = getGraph("forceInliningDeletesSiblingSnippet", options);
+        Assert.assertEquals(0, countInvokesTo(graph, getResolvedJavaMethod("constantFalseTarget")));
+        Assert.assertEquals(0, countInvokesTo(graph, getResolvedJavaMethod("deletedForceInlineTarget")));
+    }
+
+    public int forceInliningDeletesSiblingSnippet(int value) {
+        if (constantFalseTarget()) {
+            return deletedForceInlineTarget(value);
+        }
+        return value;
+    }
+
+    private static boolean constantFalseTarget() {
+        return false;
+    }
+
+    private static int deletedForceInlineTarget(int value) {
+        return value + 1;
     }
 
     @Test

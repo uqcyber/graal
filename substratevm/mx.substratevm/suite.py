@@ -350,6 +350,7 @@ suite = {
                 "SVM_CONFIGURE",
                 "SVM_GUEST_STAGING",
                 "SVM_SHARED",
+                "SVM_JVMCI_SHARED",
                 "espresso-shared:ESPRESSO_SVM",
             ],
             "requires" : [
@@ -436,6 +437,30 @@ suite = {
             },
             "javaCompliance" : "24+",
             "checkstyleVersion" : "10.21.0",
+            "annotationProcessors": [
+                "compiler:GRAAL_PROCESSOR",
+                "SVM_PROCESSOR",
+            ],
+            "workingSets": "SVM",
+            "jacoco" : "exclude",
+        },
+
+        "com.oracle.svm.core.auximage": {
+            "subDir": "src",
+            "sourceDirs": [
+                "src",
+            ],
+            "dependencies": [
+                "com.oracle.svm.core.genscavenge",
+            ],
+            "requiresConcealed" : {
+                "jdk.internal.vm.ci" : [
+                    "jdk.vm.ci.code",
+                    "jdk.vm.ci.meta",
+                ],
+            },
+            "checkstyle": "com.oracle.svm.core",
+            "javaCompliance" : "24+",
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -1301,6 +1326,19 @@ suite = {
             "jacoco" : "exclude",
         },
 
+        "com.oracle.svm.test.terminus": {
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "sdk:NATIVEIMAGE",
+            ],
+            "checkstyle": "com.oracle.svm.test",
+            "javaCompliance": "24+",
+            "workingSets": "SVM",
+            "testProject": True,
+            "jacoco": "exclude",
+        },
+
         "com.oracle.svm.test.debug": {
             "subDir": "src",
             "sourceDirs": ["src"],
@@ -1517,6 +1555,19 @@ suite = {
             "jacoco" : "exclude",
         },
 
+        "com.oracle.svm.jvmci.guest.staging": {
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "checkstyle": "com.oracle.svm.core",
+            "javaCompliance" : "21+",
+            "annotationProcessors": [
+                "compiler:GRAAL_PROCESSOR",
+                "SVM_PROCESSOR",
+            ],
+            "workingSets": "SVM",
+            "jacoco" : "exclude",
+        },
+
         "com.oracle.svm.shared": {
             "subDir": "src",
             "sourceDirs": ["src"],
@@ -1539,11 +1590,35 @@ suite = {
             "jacoco" : "exclude",
         },
 
+        "com.oracle.svm.jvmci.shared": {
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "sdk:NATIVEIMAGE",
+                "SVM_SHARED",
+            ],
+            "requiresConcealed" : {
+                "jdk.internal.vm.ci" : [
+                    "jdk.vm.ci.code",
+                    "jdk.vm.ci.meta",
+                ],
+            },
+            "checkstyle": "com.oracle.svm.core",
+            "javaCompliance" : "24+",
+            "annotationProcessors": [
+                "SVM_PROCESSOR",
+            ],
+            "workingSets": "SVM",
+            "jacoco" : "exclude",
+        },
+
         "com.oracle.svm.guest": {
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
                 "sdk:NATIVEIMAGE",
+                "SVM_GUEST_STAGING",
+                "SVM_SHARED",
             ],
             "requiresConcealed" : {
                 "java.base" : [
@@ -1559,16 +1634,12 @@ suite = {
             "jacoco" : "exclude",
         },
 
-        "com.oracle.svm.thirdparty": {
+        "com.oracle.svm.jvmci.guest": {
             "subDir": "src",
             "sourceDirs": ["src"],
-            "dependencies": [
-                "sdk:NATIVEIMAGE",
-            ],
             "checkstyle": "com.oracle.svm.core",
             "javaCompliance" : "21+",
             "annotationProcessors": [
-                "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
             ],
             "workingSets": "SVM",
@@ -1864,7 +1935,6 @@ suite = {
                 "com.oracle.svm.interpreter.metadata",
                 "com.oracle.svm.core.graal.aarch64",
                 "com.oracle.svm.graal",
-                "compiler:GRAAL",
             ],
             "requires" : [
                 "java.base"
@@ -1881,6 +1951,34 @@ suite = {
                 ],
             },
             "checkstyleVersion" : "10.21.0",
+            "javaCompliance": "24+",
+            "annotationProcessors": [
+                "compiler:GRAAL_PROCESSOR",
+                "substratevm:SVM_PROCESSOR",
+            ],
+            "workingSets": "SVM",
+            "jacoco": "exclude",
+        },
+
+        "com.oracle.svm.interpreter.ristretto": {
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "com.oracle.svm.interpreter",
+                "compiler:GRAAL",
+            ],
+            "requires" : [
+                "java.base"
+            ],
+            "requiresConcealed" : {
+                "jdk.internal.vm.ci" : [
+                    "jdk.vm.ci.meta",
+                    "jdk.vm.ci.meta.annotation",
+                    "jdk.vm.ci.code",
+                    "jdk.vm.ci.code.site",
+                ],
+            },
+            "checkstyle": "com.oracle.svm.interpreter",
             "javaCompliance": "24+",
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
@@ -1994,9 +2092,11 @@ suite = {
                 "com.oracle.svm.core.graal.riscv64",
                 "com.oracle.svm.core.posix",
                 "com.oracle.svm.core.windows",
+                "com.oracle.svm.core.auximage",
                 "com.oracle.svm.core.genscavenge",
                 "com.oracle.svm.core.g1",
                 "com.oracle.svm.jdwp.resident",
+                "com.oracle.svm.interpreter.ristretto",
             ],
             "distDependencies": [
                 "sdk:NATIVEIMAGE",
@@ -2008,6 +2108,8 @@ suite = {
                 "SVM_CONFIGURE",
                 "SVM_GUEST_STAGING",
                 "SVM_SHARED",
+                "SVM_JVMCI_GUEST_STAGING",
+                "SVM_JVMCI_SHARED",
                 "compiler:HOSTVMACCESS",
                 "espresso-shared:ESPRESSO_SVM",
             ],
@@ -2063,6 +2165,8 @@ suite = {
                     "transitive org.graalvm.nativeimage.pointsto",
                     "transitive org.graalvm.nativeimage.guest.staging",
                     "transitive org.graalvm.nativeimage.shared",
+                    "transitive org.graalvm.nativeimage.jvmci.shared",
+                    "org.graalvm.nativeimage.jvmci.guest.staging",
                     "org.graalvm.collections",
                     "org.graalvm.truffle.compiler",
                     "org.graalvm.nativeimage.configure",
@@ -2155,6 +2259,7 @@ suite = {
                             org.graalvm.nativeimage.foreign,
                             org.graalvm.nativeimage.guest,
                             org.graalvm.nativeimage.guest.staging,
+                            org.graalvm.nativeimage.jvmci.shared,
                             org.graalvm.nativeimage.junitsupport,
                             org.graalvm.nativeimage.llvm,
                             org.graalvm.nativeimage.pointsto,
@@ -2166,6 +2271,78 @@ suite = {
                 ],
                 "uses" : [
                     "org.graalvm.nativeimage.Platform",
+                ],
+            },
+            "noMavenJavadoc": True,
+            "maven": False,
+        },
+
+        "SVM_JVMCI_SHARED": {
+            "subDir": "src",
+            "description" : "Module for sharing JVMCI contracts between the builder and guest overlays",
+            "dependencies": [
+                "com.oracle.svm.jvmci.shared",
+            ],
+            "distDependencies": [
+                "sdk:NATIVEIMAGE",
+                "SVM_SHARED",
+            ],
+            "moduleInfo" : {
+                "name" : "org.graalvm.nativeimage.jvmci.shared",
+                "exports" : [
+                    """com.oracle.svm.jvmci.shared.code to
+                            jdk.graal.compiler,
+                            com.oracle.svm.svm_enterprise,
+                            com.oracle.truffle.enterprise.svm,
+                            org.graalvm.extraimage.builder,
+                            org.graalvm.nativeimage.builder,
+                            org.graalvm.nativeimage.foreign,
+                            org.graalvm.nativeimage.jvmci.guest,
+                            org.graalvm.nativeimage.jvmci.guest.staging,
+                            org.graalvm.nativeimage.llvm""",
+                    """com.oracle.svm.jvmci.shared.meta to
+                            com.oracle.svm.svm_enterprise,
+                            com.oracle.truffle.enterprise.svm,
+                            org.graalvm.extraimage.builder,
+                            org.graalvm.nativeimage.builder,
+                            org.graalvm.nativeimage.jvmci.guest,
+                            org.graalvm.nativeimage.jvmci.guest.staging,
+                            org.graalvm.nativeimage.llvm""",
+                ],
+                "opens" : [],
+                "requires": [
+                    "transitive org.graalvm.nativeimage",
+                    "transitive org.graalvm.nativeimage.shared",
+                    "transitive jdk.internal.vm.ci",
+                ],
+                "requiresConcealed": {
+                    "jdk.internal.vm.ci": [
+                        "jdk.vm.ci.code",
+                        "jdk.vm.ci.meta",
+                    ],
+                },
+            },
+            "noMavenJavadoc": True,
+            "maven": False,
+        },
+
+        "SVM_JVMCI_GUEST_STAGING": {
+            "subDir": "src",
+            "description" : "Transitional JVMCI guest staging module",
+            "dependencies": [
+                "com.oracle.svm.jvmci.guest.staging",
+            ],
+            "distDependencies": [
+                "SVM_JVMCI_SHARED",
+                "SVM_GUEST_STAGING",
+            ],
+            "moduleInfo" : {
+                "name" : "org.graalvm.nativeimage.jvmci.guest.staging",
+                "exports" : [],
+                "opens" : [],
+                "requires": [
+                    "transitive org.graalvm.nativeimage.jvmci.shared",
+                    "transitive org.graalvm.nativeimage.guest.staging",
                 ],
             },
             "noMavenJavadoc": True,
@@ -2236,6 +2413,29 @@ suite = {
             "maven": False,
         },
 
+        "SVM_JVMCI_GUEST": {
+            "subDir": "src",
+            "description" : "JVMCI guest context components",
+            "dependencies": [
+                "com.oracle.svm.jvmci.guest",
+            ],
+            "distDependencies": [
+                "SVM_JVMCI_GUEST_STAGING",
+                "SVM_GUEST",
+            ],
+            "moduleInfo" : {
+                "name" : "org.graalvm.nativeimage.jvmci.guest",
+                "exports" : [],
+                "opens" : [],
+                "requires": [
+                    "transitive org.graalvm.nativeimage.jvmci.guest.staging",
+                    "transitive org.graalvm.nativeimage.guest",
+                ],
+            },
+            "noMavenJavadoc": True,
+            "maven": False,
+        },
+
         "SVM_CAPNPROTO_RUNTIME" : {
             "subDir" : "src",
             "description" : "Capn Proto Runtime shaded module.",
@@ -2280,10 +2480,9 @@ suite = {
 
         "LIBRARY_SUPPORT": {
             "subDir": "src",
-            "description" : "Native Image feature-based support for important non-JDK libraries and languages (e.g. gson, Groovy)",
+            "description" : "Native Image feature-based support for important non-JDK languages (e.g. Groovy)",
             "dependencies": [
                 "com.oracle.svm.polyglot",
-                "com.oracle.svm.thirdparty",
             ],
             "distDependencies": [
                 "sdk:NATIVEIMAGE",
@@ -2885,6 +3084,17 @@ suite = {
             "SVM_CONFIGURE",
           ],
           "testDistribution" : True,
+        },
+
+        "SVM_TEST_TERMINUS": {
+          "subDir": "src",
+          "dependencies": [
+            "com.oracle.svm.test.terminus",
+          ],
+          "distDependencies": [
+            "sdk:NATIVEIMAGE",
+          ],
+          "testDistribution": True,
         },
 
         # Special test distribution used for testing inclusion of resources from jar files with a space in their name.

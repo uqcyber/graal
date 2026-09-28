@@ -175,7 +175,6 @@ import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.UserErrorSupportImpl;
 import com.oracle.svm.guest.staging.config.SubstrateGuestLibC;
 import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
-import com.oracle.svm.guest.staging.option.RuntimeOptionValidationSupport;
 import com.oracle.svm.guest.staging.option.RuntimeOptionValues;
 import com.oracle.svm.guest.staging.option.SharedLayerRuntimeOptionsValues;
 import com.oracle.svm.guest.staging.util.LayeredHostedImageHeapMapCollector;
@@ -239,6 +238,7 @@ import com.oracle.svm.hosted.image.NativeImageHeap;
 import com.oracle.svm.hosted.image.PreserveOptionsSupport;
 import com.oracle.svm.hosted.imagelayer.AccessImageSingletonFeature;
 import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
+import com.oracle.svm.hosted.imagelayer.LayeredFoldFeature;
 import com.oracle.svm.hosted.imagelayer.SVMImageLayerLoader;
 import com.oracle.svm.hosted.imagelayer.SVMImageLayerSnapshotUtil;
 import com.oracle.svm.hosted.imagelayer.SVMImageLayerWriter;
@@ -258,6 +258,7 @@ import com.oracle.svm.hosted.phases.EarlyConstantFoldLoadFieldPlugin;
 import com.oracle.svm.hosted.phases.GuestFoldInvocationPlugin;
 import com.oracle.svm.hosted.phases.ImageBuildStatisticsCounterPhase;
 import com.oracle.svm.hosted.phases.InjectedAccessorsPlugin;
+import com.oracle.svm.hosted.phases.PruneFrameStateValuesPhase;
 import com.oracle.svm.hosted.phases.SubstrateClassInitializationPlugin;
 import com.oracle.svm.hosted.phases.VerifyDeoptLIRFrameStatesPhase;
 import com.oracle.svm.hosted.phases.VerifyNoGuardsPhase;
@@ -326,9 +327,11 @@ import jdk.graal.compiler.phases.common.AbstractInliningPhase;
 import jdk.graal.compiler.phases.common.AddressLoweringPhase;
 import jdk.graal.compiler.phases.common.CanonicalizerPhase;
 import jdk.graal.compiler.phases.common.DeoptimizationGroupingPhase;
+import jdk.graal.compiler.phases.common.FinalCanonicalizerPhase;
 import jdk.graal.compiler.phases.common.FrameStateAssignmentPhase;
 import jdk.graal.compiler.phases.common.LoopSafepointInsertionPhase;
 import jdk.graal.compiler.phases.common.TransplantGraphsPhase;
+import jdk.graal.compiler.phases.schedule.SchedulePhase;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.phases.tiers.LowTierContext;
 import jdk.graal.compiler.phases.tiers.MidTierContext;
@@ -550,7 +553,7 @@ public class NativeImageGenerator {
      * Executes the image build. Only one image can be built with this generator.
      */
     public void run(Map<ResolvedJavaMethod, CEntryPointData> entryPoints,
-                    ResolvedJavaMethod javaMainMethod, String imageName,
+                    ResolvedJavaType javaMainClass, ResolvedJavaMethod javaMainMethod, String imageName,
                     NativeImageKind k,
                     SubstitutionProcessor harnessSubstitutions,
                     EconomicSet<String> allOptionNames, TimerCollection timerCollection) {
@@ -599,7 +602,6 @@ public class NativeImageGenerator {
                  */
                 ImageSingletons.add(VMRuntimeSupport.class, runtimeSupport);
                 ImageSingletons.add(RuntimeSupport.class, runtimeSupport);
-                ImageSingletons.add(RuntimeOptionValidationSupport.class, new RuntimeOptionValidationSupport());
             }
             if (ImageLayerBuildingSupport.lastImageBuild()) {
                 ImageSingletons.add(RuntimeOptionValues.class, new RuntimeOptionValues(optionProvider.getRuntimeValues(), allOptionNames));
@@ -608,7 +610,7 @@ public class NativeImageGenerator {
             }
             ImageSingletons.add(TemporaryBuildDirectoryProvider.class, tempDirectoryProvider);
 
-            doRun(entryPoints, javaMainMethod, imageName, k, harnessSubstitutions);
+            doRun(entryPoints, javaMainClass, javaMainMethod, imageName, k, harnessSubstitutions);
         } finally {
             reporter.ensureCreationStageEndCompleted();
         }
@@ -647,7 +649,7 @@ public class NativeImageGenerator {
      * @param javaMainMethod application Java main method to install before analysis, or {@code null}
      *            when the selected entry point already is a C entry point
      */
-    protected void doRun(Map<ResolvedJavaMethod, CEntryPointData> entryPoints, ResolvedJavaMethod javaMainMethod, String imageName, NativeImageKind k,
+    protected void doRun(Map<ResolvedJavaMethod, CEntryPointData> entryPoints, ResolvedJavaType javaMainClass, ResolvedJavaMethod javaMainMethod, String imageName, NativeImageKind k,
                     SubstitutionProcessor harnessSubstitutions) {
         List<HostedMethod> hostedEntryPoints = new ArrayList<>();
 
@@ -655,7 +657,7 @@ public class NativeImageGenerator {
 
         try (DebugContext debug = new Builder(options, new GraalDebugHandlersFactory(GuestAccess.get().getSnippetReflection())).build();
                         DebugCloseable _ = () -> featureHandler.forEachFeature(Feature::cleanup)) {
-            setupNativeImage(options, entryPoints, javaMainMethod, imageName, harnessSubstitutions, debug);
+            setupNativeImage(options, entryPoints, javaMainClass, javaMainMethod, imageName, harnessSubstitutions, debug);
 
             boolean returnAfterAnalysis = runPointsToAnalysis(imageName, options, debug);
             if (returnAfterAnalysis) {
@@ -938,6 +940,10 @@ public class NativeImageGenerator {
                 BeforeAnalysisAccessImpl config = new BeforeAnalysisAccessImpl(featureHandler, loader, bb, nativeLibraries, debug);
                 ServiceCatalogSupport.singleton().enableServiceCatalogMapTransformer(config);
                 featureHandler.forEachFeature(feature -> feature.beforeAnalysis(config));
+                if (ImageLayerBuildingSupport.buildingExtensionLayer()) {
+                    /* Fold resolution can observe state initialized by any beforeAnalysis callback. */
+                    LayeredFoldFeature.singleton().preparePendingApplicationFolds();
+                }
                 bb.getHostVM().checkWellKnownStableFieldsBeforeAnalysis(bb);
                 ServiceCatalogSupport.singleton().seal();
                 bb.getHostVM().getClassInitializationSupport().sealConfiguration();
@@ -1047,7 +1053,7 @@ public class NativeImageGenerator {
      * Installs image-builder state, including Java-main support when {@code javaMainMethod} is not
      * {@code null}, before analysis starts.
      */
-    protected void setupNativeImage(OptionValues options, Map<ResolvedJavaMethod, CEntryPointData> entryPoints, ResolvedJavaMethod javaMainMethod,
+    protected void setupNativeImage(OptionValues options, Map<ResolvedJavaMethod, CEntryPointData> entryPoints, ResolvedJavaType javaMainClass, ResolvedJavaMethod javaMainMethod,
                     String imageName, SubstitutionProcessor harnessSubstitutions, DebugContext debug) {
         try (Indent _ = debug.logAndIndent("setup native-image builder")) {
             try (StopTimer _ = TimerCollection.createTimerAndStart(TimerCollection.Registry.SETUP)) {
@@ -1062,7 +1068,7 @@ public class NativeImageGenerator {
                 FutureDefaultsOptions.parseAndVerifyOptions();
                 GuestImageGeneratorSupport.installArgsSupport();
                 if (javaMainMethod != null) {
-                    installJavaMainSupport(javaMainMethod);
+                    installJavaMainSupport(javaMainClass, javaMainMethod);
                 }
 
                 Providers originalProviders = GuestAccess.get().getProviders();
@@ -1270,8 +1276,8 @@ public class NativeImageGenerator {
     /**
      * Installs the Java-main support selected by this image generator.
      */
-    protected void installJavaMainSupport(ResolvedJavaMethod javaMainMethod) {
-        GuestImageGeneratorSupport.installJavaMainSupport(javaMainMethod);
+    protected void installJavaMainSupport(ResolvedJavaType javaMainClass, ResolvedJavaMethod javaMainMethod) {
+        GuestImageGeneratorSupport.installJavaMainSupport(javaMainClass, javaMainMethod);
     }
 
     /**
@@ -1882,6 +1888,19 @@ public class NativeImageGenerator {
         midTier.findPhase(LoopSafepointInsertionPhase.class).set(new SubstrateSafepointInsertionPhase());
 
         if (hosted) {
+            /*
+             * Native debug info supports unavailable locals. Preserve all values only for
+             * source-level debugging; the phase itself restricts pruning to eligible handler roots.
+             * Keep this guard consistent with FrameInfoRetention.canPruneFrameStateValues.
+             */
+            if (!SubstrateOptions.getSourceLevelDebug()) {
+                var retentionPosition = lowTier.findPhase(FinalCanonicalizerPhase.class);
+                if (retentionPosition == null) {
+                    retentionPosition = lowTier.findPhase(SchedulePhase.FinalSchedulePhase.class);
+                }
+                retentionPosition.previous();
+                retentionPosition.add(new PruneFrameStateValuesPhase());
+            }
             lowTier.appendPhase(new VerifyNoGuardsPhase());
 
             /* Remove phases that are not suitable for AOT compilation. */

@@ -123,7 +123,10 @@ import jdk.graal.compiler.lir.asm.DataBuilder;
 import jdk.graal.compiler.lir.asm.FrameContext;
 import jdk.graal.compiler.lir.framemap.FrameMap;
 import jdk.graal.compiler.lir.phases.LIRSuites;
+import jdk.graal.compiler.core.phases.MidTier;
 import jdk.graal.compiler.loop.phases.LoopPartialUnrollPhase;
+import jdk.graal.compiler.loop.phases.NonCountedStripMiningPhase;
+import jdk.graal.compiler.loop.phases.LoopRotationPhase;
 import jdk.graal.compiler.nodes.CallTargetNode;
 import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.EncodedGraph;
@@ -147,6 +150,7 @@ import jdk.graal.compiler.phases.OptimisticOptimizations;
 import jdk.graal.compiler.phases.Phase;
 import jdk.graal.compiler.phases.PhaseSuite;
 import jdk.graal.compiler.phases.common.CanonicalizerPhase;
+import jdk.graal.compiler.phases.common.DominatorBasedGlobalValueNumberingPhase;
 import jdk.graal.compiler.phases.common.ExpandLogicPhase;
 import jdk.graal.compiler.phases.common.FixReadsPhase;
 import jdk.graal.compiler.phases.common.LoweringPhase;
@@ -164,6 +168,7 @@ import jdk.graal.compiler.serviceprovider.GraalServices;
 import jdk.graal.compiler.vector.phases.LoopVectorizationPhase;
 import jdk.graal.compiler.vector.phases.VectorLoweringPhaseSuite;
 import jdk.graal.compiler.vector.replacements.VectorIntrinsics;
+import jdk.graal.compiler.virtual.phases.ea.FieldLoadRefreshPhase;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.site.Call;
 import jdk.vm.ci.code.site.ConstantReference;
@@ -567,6 +572,12 @@ public class CompileQueue {
         if (!LoopVectorizationPhase.Options.VectorizeLoops.hasBeenSet(hostedOptions)) {
             midTier.removeSubTypePhases(LoopVectorizationPhase.class);
         }
+        if (!MidTier.Options.StripMineNonCountedLoops.hasBeenSet(hostedOptions)) {
+            midTier.removeSubTypePhases(NonCountedStripMiningPhase.class);
+        }
+        if (!LoopRotationPhase.Options.LoopRotation.hasBeenSet(hostedOptions)) {
+            midTier.removeSubTypePhases(LoopRotationPhase.class);
+        }
         return tunedSuites;
     }
 
@@ -877,7 +888,7 @@ public class CompileQueue {
             super(AnalysisParsedGraph.HOST_ARCHITECTURE, graph, providers, null,
                             null,
                             new InlineInvokePlugin[]{inliningPlugin},
-                            null, null, null, null,
+                            null, null, null,
                             new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), true, false);
         }
 
@@ -1305,8 +1316,12 @@ public class CompileQueue {
         return SubstrateOptions.optimizationLevel() == SubstrateOptions.OptimizationLevel.O2;
     }
 
-    protected OptionValues getCustomizedOptions(@SuppressWarnings("unused") HostedMethod method, DebugContext debug) {
+    protected OptionValues getCustomizedOptions(HostedMethod method, DebugContext debug) {
         OptionValues customizedOptions = debug.getOptions();
+        if (InterpreterSupport.isEnabled() && InterpreterSupport.singleton().isInterpreterBytecodeHandlerStub(method)) {
+            // Keep handler reads fixed and branch-local to avoid increasing register pressure.
+            customizedOptions = new OptionValues(customizedOptions, GraalOptions.OptFloatingReads, false, GraalOptions.OptDeduplicateReadsAcrossBranches, false);
+        }
         if (omitPriorityInliningTuning()) {
             return customizedOptions;
         }
@@ -1583,6 +1598,16 @@ public class CompileQueue {
                         suites = createSuitesForRegularCompile(graph, regularSuites);
                         lirSuites = regularLIRSuites;
                     }
+                }
+
+                if (InterpreterSupport.isEnabled() && InterpreterSupport.singleton().isInterpreterBytecodeHandlerStub(method)) {
+                    // Suites are shared between compilation threads; specialize only this stub.
+                    suites = suites.copy();
+                    // Keep reloads after calls instead of extending their live ranges through GVN.
+                    suites.getHighTier().removeSubTypePhases(DominatorBasedGlobalValueNumberingPhase.class);
+                    suites.getMidTier().removeSubTypePhases(DominatorBasedGlobalValueNumberingPhase.class);
+                    suites.getLowTier().removeSubTypePhases(DominatorBasedGlobalValueNumberingPhase.class);
+                    suites.getHighTier().insertBeforePhase(DeadStoreRemovalPhase.class, new FieldLoadRefreshPhase(CanonicalizerPhase.create()));
                 }
 
                 CompilationResult result = backend.newCompilationResult(compilationIdentifier, method.getQualifiedName());

@@ -34,7 +34,7 @@ suite = {
                 "name": "graal-nodejs",
                 "subdir": True,
                 "dynamic": True,
-                "version": "a669535616e2f9668d32314c329c33598528770a",
+                "version": "ee5c61bbefbbefcbc7f719d27a4cae14274894b0",
                 "urls" : [
                     {"url" : "https://github.com/graalvm/graaljs.git", "kind" : "git"},
                 ]
@@ -43,14 +43,14 @@ suite = {
                 "name": "graal-js",
                 "subdir": True,
                 "dynamic": True,
-                "version": "a669535616e2f9668d32314c329c33598528770a",
+                "version": "ee5c61bbefbbefcbc7f719d27a4cae14274894b0",
                 "urls": [
                     {"url": "https://github.com/graalvm/graaljs.git", "kind" : "git"},
                 ]
             },
             {
                 "name": "graalpython",
-                "version": "9820abaee77e8249e27a0021db0cb36ef0a5eeb1",
+                "version": "6e042e41d00f820e42e7ebbc3f938c2488b85dbf",
                 "dynamic": True,
                 "urls": [
                     {"url": "https://github.com/graalvm/graalpython.git", "kind": "git"},
@@ -68,7 +68,7 @@ suite = {
             {
                 "name": "barista",
                 "subdir": False,
-                "version": "0.7.9",
+                "version": "0.8.1",
                 "foreign": True, # barista is not an mx suite
                 "dynamic": True,
                 "urls": [

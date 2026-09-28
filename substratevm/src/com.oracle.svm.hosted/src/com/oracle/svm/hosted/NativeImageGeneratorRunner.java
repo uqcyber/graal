@@ -315,7 +315,11 @@ public class NativeImageGeneratorRunner {
         }
     }
 
-    private static VMAccess getVmAccess(VMAccess.Builder builder, String[] classpath, String[] modulepath, HostedOptionParser parser) {
+    private static VMAccess getVmAccess(VMAccess.Builder builder, String[] classpath, String[] originalModulePath, HostedOptionParser parser) {
+        boolean jvmciGuestEnabled = SubstrateOptions.EnableJVMCIGuest.getValue(new OptionValues(parser.getHostedValues()));
+
+        final String[] modulepath = filterModulePath(originalModulePath, jvmciGuestEnabled, builder.isFullyIsolated());
+
         builder.classPath(List.of(classpath));
         builder.modulePath(List.of(modulepath));
 
@@ -337,15 +341,38 @@ public class NativeImageGeneratorRunner {
             // GR-73131 will make this non-Espresso specific.
             EconomicMap<OptionKey<?>, Object> options = parser.getHostedValues();
             @SuppressWarnings("unchecked")
-            List<String> addExports = ((LocatableMultiOptionValue<String>) options.get(NativeImageClassLoaderOptions.AddExports)).values();
+            List<String> addExports = new ArrayList<>(((LocatableMultiOptionValue<String>) options.get(NativeImageClassLoaderOptions.AddExports)).values());
+            addExports.add("java.base/jdk.internal.module=org.graalvm.nativeimage.shared");
             builder.vmOption("java.AddExports=" + String.join(File.pathSeparator, addExports));
 
-            // Guest version of -XX:+EnableJVMCI that is currently passed by
-            // the driver to the builder VM as part of the "graal compiler flags".
-            // See `mx_substratevm.py:compute_graal_compiler_flags_map`
-            builder.vmOption("java.EnableJVMCI=true");
+            if (jvmciGuestEnabled) {
+                // Guest version of -XX:+EnableJVMCI that is currently passed by
+                // the driver to the builder VM as part of the "graal compiler flags".
+                // See `mx_substratevm.py:compute_graal_compiler_flags_map`
+                builder.vmOption("java.EnableJVMCI=true");
+            }
         }
         return builder.build();
+    }
+
+    private static String[] filterModulePath(String[] originalModulePath, boolean jvmciGuestEnabled, boolean isFullyIsolated) {
+        if (!isFullyIsolated || jvmciGuestEnabled) {
+            // no filtering
+            return originalModulePath;
+        } else {
+            // filter out jvmci guest modules if JVMCI is not enabled
+            final String[] modulepath = Arrays.stream(originalModulePath).filter(s -> HostedModuleSupport.JVMCI_GUEST_JARS.stream().noneMatch(s::endsWith)).toArray(String[]::new);
+            int expectedRemovalCount = HostedModuleSupport.JVMCI_GUEST_JARS.size();
+            int actualRemovalCount = originalModulePath.length - modulepath.length;
+            if (actualRemovalCount != expectedRemovalCount) {
+                String expectedJars = HostedModuleSupport.JVMCI_GUEST_JARS.stream().sorted().collect(Collectors.joining("\n  "));
+                throw VMError.shouldNotReachHere(
+                                "Expected JVMCI guest modules to be removed from module path (expected removal count: %d, actual removal count: %d); " +
+                                                "expected JVMCI guest jars:\n  %s\nmodule path:\n  %s",
+                                expectedRemovalCount, actualRemovalCount, expectedJars, String.join("\n  ", originalModulePath));
+            }
+            return modulepath;
+        }
     }
 
     /**
@@ -541,9 +568,12 @@ public class NativeImageGeneratorRunner {
             if (imageName.isEmpty()) {
                 throw UserError.abort("No output file name specified. Use '%s'", SubstrateOptionsParser.commandArgument(SubstrateOptions.Name, "<output-file>"));
             }
+            Path imageNamePath = Path.of(imageName);
+            assert imageNamePath.equals(imageNamePath.getFileName()) : "Expected a simple filename for -H:Name, got: " + imageName;
             try {
                 Map<ResolvedJavaMethod, CEntryPointData> entryPoints = new HashMap<>();
                 MainEntryPoint mainEntryPoint = null;
+                ResolvedJavaType applicationMainClass = null;
                 ResolvedJavaMethod applicationMainMethod = null;
 
                 NativeImageKind imageKind = null;
@@ -585,15 +615,19 @@ public class NativeImageGeneratorRunner {
                     GuestAccess access = GuestAccess.get();
                     try {
                         ResolvedJavaType buildTimeSupport = access.lookupType("com.oracle.svm.guest.hosted.BuildTimeSupport");
-                        ResolvedJavaMethod getMainClassFromModule = access.lookupMethod(buildTimeSupport, "getMainEntryPointMethod",
+                        ResolvedJavaMethod getMainEntryPointInfoMethod = access.lookupMethod(buildTimeSupport, "getMainEntryPointInfo",
                                         String.class,
                                         String.class,
                                         String.class);
-                        JavaConstant res = access.invokeStatic(getMainClassFromModule,
+                        JavaConstant mainEntryPointInfo = access.invokeStatic(getMainEntryPointInfoMethod,
                                         access.asGuestString(className),
                                         access.asGuestString(moduleName),
                                         access.asGuestString(mainEntryPointName));
-                        mainEntryMethod = access.asResolvedJavaMethod(res);
+                        ResolvedJavaType mainEntryPointInfoType = access.lookupType("com.oracle.svm.guest.hosted.BuildTimeSupport$MainEntryPointInfo");
+                        ResolvedJavaMethod mainClassAccessor = access.lookupMethod(mainEntryPointInfoType, "mainClass");
+                        ResolvedJavaMethod mainMethodAccessor = access.lookupMethod(mainEntryPointInfoType, "mainMethod");
+                        applicationMainClass = access.getProviders().getConstantReflection().asJavaType(access.invoke(mainClassAccessor, mainEntryPointInfo));
+                        mainEntryMethod = access.asResolvedJavaMethod(access.invoke(mainMethodAccessor, mainEntryPointInfo));
                     } catch (InvocationException ex) {
                         if (ex.getCause() instanceof ClassNotFoundException cnfe && cnfe.getMessage().equals(className)) {
                             throw UserError.abort(classLoader.getMainClassNotFoundErrorMessage(className));
@@ -622,7 +656,7 @@ public class NativeImageGeneratorRunner {
                 }
 
                 generator = createImageGenerator(classLoader, optionParser, mainEntryPoint, reporter);
-                generator.run(entryPoints, applicationMainMethod, imageName, imageKind, SubstitutionProcessor.IDENTITY, optionParser.getRuntimeOptionNames(), timerCollection);
+                generator.run(entryPoints, applicationMainClass, applicationMainMethod, imageName, imageKind, SubstitutionProcessor.IDENTITY, optionParser.getRuntimeOptionNames(), timerCollection);
                 buildOutcome = BuildOutcome.SUCCESSFUL;
             } finally {
                 if (!buildOutcome.successful()) {

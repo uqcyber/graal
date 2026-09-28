@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -79,7 +79,9 @@ import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -125,7 +127,7 @@ import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.ProtectionDomainSupport;
 import com.oracle.svm.core.jdk.Resources;
 import com.oracle.svm.core.meta.MethodRef;
-import com.oracle.svm.core.meta.SharedType;
+import com.oracle.svm.jvmci.shared.meta.SharedType;
 import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.metaspace.Metaspace;
 import com.oracle.svm.core.reflect.CremaSerializationConstructorAccessor;
@@ -156,6 +158,7 @@ import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.GuestAnnotationAccess;
+import com.oracle.svm.util.JVMCIReflectionUtil;
 
 import jdk.graal.compiler.api.directives.GraalDirectives;
 import jdk.graal.compiler.core.common.NumUtil;
@@ -172,6 +175,7 @@ import jdk.internal.reflect.CallerSensitiveAdapter;
 import jdk.internal.reflect.ConstructorAccessor;
 import jdk.internal.reflect.FieldAccessor;
 import jdk.internal.reflect.ReflectionFactory;
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import sun.reflect.annotation.AnnotationType;
@@ -201,6 +205,21 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
 
     @Substitute //
     static final Class<?>[] EMPTY_CLASS_ARRAY = new Class<?>[0];
+
+    /** Shared cache for hubs whose runtime-visible annotation set is known to be empty. */
+    @Platforms(Platform.HOSTED_ONLY.class) //
+    private static final Object EMPTY_ANNOTATION_DATA = createEmptyAnnotationData();
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private static Object createEmptyAnnotationData() {
+        GuestAccess access = GuestAccess.get();
+        var metaAccess = access.getProviders().getMetaAccess();
+        ResolvedJavaType annotationDataType = access.lookupType("java.lang.Class$AnnotationData");
+        var constructor = JVMCIReflectionUtil.getDeclaredConstructor(metaAccess, annotationDataType, Map.class, Map.class, int.class);
+        var emptyMapMethod = JVMCIReflectionUtil.getUniqueDeclaredMethod(metaAccess, access.lookupType(Collections.class), "emptyMap");
+        JavaConstant emptyMap = access.invokeStatic(emptyMapMethod);
+        return access.asHostObject(Object.class, access.invoke(constructor, null, emptyMap, emptyMap, JavaConstant.forInt(0)));
+    }
 
     /** Marker value for {@link DynamicHubCompanion#classLoader}. */
     static final Object NO_CLASS_LOADER = new Object();
@@ -663,7 +682,9 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
         public Object[] get() {
             try {
                 Method values = getMethod("values");
-                values.setAccessible(true);
+                // Class.getEnumConstants is a trusted java.base operation and must invoke values()
+                // even when the enum package is not exported or open.
+                SubstrateUtil.cast(values, Target_java_lang_reflect_AccessibleObject.class).override = true;
                 return (Object[]) values.invoke(null);
             } catch (InvocationTargetException | NoSuchMethodException | IllegalAccessException | NullPointerException | ClassCastException ex) {
                 // These can happen when users concoct enum-like classes
@@ -843,6 +864,12 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
         assert companion.hubMetadata == null;
         companion.hubMetadata = new ImageDynamicHubMetadata(enclosingMethodInfoIndex, annotationsIndex, typeAnnotationsIndex, classesEncodingIndex, permittedSubclassesEncodingIndex,
                         nestMembersEncodingIndex, signersEncodingIndex);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void setEmptyAnnotationData() {
+        assert companion.annotationData == null;
+        companion.annotationData = EMPTY_ANNOTATION_DATA;
     }
 
     private DynamicHubMetadata hubMetadata() {
@@ -1613,8 +1640,7 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
     }
 
     @Substitute
-    @CallerSensitive
-    public Method[] getMethods() throws SecurityException {
+    public Method[] getMethods() {
         checkClassFlag(ALL_METHODS_FLAG, "getMethods");
         return copyMethods(privateGetPublicMethods());
     }
@@ -1626,7 +1652,7 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
     }
 
     @Substitute
-    public Field getField(String fieldName) throws NoSuchFieldException, SecurityException {
+    public Field getField(String fieldName) throws NoSuchFieldException {
         Objects.requireNonNull(fieldName);
         Field field = getField0(fieldName);
         checkField(fieldName, field, true);
@@ -1788,7 +1814,7 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
     private native Constructor<?> getConstructor(Class<?>... parameterTypes);
 
     @Substitute
-    public Class<?>[] getDeclaredClasses() throws SecurityException {
+    public Class<?>[] getDeclaredClasses() {
         checkClassFlag(ALL_DECLARED_CLASSES_FLAG, "getDeclaredClasses");
         return getDeclaredClasses0();
     }
@@ -1828,8 +1854,7 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
     }
 
     @Substitute
-    @CallerSensitive
-    public Method[] getDeclaredMethods() throws SecurityException {
+    public Method[] getDeclaredMethods() {
         checkClassFlag(ALL_DECLARED_METHODS_FLAG, "getDeclaredMethods");
         return copyMethods(privateGetDeclaredMethods(false));
     }
@@ -1844,7 +1869,7 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
      * @see #filterFields(Field...)
      */
     @Substitute
-    public Field getDeclaredField(String fieldName) throws NoSuchFieldException, SecurityException {
+    public Field getDeclaredField(String fieldName) throws NoSuchFieldException {
         Objects.requireNonNull(fieldName);
         Field field = searchFields(privateGetDeclaredFields(false), fieldName);
         checkField(fieldName, field, false);
@@ -1852,8 +1877,7 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
     }
 
     @Substitute
-    @CallerSensitive
-    public Method getDeclaredMethod(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException, SecurityException {
+    public Method getDeclaredMethod(String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
         Objects.requireNonNull(methodName);
         Method method = searchMethods(privateGetDeclaredMethods(false), methodName, parameterTypes);
         checkMethod(methodName, parameterTypes, method, false);
@@ -2016,15 +2040,12 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
     private static native Class<?> forName(String className, Class<?> caller) throws ClassNotFoundException;
 
     @KeepOriginal
-    @CallerSensitive
     private static native Class<?> forName(Module module, String className);
 
     @KeepOriginal
-    @CallerSensitive
     private static native Class<?> forName(String name, boolean initialize, ClassLoader loader);
 
     @Substitute
-    @CallerSensitiveAdapter
     @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-25+16/src/java.base/share/native/libjava/Class.c#L97-L144")
     @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L803-L821")
     @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-25+16/src/hotspot/share/prims/jvm.cpp#L3303-L3312")
@@ -2603,7 +2624,7 @@ public final class DynamicHub implements AnnotatedElement, java.lang.reflect.Typ
     private static final class AnnotationDataAccessors {
         @SuppressWarnings("unused")
         private static Target_java_lang_Class_AnnotationData getAnnotationData(DynamicHub that) {
-            return that.companion.annotationData;
+            return SubstrateUtil.cast(that.companion.annotationData, Target_java_lang_Class_AnnotationData.class);
         }
     }
 

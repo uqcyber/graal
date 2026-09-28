@@ -51,9 +51,10 @@ import com.oracle.svm.core.code.FrameInfoQueryResult.ValueType;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.encoder.SymbolEncoder;
 import com.oracle.svm.core.hub.LayoutEncoding;
-import com.oracle.svm.core.meta.SharedField;
-import com.oracle.svm.core.meta.SharedMethod;
-import com.oracle.svm.core.meta.SharedType;
+import com.oracle.svm.core.hub.DynamicHubProvider;
+import com.oracle.svm.jvmci.shared.meta.SharedField;
+import com.oracle.svm.jvmci.shared.meta.SharedMethod;
+import com.oracle.svm.jvmci.shared.meta.SharedType;
 import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.util.ByteArrayReader;
 import com.oracle.svm.core.util.HostedStringDeduplication;
@@ -88,6 +89,65 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class FrameInfoEncoder {
 
+    /**
+     * Specifies which local values and operand-stack values must survive compilation for runtime
+     * frame consumers. Retention is decided per Java slot using the frame's method and immediate
+     * inlined caller. Local and operand-stack indices are relative to their respective regions;
+     * values of kind long or double occupy two slots. Monitor values are always retained
+     * independently of this policy.
+     */
+    public interface ValueRetentionPolicy {
+        ValueRetentionPolicy ALL = new ValueRetentionPolicy() {
+            @Override
+            public boolean retainLocalValue(ResolvedJavaMethod method, ResolvedJavaMethod caller, int localIndex) {
+                return true;
+            }
+
+            @Override
+            public boolean retainStackOperand(ResolvedJavaMethod method, ResolvedJavaMethod caller, int stackIndex) {
+                return true;
+            }
+        };
+
+        /**
+         * Determines whether to retain the value in a local-variable slot.
+         *
+         * @param method the method whose frame contains the local
+         * @param caller the immediate inlined caller, or {@code null} for the compilation root
+         * @param localIndex the zero-based Java local-variable slot index
+         * @return {@code true} if the local value must be retained
+         */
+        boolean retainLocalValue(ResolvedJavaMethod method, ResolvedJavaMethod caller, int localIndex);
+
+        /**
+         * Determines whether to retain the value in an operand-stack slot.
+         *
+         * @param method the method whose frame contains the operand
+         * @param caller the immediate inlined caller, or {@code null} for the compilation root
+         * @param stackIndex the zero-based Java slot index from the bottom of the operand stack,
+         *            excluding local-variable slots
+         * @return {@code true} if the stack operand must be retained
+         */
+        boolean retainStackOperand(ResolvedJavaMethod method, ResolvedJavaMethod caller, int stackIndex);
+
+        /**
+         * Determines whether to retain an entry in {@link BytecodeFrame#values}. Entries are ordered
+         * as local-variable slots, operand-stack slots, then monitor values. Monitors are always
+         * retained.
+         *
+         * @param frame the frame containing the value
+         * @param valueIndex the index in {@link BytecodeFrame#values}
+         * @return {@code true} if the value must be retained
+         */
+        default boolean retainValue(BytecodeFrame frame, int valueIndex) {
+            if (valueIndex < frame.numLocals) {
+                return retainLocalValue(frame.getMethod(), frame.caller() == null ? null : frame.caller().getMethod(), valueIndex);
+            }
+            return valueIndex >= frame.numLocals + frame.numStack ||
+                            retainStackOperand(frame.getMethod(), frame.caller() == null ? null : frame.caller().getMethod(), valueIndex - frame.numLocals);
+        }
+    }
+
     public abstract static class Customization {
 
         /**
@@ -104,13 +164,29 @@ public class FrameInfoEncoder {
         protected abstract boolean storeDeoptTargetMethod();
 
         /**
-         * Returns true if the given local values should be encoded within the debugInfo.
+         * Returns true if the debugInfo should carry value information. The separate
+         * {@link #getValueRetentionPolicy} contract specifies which locals and operand-stack values survive
+         * compilation.
          *
          * @param method The method that contains the debugInfo.
          * @param infopoint The infopoint whose debugInfo that is considered for inclusion.
          * @param isDeoptEntry whether this infopoint is tied to a deoptimization entrypoint.
          */
         protected abstract boolean includeLocalValues(ResolvedJavaMethod method, Infopoint infopoint, boolean isDeoptEntry);
+
+        /**
+         * Returns the retention policy for the infopoint's entire inlined frame chain. Compilation
+         * must apply this policy before register allocation; encoding only asserts that values
+         * excluded by the policy have been removed. The default policy retains all values.
+         *
+         * @param method the compilation root containing the infopoint
+         * @param infopoint the infopoint whose frame values are being encoded
+         * @param isDeoptEntry whether the infopoint is a deoptimization entry point
+         */
+        @SuppressWarnings("unused")
+        protected ValueRetentionPolicy getValueRetentionPolicy(ResolvedJavaMethod method, Infopoint infopoint, boolean isDeoptEntry) {
+            return ValueRetentionPolicy.ALL;
+        }
 
         /**
          * Returns true if the given debugInfo is a valid entry point for deoptimization (and not
@@ -513,7 +589,7 @@ public class FrameInfoEncoder {
 
         DebugInfo debugInfo = infopoint.debugInfo;
         FrameData data = new FrameData(debugInfo, totalFrameSize, new ValueInfo[countVirtualObjects(debugInfo)][], false);
-        initializeFrameInfo(data.frame, data, debugInfo.frame(), isDeoptEntry, includeLocalValues);
+        initializeFrameInfo(data.frame, data, debugInfo.frame(), isDeoptEntry, includeLocalValues, customization.getValueRetentionPolicy(method, infopoint, isDeoptEntry));
 
         List<CompressedFrameData> frameSlice = includeLocalValues ? null : new ArrayList<>();
         BytecodeFrame bytecodeFrame = data.debugInfo.frame();
@@ -591,11 +667,11 @@ public class FrameInfoEncoder {
         }
     }
 
-    private void initializeFrameInfo(FrameInfoQueryResult frameInfo, FrameData data, BytecodeFrame frame, boolean isDeoptEntry, boolean needLocalValues) {
+    private void initializeFrameInfo(FrameInfoQueryResult frameInfo, FrameData data, BytecodeFrame frame, boolean isDeoptEntry, boolean needLocalValues, ValueRetentionPolicy retention) {
         if (frame.caller() != null) {
             assert !isDeoptEntry : "Deoptimization entry point information for caller frames is not encoded";
             frameInfo.caller = new FrameInfoQueryResult();
-            initializeFrameInfo(frameInfo.caller, data, frame.caller(), false, needLocalValues);
+            initializeFrameInfo(frameInfo.caller, data, frame.caller(), false, needLocalValues, retention);
         }
         frameInfo.virtualObjects = data.virtualObjects;
         frameInfo.encodedBci = encodeBci(frame.getBCI(), FrameState.StackState.of(frame));
@@ -631,6 +707,7 @@ public class FrameInfoEncoder {
             frameInfo.numLocks = frame.numLocks;
 
             JavaValue[] values = frame.values;
+            assert verifyValueRetention(frame, retention);
             int numValues = 0;
             for (int i = values.length; --i >= 0;) {
                 if (!ValueUtil.isIllegalJavaValue(values[i])) {
@@ -648,6 +725,13 @@ public class FrameInfoEncoder {
         frameInfo.valueInfos = valueInfos;
 
         ImageSingletons.lookup(Counters.class).frameCount.inc();
+    }
+
+    private static boolean verifyValueRetention(BytecodeFrame frame, ValueRetentionPolicy retention) {
+        for (int i = 0; i < frame.values.length; i++) {
+            assert retention.retainValue(frame, i) || ValueUtil.isIllegalJavaValue(frame.values[i]) : "Unexpected retained frame value: " + frame + " at " + i;
+        }
+        return true;
     }
 
     public static JavaKind getFrameValueKind(BytecodeFrame frame, int valueIndex) {
@@ -769,10 +853,10 @@ public class FrameInfoEncoder {
         ArrayList<ValueInfo> valueList = new ArrayList<>(virtualObject.getValues().length + 4);
         SharedType type = (SharedType) virtualObject.getType();
         /* The first element is the hub of the virtual object. */
-        valueList.add(makeValueInfo(data, JavaKind.Object, constantAccess.forObject(type.getHub(), false), isDeoptEntry));
+        valueList.add(makeValueInfo(data, JavaKind.Object, constantAccess.forObject(DynamicHubProvider.getHub(type), false), isDeoptEntry));
 
         ObjectLayout objectLayout = ObjectLayout.singleton();
-        assert type.isArray() == LayoutEncoding.isArray(type.getHub().getLayoutEncoding()) : "deoptimization code uses layout encoding to determine if type is an array";
+        assert type.isArray() == LayoutEncoding.isArray(DynamicHubProvider.getHub(type).getLayoutEncoding()) : "deoptimization code uses layout encoding to determine if type is an array";
         if (type.isArray()) {
             /* We do not know the final length yet, so add a placeholder. */
             valueList.add(null);
@@ -956,7 +1040,7 @@ public class FrameInfoEncoder {
         for (FrameData data : allDebugInfos) {
             if (data.frameSliceIndex == UNCOMPRESSED_FRAME_SLICE_INDEX) {
                 data.encodedFrameInfoIndex = encodingBuffer.getBytesWritten();
-                encodeUncompressedFrameData(data, encodingBuffer);
+                encodeUncompressedFrameData(data.frame, encodingBuffer, encoders, constantAccess);
             } else {
                 data.encodedFrameInfoIndex = frameMetadata.getEncodingOffset(data.frameSliceIndex);
                 assert frameMetadata.writeFrameVerificationInfo(data, encoders);
@@ -968,13 +1052,17 @@ public class FrameInfoEncoder {
         return frameInfoEncodings;
     }
 
-    private void encodeUncompressedFrameData(FrameData data, UnsafeArrayTypeWriter encodingBuffer) {
+    /**
+     * Encodes an uncompressed frame slice from prepared frame metadata. Object constants must
+     * already have indices in {@code encoders}.
+     */
+    static void encodeUncompressedFrameData(FrameInfoQueryResult frame, UnsafeArrayTypeWriter encodingBuffer, Encoders encoders, ConstantAccess constantAccess) {
         encodingBuffer.putSV(FrameInfoDecoder.UNCOMPRESSED_FRAME_SLICE_MARKER);
 
-        for (FrameInfoQueryResult cur = data.frame; cur != null; cur = cur.caller) {
+        for (FrameInfoQueryResult cur = frame; cur != null; cur = cur.caller) {
             assert cur.encodedBci != FrameInfoDecoder.ENCODED_BCI_NO_CALLER : "used as the end marker during decoding";
             assert cur.hasLocalValueInfo() : "Compressed frame info must be used when no local values are needed";
-            assert cur == data.frame || !cur.isDeoptEntry : "Deoptimization entry information for caller frames is not persisted";
+            assert cur == frame || !cur.isDeoptEntry : "Deoptimization entry information for caller frames is not persisted";
 
             encodingBuffer.putUV(cur.encodedBci);
             encodingBuffer.putUV(cur.numLocks);
@@ -993,13 +1081,13 @@ public class FrameInfoEncoder {
             encodingBuffer.putSV(deoptMethodIndex);
             // No need to encode cur.deoptMethodImageCodeInfo: decoding can get it from context
 
-            encodeValues(cur.valueInfos, encodingBuffer);
+            encodeValues(cur.valueInfos, encodingBuffer, encoders);
 
-            if (cur == data.frame) {
+            if (cur == frame) {
                 // Write virtual objects only for first frame.
                 encodingBuffer.putUV(cur.virtualObjects.length);
                 for (ValueInfo[] virtualObject : cur.virtualObjects) {
-                    encodeValues(virtualObject, encodingBuffer);
+                    encodeValues(virtualObject, encodingBuffer, encoders);
                 }
             }
 
@@ -1015,7 +1103,7 @@ public class FrameInfoEncoder {
         encodingBuffer.putUV(FrameInfoDecoder.ENCODED_BCI_NO_CALLER);
     }
 
-    private void encodeValues(ValueInfo[] valueInfos, UnsafeArrayTypeWriter encodingBuffer) {
+    private static void encodeValues(ValueInfo[] valueInfos, UnsafeArrayTypeWriter encodingBuffer, Encoders encoders) {
         encodingBuffer.putUV(valueInfos.length);
         for (ValueInfo valueInfo : valueInfos) {
             if (valueInfo.type == ValueType.Constant) {

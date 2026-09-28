@@ -24,9 +24,9 @@
  */
 package com.oracle.svm.hosted;
 
-import static com.oracle.svm.core.deopt.Deoptimizer.StubType.NoDeoptStub;
-import static com.oracle.svm.core.graal.code.SubstrateCallingConventionType.SubstrateCallingConventionArgumentKind.IMMUTABLE;
-import static com.oracle.svm.core.graal.code.SubstrateCallingConventionType.SubstrateCallingConventionArgumentKind.VALUE_REFERENCE;
+import static com.oracle.svm.jvmci.shared.meta.DeoptStub.StubType.NoDeoptStub;
+import static com.oracle.svm.jvmci.shared.code.SubstrateCallingConventionType.SubstrateCallingConventionArgumentKind.IMMUTABLE;
+import static com.oracle.svm.jvmci.shared.code.SubstrateCallingConventionType.SubstrateCallingConventionArgumentKind.VALUE_REFERENCE;
 import static com.oracle.svm.util.GuestAnnotationAccess.newAnnotationValue;
 
 import java.util.ArrayList;
@@ -37,6 +37,7 @@ import com.oracle.graal.pointsto.infrastructure.WrappedJavaMethod;
 import com.oracle.graal.pointsto.infrastructure.WrappedJavaType;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.HostedProviders;
+import com.oracle.svm.core.interpreter.InterpreterSupport;
 import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.core.NeverStrengthenGraphWithConstants;
 import com.oracle.svm.core.SkipEpilogueSafepointCheck;
@@ -44,13 +45,13 @@ import com.oracle.svm.core.SkipStackOverflowCheck;
 import com.oracle.svm.core.SubstrateControlFlowIntegrity;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTarget;
-import com.oracle.svm.core.deopt.Deoptimizer;
-import com.oracle.svm.core.graal.code.AssignedLocation;
-import com.oracle.svm.core.graal.code.CustomCallingConventionMethod;
+import com.oracle.svm.jvmci.shared.meta.DeoptStub;
+import com.oracle.svm.jvmci.shared.code.AssignedLocation;
+import com.oracle.svm.jvmci.shared.code.CustomCallingConventionMethod;
 import com.oracle.svm.core.graal.code.ExplicitCallingConvention;
-import com.oracle.svm.core.graal.code.SubstrateCallingConventionKind;
-import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
-import com.oracle.svm.core.graal.code.SubstrateCallingConventionType.SubstrateCallingConventionArgumentKind;
+import com.oracle.svm.jvmci.shared.code.SubstrateCallingConventionKind;
+import com.oracle.svm.jvmci.shared.code.SubstrateCallingConventionType;
+import com.oracle.svm.jvmci.shared.code.SubstrateCallingConventionType.SubstrateCallingConventionArgumentKind;
 import com.oracle.svm.core.graal.code.SubstrateRegisterConfigFactory;
 import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
 import com.oracle.svm.hosted.code.NonBytecodeMethod;
@@ -132,7 +133,8 @@ public final class SubstrateBytecodeHandlerStub extends NonBytecodeMethod implem
         }
         StructuredGraph graph = BytecodeHandlerStubHelper.createStub(kit, method, 0, threading, nextOpcodeMethod,
                         () -> stubHolder.getBytecodeHandlers(interpreterHolder, config), config, targetMethod,
-                        SubstrateBytecodeHandlerUnwindPath::writeOnCallee);
+                        SubstrateBytecodeHandlerUnwindPath::writeOnCallee,
+                        InterpreterSupport.isEnabled() && InterpreterSupport.singleton().isInterpreterBytecodeHandlerStub(method));
         if (needSafepoint) {
             for (ReturnNode returnNode : graph.getNodes(ReturnNode.TYPE)) {
                 graph.addBeforeFixed(returnNode, graph.add(new SafepointNode()));
@@ -361,7 +363,7 @@ public final class SubstrateBytecodeHandlerStub extends NonBytecodeMethod implem
                                     "value", "Keep bytecode handler stubs as standalone compilations to ease register pressure in caller and enable tail call threading"),
                     newAnnotationValue(ExplicitCallingConvention.class,
                                     "value", SubstrateCallingConventionKind.Custom),
-                    newAnnotationValue(Deoptimizer.DeoptStub.class,
+                    newAnnotationValue(DeoptStub.class,
                                     "stubType", NoDeoptStub));
 
     @Override

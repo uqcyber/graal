@@ -31,12 +31,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.RuntimeStateTrimConfig;
 import org.graalvm.nativeimage.impl.VMRuntimeSupport;
 
 import com.oracle.svm.guest.staging.GuestStagingDependencyBridge;
 import com.oracle.svm.guest.staging.HeapSizeVerifier;
 import com.oracle.svm.guest.staging.SubstrateGuestOptions;
-import com.oracle.svm.guest.staging.option.RuntimeOptionValidationSupport;
+import com.oracle.svm.guest.staging.option.RuntimeOptionParser;
 import com.oracle.svm.shared.meta.GuestFold;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.SingleLayer;
@@ -97,7 +98,7 @@ public final class RuntimeSupport implements VMRuntimeSupport {
     public void initialize() {
         boolean shouldInitialize = initializationState.compareAndSet(InitializationState.Uninitialized, InitializationState.InProgress);
         if (shouldInitialize) {
-            RuntimeOptionValidationSupport.singleton().validate();
+            RuntimeOptionParser.singleton().validateOptionsAfterParsing();
 
             GuestStagingDependencyBridge.singleton().verifyIsolateArgumentOptionValues();
             HeapSizeVerifier.verifyHeapOptions();
@@ -111,10 +112,9 @@ public final class RuntimeSupport implements VMRuntimeSupport {
 
     /**
      * Adds a VM-level initialization hook. Initialization hooks are executed during isolate
-     * initialization, before runtime options are parsed. The executed code should therefore not
-     * try to access any runtime options. If it is necessary to access a runtime option, then its
-     * value must be parsed early and accessed via
-     * {@code com.oracle.svm.core.IsolateArgumentParser}.
+     * initialization, before runtime options are parsed. The executed code should therefore not try
+     * to access any runtime options. If it is necessary to access a runtime option, then its value
+     * must be parsed early and accessed via {@code com.oracle.svm.core.IsolateArgumentParser}.
      */
     public void addInitializationHook(Hook initHook) {
         addHook(initializationHooks, initHook);
@@ -176,6 +176,14 @@ public final class RuntimeSupport implements VMRuntimeSupport {
                 hook.execute(firstIsolate);
             }
         }
+    }
+
+    /**
+     * Optimizes runtime state according to {@link RuntimeStateTrimConfig config}.
+     */
+    @Override
+    public void trimRuntimeState(RuntimeStateTrimConfig config) {
+        GuestStagingDependencyBridge.singleton().trimRuntimeState(config);
     }
 
     /**

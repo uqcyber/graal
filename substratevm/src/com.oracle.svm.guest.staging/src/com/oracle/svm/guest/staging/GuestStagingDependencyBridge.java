@@ -27,6 +27,7 @@ package com.oracle.svm.guest.staging;
 import java.io.PrintStream;
 
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.RuntimeStateTrimConfig;
 import org.graalvm.word.UnsignedWord;
 
 import com.oracle.svm.guest.staging.log.Log;
@@ -67,6 +68,13 @@ public interface GuestStagingDependencyBridge {
      * Remove this method when GC selection becomes guest-owned.
      */
     boolean useSerialGC();
+
+    /**
+     * Delegates to {@code com.oracle.svm.core.SubstrateOptions.useG1GC()}.
+     * <p>
+     * Remove this method when GC selection becomes guest-owned.
+     */
+    boolean useG1GC();
 
     /**
      * Delegates to
@@ -207,6 +215,13 @@ public interface GuestStagingDependencyBridge {
     boolean isRuntimeClassLoadingSupported();
 
     /**
+     * Delegates to {@code com.oracle.svm.core.SubstrateOptions.useRistretto()}.
+     * <p>
+     * Remove this method when Ristretto options move to guest/staging.
+     */
+    boolean useRistretto();
+
+    /**
      * Enables tracing of class loading. Enabled through {@code --verbose} or {@code --verbose:class}.
      * <p>
      * Remove this method when runtime class loading (aka Crema) options move to guest/staging.
@@ -225,10 +240,25 @@ public interface GuestStagingDependencyBridge {
     /// Remove this method when runtime assertion support moves to guest/staging.
     void updateRuntimeSystemAssertionStatus(boolean enable);
 
+    /// Updates the bytecode verification mode selected by a Java VM option.
+    ///
+    /// The mode is represented as a string here because guest/staging must not depend on the
+    /// runtime class-loading implementation.
+    void setVerifyMode(String mode);
+
     /**
      * This method is called at the end of runtime options parsing.
      * <p>
      * Remove this method when runtime option parsing fully moves to guest/staging.
      */
     void endOfParsing();
+
+    /**
+     * Delegates to
+     * {@code com.oracle.svm.core.RuntimeStateTrimSupport.trimRuntimeState(config)}.
+     * <p>
+     * Remove this method when {@code com.oracle.svm.core.RuntimeStateTrimSupport} moves
+     * to guest/staging.
+     */
+    void trimRuntimeState(RuntimeStateTrimConfig config);
 }
