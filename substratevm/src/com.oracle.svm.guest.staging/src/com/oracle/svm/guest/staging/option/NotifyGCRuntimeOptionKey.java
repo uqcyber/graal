@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.guest.staging.option;
 
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import com.oracle.svm.guest.staging.GuestStagingDependencyBridge;
@@ -37,8 +38,9 @@ public class NotifyGCRuntimeOptionKey<T> extends RuntimeOptionKey<T> {
         super(defaultValue, flags);
     }
 
-    public NotifyGCRuntimeOptionKey(T defaultValue, Consumer<RuntimeOptionKey<T>> validation, RuntimeOptionKeyFlag... flags) {
-        super(defaultValue, validation, flags);
+    public NotifyGCRuntimeOptionKey(T defaultValue, BiConsumer<RuntimeOptionKey<T>, T> beforeValueUpdateValidation, Consumer<? super RuntimeOptionKey<T>> afterParsingValidation,
+                    RuntimeOptionKeyFlag... flags) {
+        super(defaultValue, beforeValueUpdateValidation, afterParsingValidation, flags);
     }
 
     @Override

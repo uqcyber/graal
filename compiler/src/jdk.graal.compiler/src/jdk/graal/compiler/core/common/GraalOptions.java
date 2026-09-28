@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -49,6 +49,14 @@ public final class GraalOptions {
                    "This can clean up the intermediate representation and simplify later optimizations. ", type = OptionType.Expert)
     public static final OptionKey<Boolean> EarlyGVN = new OptionKey<>(true);
 
+    @Option(help = "Tries to improve code generation by making checkcast operations better optimizable early in the compilation pipeline.", type = OptionType.Expert)
+    public static final OptionKey<Boolean> EarlyExpandCheckCast = new OptionKey<>(true);
+
+    @Option(help = "Speculates that arrays have exact type to optimize store checks. " +
+                   "This can improve performance because less store checks have to be performed. " +
+                   "(Dependent on loop invariant code motion.)", type = OptionType.Expert)
+    public static final OptionKey<Boolean> SpeculativeStoreCheck = new OptionKey<>(true);
+
     @Option(help = "Performs early loop-invariant code motion.", type = OptionType.Expert)
     public static final OptionKey<Boolean> EarlyLICM = new OptionKey<>(true);
 
@@ -87,6 +95,10 @@ public final class GraalOptions {
 
     @Option(help = "Performs partial escape analysis and scalar replacement optimization.", type = OptionType.Expert)
     public static final OptionKey<Boolean> PartialEscapeAnalysis = new OptionKey<>(true);
+
+    @Option(help = "Performs statement level code duplication at control flow merges to " +
+                   "specialize code to branch values where possible.", type = OptionType.Expert)
+    public static final OptionKey<Boolean> OptDuplication = new OptionKey<>(true);
 
     @Option(help = "", type = OptionType.Debug)
     public static final OptionKey<Integer> EscapeAnalysisIterations = new OptionKey<>(2);
@@ -248,6 +260,9 @@ public final class GraalOptions {
 
     @Option(help = "Tries to remove redundant memory accesses (for example, successive reads of a non-volatile Java field).", type = OptionType.Expert)
     public static final OptionKey<Boolean> OptReadElimination = new OptionKey<>(true);
+
+    @Option(help = "Hoists identical field loads and lowered reads from control-split successors into their common predecessor.", type = OptionType.Debug)
+    public static final OptionKey<Boolean> OptDeduplicateReadsAcrossBranches = new OptionKey<>(true);
 
     @Option(help = "", type = OptionType.Debug)
     public static final OptionKey<Integer> ReadEliminationMaxLoopVisits = new OptionKey<>(5);

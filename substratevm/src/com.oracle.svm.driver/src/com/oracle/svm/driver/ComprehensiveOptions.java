@@ -39,6 +39,7 @@ import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import com.oracle.svm.shared.option.APIOption;
 import com.oracle.svm.shared.util.StringUtil;
 import com.oracle.svm.shared.util.VMError;
 
@@ -84,8 +85,8 @@ final class ComprehensiveOptions {
 
                     String command = escapeMarkdown(entry.getKey());
                     String type = determineOptionType(option);
-                    String description = escapeMarkdown(option.helpText());
-                    String defaultValue = option.defaultValue() != null ? escapeMarkdown(option.defaultValue()) : "None";
+                    String description = escapeMarkdownText(option.helpText());
+                    String defaultValue = option.defaultValue() != null ? escapeMarkdownText(option.defaultValue()) : "None";
                     String usage = "`" + escapeMarkdown(generateUsageExample(entry.getKey(), option)) + "`";
                     printedCommands.add(entry.getKey());
 
@@ -103,8 +104,8 @@ final class ComprehensiveOptions {
                     GroupInfo groupInfo = groupEntry.getValue();
                     String command = escapeMarkdown(commandName);
                     String type = "Enum";
-                    String description = escapeMarkdown(describeGroupOption(groupInfo));
-                    String defaultValue = groupInfo.defaultValues.isEmpty() ? "None" : escapeMarkdown(String.join(",", groupInfo.defaultValues));
+                    String description = escapeMarkdownText(describeGroupOption(groupInfo));
+                    String defaultValue = groupInfo.defaultValues.isEmpty() ? "None" : escapeMarkdownText(String.join(",", groupInfo.defaultValues));
                     String usage = "`" + escapeMarkdown(groupUsage(groupEntry.getKey())) + "`";
                     printedCommands.add(commandName);
 
@@ -123,8 +124,8 @@ final class ComprehensiveOptions {
                     }
                     String command = escapeMarkdown(entry.getKey());
                     String type = option.type();
-                    String description = escapeMarkdown(option.helpText());
-                    String defaultValue = escapeMarkdown(option.defaultValue());
+                    String description = escapeMarkdownText(option.helpText());
+                    String defaultValue = escapeMarkdownText(option.defaultValue());
                     String usage = "`" + escapeMarkdown(option.usage()) + "`";
 
                     println.accept(String.format(MARKDOWN_ROW_FORMAT,
@@ -537,31 +538,37 @@ final class ComprehensiveOptions {
         if (option.group() != null) {
             return OPTION_TYPE_STRING;
         }
-        if (option.variants().length > 0) {
-            if (option.variants().length == 2 &&
-                            (Arrays.asList(option.variants()).contains("true") || Arrays.asList(option.variants()).contains("+"))) {
-                return "Boolean";
-            }
-            return OPTION_TYPE_STRING;
-        }
-        return OPTION_TYPE_STRING;
+        return option.booleanOption() ? "Boolean" : OPTION_TYPE_STRING;
     }
 
     private static String generateUsageExample(String optionName, APIOptionHandler.OptionInfo option) {
-        if (option.group() != null) {
-            return optionName + "=value";
+        if (option.group() != null || option.booleanOption() || option.fixedValue()) {
+            return optionName;
         }
-        if (option.variants().length > 0) {
-            return optionName + "=" + option.variants()[0];
+        String valueSeparator = preferredValueSeparator(option.valueSeparator());
+        String value = valueSeparator + "<value>";
+        return option.defaultValue() != null ? optionName + "[" + value + "]" : optionName + value;
+    }
+
+    private static String preferredValueSeparator(char[] valueSeparators) {
+        for (char valueSeparator : valueSeparators) {
+            if (valueSeparator == '=') {
+                return "=";
+            }
         }
-        return optionName;
+        char valueSeparator = valueSeparators[0];
+        return APIOption.Utils.valueSeparatorToString(valueSeparator);
     }
 
     private static String escapeMarkdown(String text) {
         if (text == null) {
             return "";
         }
-        return text.replace("|", "\\|").replace("\\", "\\\\");
+        return text.replace("\\", "\\\\").replace("|", "\\|");
+    }
+
+    static String escapeMarkdownText(String text) {
+        return escapeMarkdown(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     private static String startLowerCase(String str) {

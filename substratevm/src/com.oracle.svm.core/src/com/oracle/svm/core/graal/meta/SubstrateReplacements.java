@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.Platform;
@@ -47,8 +48,10 @@ import org.graalvm.nativeimage.hosted.Feature.BeforeHeapLayoutAccess;
 
 import com.oracle.svm.core.SubstrateTarget;
 import com.oracle.svm.core.code.ImageCodeInfo;
-import com.oracle.svm.core.meta.SharedMethod;
-import com.oracle.svm.core.meta.SharedType;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
+import com.oracle.svm.core.imagelayer.LayeredFoldSupport;
+import com.oracle.svm.jvmci.shared.meta.SharedMethod;
+import com.oracle.svm.jvmci.shared.meta.SharedType;
 import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GuestAnnotationAccess;
@@ -89,6 +92,7 @@ import jdk.graal.compiler.replacements.PEGraphDecoder;
 import jdk.graal.compiler.replacements.ReplacementsImpl;
 import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.code.TargetDescription;
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -237,7 +241,7 @@ public class SubstrateReplacements extends ReplacementsImpl {
 
             EncodedGraph encodedGraph = new EncodedGraph(snippetEncoding, startOffset, snippetObjects, snippetNodeClasses, result);
             PEGraphDecoder graphDecoder = new PEGraphDecoder(SubstrateTarget.getArchitecture(), result, providers, null, snippetPlugins, new InlineInvokePlugin[0], parameterPlugin, null,
-                            null, null, new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), true, false) {
+                            null, new ConcurrentHashMap<>(), new ConcurrentHashMap<>(), true, false) {
 
                 private final IntrinsicContext intrinsic = new IntrinsicContext(method, null, providers.getReplacements().getDefaultReplacementBytecodeProvider(), INLINE_AFTER_PARSING, false);
 
@@ -254,6 +258,14 @@ public class SubstrateReplacements extends ReplacementsImpl {
                 @Override
                 public IntrinsicContext getIntrinsic() {
                     return intrinsic;
+                }
+
+                @Override
+                protected ValueNode executeFold(GraphBuilderContext b, ResolvedJavaMethod targetMethod, ValueNode[] arguments, Supplier<JavaConstant> operation) {
+                    if (ImageLayerBuildingSupport.buildingImageLayer()) {
+                        return LayeredFoldSupport.singleton().resolve(b, targetMethod, arguments, operation);
+                    }
+                    return super.executeFold(b, targetMethod, arguments, operation);
                 }
 
                 @Override

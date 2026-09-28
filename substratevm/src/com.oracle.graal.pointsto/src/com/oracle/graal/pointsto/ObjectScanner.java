@@ -38,6 +38,7 @@ import org.graalvm.word.WordBase;
 
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatureException;
 import com.oracle.graal.pointsto.heap.HeapSnapshotVerifier;
+import com.oracle.graal.pointsto.heap.HostedValuesProvider;
 import com.oracle.graal.pointsto.heap.ImageHeapArray;
 import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.heap.ImageHeapScanner;
@@ -45,6 +46,7 @@ import com.oracle.graal.pointsto.heap.TypedConstant;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.reports.ObjectTreePrinter;
 import com.oracle.graal.pointsto.reports.ReportUtils;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.graal.pointsto.util.CompletionExecutor;
@@ -53,7 +55,6 @@ import com.oracle.svm.util.GuestAccess;
 import jdk.graal.compiler.graph.NodeSourcePosition;
 import jdk.vm.ci.code.BytecodePosition;
 import jdk.vm.ci.meta.Constant;
-import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -61,10 +62,15 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
- * Provides functionality for scanning constant objects.
- *
+ * Provides functionality for traversing object graphs from a set of roots.
+ * For every encountered field value and array element, the scanner delegates to an
+ * {@link ObjectScanningObserver}. The observer determines the purpose and effects of a traversal;
+ * for example, {@link AnalysisObjectScanningObserver} drives analysis,
+ * {@link HeapSnapshotVerifier} verifies the image-heap snapshot, and {@link ObjectTreePrinter}
+ * produces diagnostics.
+ * <p>
  * The scanning is done in parallel. The set of visited elements is a special data structure whose
- * structure can be reused over multiple scanning iterations to save CPU resources. (For details
+ * structure can be reused over multiple scanning iterations to save CPU resources (For details, see
  * {@link ReusableSet}).
  */
 public class ObjectScanner {
@@ -274,15 +280,15 @@ public class ObjectScanner {
                 }
             }
         } else {
-            ConstantReflectionProvider constantReflection = GuestAccess.get().getProviders().getConstantReflection();
-            int len = constantReflection.readArrayLength(array);
+            HostedValuesProvider hostedValuesProvider = bb.getUniverse().getHostedValuesProvider();
+            int len = hostedValuesProvider.readArrayLength(array);
             for (int idx = 0; idx < len; idx++) {
-                JavaConstant elem = constantReflection.readArrayElement(array, idx);
+                JavaConstant elem = hostedValuesProvider.readArrayElement(array, idx);
                 if (elem.isNull()) {
                     scanningObserver.forNullArrayElement(array, arrayType, idx, reason);
                 } else {
                     try {
-                        JavaConstant element = bb.getUniverse().replaceConstantWithConstant(elem, (JavaConstant constant) -> constantAsObject(bb, constant));
+                        JavaConstant element = bb.getUniverse().replaceConstantWithAllReplacers(elem);
                         scanArrayElement(array, arrayType, reason, idx, element);
                     } catch (UnsupportedFeatureException | AnalysisError.TypeNotFoundError ex) {
                         unsupportedFeatureDuringConstantScan(bb, elem, ex, reason);

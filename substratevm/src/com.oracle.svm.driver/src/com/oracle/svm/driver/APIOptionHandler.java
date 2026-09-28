@@ -52,7 +52,6 @@ import org.graalvm.nativeimage.hosted.Feature;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.driver.APIOptionHandler.HostedOptionInfo;
 import com.oracle.svm.driver.NativeImage.ArgumentQueue;
-import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.option.HostedOptionParser;
 import com.oracle.svm.shared.option.APIOption;
 import com.oracle.svm.shared.option.APIOption.APIOptionKind;
@@ -82,7 +81,8 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
     private static final String ENTER_UNLOCK_SCOPE = SubstrateOptionsParser.commandArgument(SubstrateOptions.UnlockExperimentalVMOptions, "+");
     private static final String LEAVE_UNLOCK_SCOPE = SubstrateOptionsParser.commandArgument(SubstrateOptions.UnlockExperimentalVMOptions, "-");
 
-    record OptionInfo(String[] variants, char[] valueSeparator, String builderOption, String defaultValue, String helpText, boolean defaultFinal, String deprecationWarning,
+    record OptionInfo(String[] variants, char[] valueSeparator, String builderOption, String defaultValue, String helpText, boolean defaultFinal, boolean booleanOption, boolean fixedValue,
+                    String deprecationWarning,
                     List<Function<Object, Object>> valueTransformers, APIOptionGroup group, boolean extra, boolean launcherOption) {
         boolean isDeprecated() {
             return deprecationWarning.length() > 0;
@@ -276,7 +276,7 @@ class APIOptionHandler extends NativeImage.OptionHandler<NativeImage> {
             boolean defaultFinal = isBooleanOption || hasFixedValue;
             apiOptions.put(apiOptionName,
                             new APIOptionHandler.OptionInfo(apiAnnotation.name(), apiAnnotation.valueSeparator(), builderOption, defaultValue, helpText,
-                                            defaultFinal, apiAnnotation.deprecated(), valueTransformers, group, apiAnnotation.extra(), apiAnnotation.launcherOption()));
+                                            defaultFinal, isBooleanOption, hasFixedValue, apiAnnotation.deprecated(), valueTransformers, group, apiAnnotation.extra(), apiAnnotation.launcherOption()));
         }
 
         if (!IntentionallyUnsupportedOptions.contains(optionDescriptor.getOptionKey())) {
@@ -809,11 +809,10 @@ final class APIOptionFeature implements Feature {
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
-        FeatureImpl.DuringSetupAccessImpl accessImpl = (FeatureImpl.DuringSetupAccessImpl) access;
         Map<String, GroupInfo> groupInfos = new HashMap<>();
         Map<String, APIOptionHandler.PathsOptionInfo> pathOptions = new HashMap<>();
         Map<String, HostedOptionInfo> allOptionNames = new HashMap<>();
-        Iterable<OptionDescriptors> optionDescriptors = OptionsContainer.getDiscoverableOptions(accessImpl.getImageClassLoader().getClassLoader());
+        Iterable<OptionDescriptors> optionDescriptors = OptionsContainer.getDiscoverableOptions(access.getApplicationClassLoader());
         SortedMap<String, APIOptionHandler.OptionInfo> options = APIOptionHandler.extractOptions(optionDescriptors, groupInfos, pathOptions, allOptionNames);
         ImageSingletons.add(APIOptionSupport.class, new APIOptionSupport(groupInfos, options, pathOptions, allOptionNames));
     }

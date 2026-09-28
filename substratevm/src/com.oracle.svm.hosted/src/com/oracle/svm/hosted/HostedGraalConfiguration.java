@@ -40,7 +40,11 @@ import jdk.graal.compiler.phases.BasePhase;
 import jdk.graal.compiler.phases.PhaseSuite;
 import jdk.graal.compiler.phases.common.BoxNodeIdentityPhase;
 import jdk.graal.compiler.phases.common.CanonicalizerPhase;
+import jdk.graal.compiler.phases.common.FrameStateAssignmentPhase;
+import jdk.graal.compiler.phases.common.LateLockEliminationPhase;
+import jdk.graal.compiler.phases.common.writesinking.WriteSinkingPhase;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
+import jdk.graal.compiler.phases.tiers.MidTierContext;
 import jdk.graal.compiler.phases.tiers.Suites;
 
 /// Configures the compiler phases used for hosted Native Image compilation.
@@ -61,12 +65,24 @@ public class HostedGraalConfiguration extends GraalConfiguration {
         this.hUniverse = hUniverse;
     }
 
-    /// Removes priority inlining from suites used to compile deoptimization targets.
+    /// Removes optimizations that are unsafe for deoptimization target methods.
     @Override
     public void removeDeoptTargetOptimizations(Suites suites) {
         if (SubstrateOptions.AOTPriorityInline.getValue()) {
             VMError.guarantee(suites.getHighTier().removePhase(SubstratePriorityInliningPhase.class));
         }
+        PhaseSuite<MidTierContext> midTier = suites.getMidTier();
+        ListIterator<BasePhase<? super MidTierContext>> position = midTier.findPhase(FrameStateAssignmentPhase.class);
+        VMError.guarantee(position != null);
+        if (PhaseSuite.findNextPhase(position, LateLockEliminationPhase.class)) {
+            /*
+             * Deoptimization would be too complicated when the deoptimization target method has
+             * eliminated monitors.
+             */
+            position.remove();
+        }
+        /* Write sinking can move stores across deoptimization entry points. */
+        suites.getLowTier().removePhase(WriteSinkingPhase.class);
     }
 
     /// Installs the substrate priority inliner when it is enabled for hosted compilation.

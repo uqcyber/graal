@@ -310,11 +310,6 @@ public final class InterpreterToVM {
         MonitorSupport.singleton().monitorEnter(obj, MonitorInflationCause.MONITOR_ENTER);
     }
 
-    public static void registerHeldMonitor(InterpreterFrame frame, Object obj) {
-        assert obj != null;
-        frame.addLock(obj);
-    }
-
     public static void monitorExit(InterpreterFrame frame, Object obj) throws SemanticJavaException {
         assert obj != null;
         if (!frame.removeLock(obj)) {
@@ -742,6 +737,14 @@ public final class InterpreterToVM {
         InterpreterUtil.assertion(field.getOffset() >= 0, "Bad field offset");
     }
 
+    @AlwaysInline("Fold the secondary type-check outlining policy at the call site")
+    public static boolean isAssignableFrom(DynamicHub typeHub, DynamicHub instanceHub, boolean outlineSecondary) {
+        if (outlineSecondary) {
+            return ClassIsAssignableFromNode.isAssignableFrom(typeHub, instanceHub, true);
+        }
+        return ClassIsAssignableFromNode.isAssignableFrom(typeHub, instanceHub, false);
+    }
+
     /**
      * Subtyping among Array Types The following rules define the direct supertype relation among
      * array types:
@@ -911,7 +914,7 @@ public final class InterpreterToVM {
         DynamicHub thisHub = DynamicHub.fromClass(thisClass);
 
         int vtableOffset = DynamicHubUtils.determineDispatchTableOffset(thisHub, callTargetHub, vTableIndex);
-        MethodRef vtableEntry = Word.objectToTrackedPointer(thisHub).readWord(vtableOffset);
+        MethodRef vtableEntry = Word.objectToUntrackedPointer(thisHub).readWord(vtableOffset);
         return getSVMVTableCodePointer(vtableEntry);
     }
 

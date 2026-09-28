@@ -209,7 +209,7 @@ public class SVMImageLayerLoader extends ImageLayerLoader implements AutoCloseab
     public void initNodeClassMap() {
         assert nodeClassMap == null : "cannot re-initialize the nodeClassMap";
         byte[] encodedGlobalNodeClassMap = graphStore.read(snapshot.getNodeClassMapLocation());
-        SVMImageLayerSnapshotUtil.AbstractSVMGraphDecoder decoder = imageLayerSnapshotUtil.getGraphDecoder(this, null, universe.getSnippetReflection(), null);
+        SVMImageLayerSnapshotUtil.AbstractSVMGraphDecoder decoder = imageLayerSnapshotUtil.getGraphDecoder(null, universe.getSnippetReflection(), null);
         nodeClassMap = (NodeClassMap) ObjectCopier.decode(decoder, encodedGlobalNodeClassMap);
     }
 
@@ -371,9 +371,14 @@ public class SVMImageLayerLoader extends ImageLayerLoader implements AutoCloseab
             return true;
         } else if (wrappedType.isLambda()) {
             WrappedType.Lambda.Loader lambda = wrappedType.getLambda();
+            String captureSite = lambda.getCaptureSite();
+            if (captureSite.isEmpty()) {
+                /* A lambda without a discoverable capture site cannot be recreated here. */
+                return false;
+            }
             String capturingClassName = lambda.getCapturingClass();
             Class<?> capturingClass = imageLayerBuildingSupport.lookupClass(false, capturingClassName);
-            Class<?> lambdaClass = LambdaParser.findLambdaClassForCaptureSite(capturingClass, lambda.getCaptureSite());
+            Class<?> lambdaClass = LambdaParser.findLambdaClassForCaptureSite(capturingClass, captureSite);
             if (lambdaClass == null) {
                 return false;
             }
@@ -479,7 +484,7 @@ public class SVMImageLayerLoader extends ImageLayerLoader implements AutoCloseab
             String sourceFileName = td.hasSourceFileName() ? td.getSourceFileName() : null;
             ResolvedJavaType enclosingType = getResolvedJavaTypeForBaseLayerId(td.getEnclosingTypeId());
             ResolvedJavaType componentType = getResolvedJavaTypeForBaseLayerId(td.getComponentTypeId());
-            ResolvedJavaType objectType = GuestAccess.get().lookupType(Object.class);
+            ResolvedJavaType objectType = GuestAccess.get().elements.java_lang_Object;
             AnnotationValue[] annotations = getAnnotations(td.getAnnotationList());
 
             return new BaseLayerType(className, tid, td.getModifiers(), td.getIsInterface(), td.getIsEnum(), td.getIsRecord(), td.getIsInitialized(), td.getIsLinked(), sourceFileName,
@@ -993,7 +998,7 @@ public class SVMImageLayerLoader extends ImageLayerLoader implements AutoCloseab
 
     private EncodedGraph getEncodedGraph(AnalysisMethod analysisMethod, String location) {
         byte[] encodedAnalyzedGraph = graphStore.read(location);
-        SVMImageLayerSnapshotUtil.AbstractSVMGraphDecoder decoder = imageLayerSnapshotUtil.getGraphDecoder(this, analysisMethod, universe.getSnippetReflection(), nodeClassMap);
+        SVMImageLayerSnapshotUtil.AbstractSVMGraphDecoder decoder = imageLayerSnapshotUtil.getGraphDecoder(analysisMethod, universe.getSnippetReflection(), nodeClassMap);
         EncodedGraph encodedGraph = (EncodedGraph) ObjectCopier.decode(decoder, encodedAnalyzedGraph);
         for (int i = 0; i < encodedGraph.getNumObjects(); ++i) {
             if (buildingApplicationLayer && encodedGraph.getObject(i) instanceof ImageSingletonDataImpl data) {
@@ -1014,7 +1019,7 @@ public class SVMImageLayerLoader extends ImageLayerLoader implements AutoCloseab
             PersistedAnalysisMethodData.Loader methodData = getMethodData(analysisMethod);
             byte[] encodedAnalyzedGraph = graphStore.read(methodData.getStrengthenedGraphLocation());
             SnippetReflectionProvider snippetReflection = universe.getSnippetReflection();
-            SVMImageLayerSnapshotUtil.AbstractSVMGraphDecoder decoder = imageLayerSnapshotUtil.getGraphHostedToAnalysisElementsDecoder(this, analysisMethod, snippetReflection, nodeClassMap);
+            SVMImageLayerSnapshotUtil.AbstractSVMGraphDecoder decoder = imageLayerSnapshotUtil.getGraphHostedToAnalysisElementsDecoder(analysisMethod, snippetReflection, nodeClassMap);
             EncodedGraph graph = (EncodedGraph) ObjectCopier.decode(decoder,
                             encodedAnalyzedGraph);
             for (Object o : graph.getObjects()) {

@@ -2,9 +2,53 @@
 
 This changelog summarizes newly introduced optimizations and other compiler related changes.
 
-## GraalVM 25.3 (Internal Version 25.3.4.1)
+## GraalVM 25.5 (Internal Version 25.5.5)
+* (GR-79593): Added `BreakChainedPhisPhase`, which splits chained loop phi values in the low tier to
+  improve register allocation. The optimization is enabled by default and can be disabled with
+  `-Djdk.graal.BreakChainedPhis=false`.
+* (GR-79589): Added partial redundancy elimination scheduling to the community compiler. The
+  optimization is enabled by default and can be disabled with
+  `-Djdk.graal.PartialRedundancyScheduling=false`.
+* (GR-79594): Added a write sinking optimization that moves eligible field and constant-offset
+  array writes out of loops. The optimization is enabled by default and can be disabled with
+  `-Djdk.graal.OptWriteSinking=false`.
+* (GR-79588): Added a deduplication optimization that can reduce generated code size by sharing
+  equivalent statements and expressions from converging control-flow branches. The optimization is
+  enabled by default and can be disabled with `-Djdk.graal.OptDeDuplication=false`.
+* (GR-79526): Extended lock elimination to coarsen locks across simple control flow and eliminate
+  nested locking of the same object.
+* (GR-79587): Added `GuardRangeGroupingPhase`, which removes redundant integer range guards by
+  retaining the tightest lower and upper bounds for guards with the same anchor. The optimization is
+  enabled by default and can be disabled with `-Djdk.graal.OptGuardRangeGrouping=false`.
+* (GR-79585): Added an optimization that replaces eligible loop-carried memory reads with value
+  phis, allowing invariant reads to move out of the loop. The optimization is enabled by default
+  and can be disabled with `-Djdk.graal.OptimizeLoopAccesses=false`.
+* (GR-79597): Added early checkcast expansion to expose null and type checks as control flow for
+  subsequent optimizations. It is enabled by default and can be disabled with
+  `-Djdk.graal.EarlyExpandCheckCast=false`.
+* (GR-79590): Added speculative store checks, which can remove array store checks by speculating
+  that an array's declared type is exact. The optimization is enabled by default and can be
+  disabled with `-Djdk.graal.SpeculativeStoreCheck=false`.
+* (GR-79031): Added strip mining for counted and non-counted loops, loop inversion, loop rotation,
+  and exact arithmetic optimization. Strip mining bounds long-running loop bodies to reduce
+  safepoint overhead, loop inversion transforms while loops into guarded do-while loops to improve
+  instruction pipelining, and loop rotation transforms selected non-counted loops into counted loops
+  by duplicating loop-body code. Exact arithmetic optimization replaces exact additions with
+  normal additions while preserving overflow behavior through loop-limit deoptimization. These
+  optimizations are enabled by default and can be controlled with their corresponding options,
+  including `-Djdk.graal.LoopRotation=false` and `-Djdk.graal.OptExactArithmetic=false`.
+
+## GraalVM 25.4 (Internal Version 25.4.4.1.1)
+* (GR-79029): Add `PullThroughPhiPhase` and `DuplicationPhase` to the community compiler configuration.
+  The optimizations are enabled by default and can be disabled with `-Djdk.graal.OptPullThroughPhi=false` and
+  `-Djdk.graal.OptDuplication=false`, respectively.
+* (GR-78871): Extended read elimination to handle indexed array accesses with nonconstant indices, reads from newly
+  allocated arrays whose elements contain default values, and array clone operations. Read elimination can now also
+  run after reads are fixed in the low tier.
 * (GR-78795): Extended `OptimizeDivPhase` with magic-number optimizations for unsigned integer division
   and remainder operations by constant values.
+
+## GraalVM 25.3 (Internal Version 25.3.4.1)
 * (GR-77137) Add new priority inlining algorithm that does extensive analysis of the call graph when making
   inlining decisions (see `PriorityInliningPhase` for details). It is now the default inliner. To use the old
   inliner now requires setting the `UsePriorityInlining` option to false (e.g. `-Djdk.graal.UsePriorityInlining=false`).

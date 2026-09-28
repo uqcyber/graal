@@ -58,15 +58,18 @@ import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Cached.Shared;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateUncached;
+import com.oracle.truffle.api.dsl.Idempotent;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.dsl.UnsupportedSpecializationException;
 import com.oracle.truffle.api.dsl.test.WeakCachedTestFactory.ConsistentGuardAndSpecializationNodeGen;
 import com.oracle.truffle.api.dsl.test.WeakCachedTestFactory.TestNullWeakCacheNodeGen;
 import com.oracle.truffle.api.dsl.test.WeakCachedTestFactory.WeakCachedLibraryNodeGen;
 import com.oracle.truffle.api.dsl.test.WeakCachedTestFactory.WeakDependentCacheNodeGen;
+import com.oracle.truffle.api.dsl.test.WeakCachedTestFactory.WeakIdempotentGuardNodeGen;
 import com.oracle.truffle.api.dsl.test.WeakCachedTestFactory.WeakInlineCacheNodeGen;
 import com.oracle.truffle.api.dsl.test.WeakCachedTestFactory.WeakSharedCacheNodeGen;
 import com.oracle.truffle.api.dsl.test.WeakCachedTestFactory.WeakSimpleNodeGen;
+import com.oracle.truffle.api.dsl.test.WeakCachedTestFactory.WeakSingleInstanceCacheNodeGen;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.CachedLibrary;
@@ -86,6 +89,7 @@ public class WeakCachedTest extends AbstractPolyglotTest {
             node.execute(o);
             o = null;
             GCUtils.assertGc("Reference is not collected", ref);
+            assertFails(() -> node.execute(new String("")), UnsupportedSpecializationException.class);
         });
     }
 
@@ -108,6 +112,42 @@ public class WeakCachedTest extends AbstractPolyglotTest {
             return arg;
         }
 
+    }
+
+    @Test
+    public void testWeakSingleInstanceCache() throws IOException, InterruptedException {
+        runInSubprocess(() -> {
+            WeakSingleInstanceCacheNode node = WeakSingleInstanceCacheNodeGen.create();
+            Object value = new String("");
+            WeakReference<Object> ref = new WeakReference<>(value);
+            assertEquals("cached", node.execute(value));
+            value = null;
+            GCUtils.assertGc("Reference is not collected", ref);
+            assertEquals("generic", node.execute(new String("")));
+        });
+    }
+
+    abstract static class WeakSingleInstanceCacheNode extends Node {
+
+        abstract String execute(Object arg0);
+
+        @Specialization
+        String doCached(String arg,
+                        @Cached(value = "arg", weak = true) String cachedStorage,
+                        @Cached(value = "createClassStorage()", neverDefault = false) Object cachedClassStorage) {
+            assertNotNull(cachedStorage);
+            assertNotNull(cachedClassStorage);
+            return "cached";
+        }
+
+        static Object createClassStorage() {
+            return new Object();
+        }
+
+        @Specialization(replaces = "doCached")
+        static String doGeneric(String arg) {
+            return "generic";
+        }
     }
 
     @Test
@@ -147,6 +187,51 @@ public class WeakCachedTest extends AbstractPolyglotTest {
             return arg;
         }
 
+    }
+
+    @Test
+    public void testWeakIdempotentGuard() throws IOException, InterruptedException {
+        Runnable test = () -> {
+            WeakIdempotentGuardNode node = WeakIdempotentGuardNodeGen.create();
+            GuardedValue value = new GuardedValue();
+            assertEquals("cached", node.execute(value));
+
+            value.guardInvocations = 0;
+            assertEquals("cached", node.execute(value));
+            assertEquals(WeakCachedTestFactory.class.desiredAssertionStatus() ? 1 : 0, value.guardInvocations);
+        };
+        if (ImageInfo.inImageCode()) {
+            test.run();
+        } else {
+            SubprocessTestUtils.newBuilder(WeakCachedTest.class, test).disableAssertions(WeakCachedTestFactory.class).run();
+        }
+    }
+
+    static final class GuardedValue {
+
+        int guardInvocations;
+
+        @Idempotent
+        boolean isValid() {
+            guardInvocations++;
+            return true;
+        }
+    }
+
+    abstract static class WeakIdempotentGuardNode extends Node {
+
+        abstract String execute(Object arg);
+
+        @Specialization(guards = {"cachedArg.isValid()", "arg == cachedArg"}, limit = "1")
+        static String doCached(GuardedValue arg,
+                        @Cached(value = "arg", weak = true) GuardedValue cachedArg) {
+            return "cached";
+        }
+
+        @Specialization(replaces = "doCached")
+        static String doGeneric(Object arg) {
+            return "generic";
+        }
     }
 
     @Test
