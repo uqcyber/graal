@@ -114,12 +114,14 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements Canonica
                 long rawY = ((PrimitiveConstant) c).asLong();
                 long mask = CodeUtil.mask(PrimitiveStamp.getBits(stamp));
                 if ((rawY & mask) == mask) {
-                    // veriopt: MaskOutRHS: (x ^ y) |-> ~(x)
+                    // veriopt: MaskOutRHS: (x ^ y) |-> (~x)
                     //                 when (is_ConstantExpr y && mask = mask(x ^ y) && (y & mask) == mask)
                     return new NotNode(forX);
                 }
             }
             if (c instanceof SimdConstant simdConstant && simdConstant.isAllOnes()) {
+                // TODO encoding
+                // veriopt: XorAllOnes: (x ^ y) |-> (~x) when (is_SimdConstant y && is_all_ones y)
                 return new NotNode(forX);
             }
             return reassociateMatchedValues(self != null ? self : (XorNode) new XorNode(forX, forY).maybeCommuteInputs(), ValueNode.isConstantPredicate(), forX, forY, view);
@@ -137,11 +139,15 @@ public final class XorNode extends BinaryArithmeticNode<Xor> implements Canonica
         if (forY instanceof XorNode innerXor && (innerXor.getX() == forX || innerXor.getY() == forX)) {
             // x ^ (x ^ y) |-> y
             // x ^ (y ^ x) |-> y
+            // veriopt: XorEliminateRHS: x ^ (x ^ y) |-> y
+            // veriopt: XorEliminateRHSCommute: x ^ (y ^ x) |-> y
             return innerXor.getX() == forX ? innerXor.getY() : innerXor.getX();
         }
         if (forX instanceof XorNode innerXor && (innerXor.getX() == forY || innerXor.getY() == forY)) {
             // (y ^ x) ^ y |-> x
             // (x ^ y) ^ y |-> x
+            // veriopt: XorEliminateLHS: (y ^ x) ^ y |-> x
+            // veriopt: XorEliminateLHSCommute: (x ^ y) ^ y |-> x
             return innerXor.getX() == forY ? innerXor.getY() : innerXor.getX();
         }
         return self != null ? self : new XorNode(forX, forY).maybeCommuteInputs();
