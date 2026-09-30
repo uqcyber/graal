@@ -44,6 +44,7 @@ import jdk.graal.compiler.nodeinfo.NodeInfo;
 /**
  * Binary negation of long or integer values.
  */
+// veriopt-note: All rewrite rules complete as at 30/09/26
 @NodeInfo(cycles = CYCLES_1, size = SIZE_1)
 public final class NotNode extends UnaryArithmeticNode<Not> implements ArithmeticLIRLowerable, NarrowableArithmeticNode, StampInverter {
 
@@ -78,13 +79,13 @@ public final class NotNode extends UnaryArithmeticNode<Not> implements Arithmeti
         }
         if (x instanceof NegateNode negateNode) {
             // ~(-x) == x - 1
-            // veriopt: NotNegate: ~(-(x)) |-> (x - 1)
+            // veriopt: NotNegate: ~(-x) |-> (x - 1)
             ValueNode one = BinaryArithmeticNode.createIntegerConstant(x.stamp(NodeView.DEFAULT), 1);
             return SubNode.create(negateNode.getValue(), one, NodeView.DEFAULT);
         }
         if (x instanceof AddNode addNode && addNode.getY().isJavaConstant() && addNode.getY().asJavaConstant().asLong() == -1) {
             // ~(x - 1) -> -x
-            // veriopt: NotSubToNeg: ~(x - const(1)) |-> (-x)
+            // veriopt: NotAddAllOnesToNeg: ~(x + const (not 0)) |-> (-x)
             return NegateNode.create(addNode.getX(), NodeView.DEFAULT);
         }
         if (node != null) {
