@@ -41,6 +41,7 @@ import jdk.graal.compiler.nodes.spi.NodeLIRBuilderTool;
 import jdk.graal.compiler.nodes.util.GraphUtil;
 import jdk.vm.ci.meta.Constant;
 
+// veriopt-note: All rewrite rules complete as at 30/09/26
 @NodeInfo(shortName = "|")
 public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicalizable.BinaryCommutative<ValueNode>, NarrowableArithmeticNode {
 
@@ -132,11 +133,15 @@ public final class OrNode extends BinaryArithmeticNode<Or> implements Canonicali
         if (forY instanceof OrNode innerOr && (innerOr.getX() == forX || innerOr.getY() == forX)) {
             // x | (x | y) |-> x | y
             // x | (y | x) |-> y | x
+            // veriopt: OrEliminateLHS: (x | (x | y)) |-> (x | y)
+            // veriopt: OrEliminateLHSCommute: (x | (y | x)) |-> (y | x)
             return innerOr;
         }
         if (forX instanceof OrNode innerOr && (innerOr.getX() == forY || innerOr.getY() == forY)) {
             // (y | x) | y |-> y | x
             // (x | y) | y |-> x | y
+            // veriopt: OrEliminateRHS: ((y | x) | y) |-> (y | x)
+            // veriopt: OrEliminateRHSCommute: ((x | y) | y) |-> (x | y)
             return innerOr;
         }
         return self != null ? self : new OrNode(forX, forY).maybeCommuteInputs();
