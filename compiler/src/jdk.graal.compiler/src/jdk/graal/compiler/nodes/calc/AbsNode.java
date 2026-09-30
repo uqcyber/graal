@@ -45,6 +45,7 @@ import jdk.vm.ci.code.CodeUtil;
 /**
  * Absolute value.
  */
+// veriopt-note: All rewrite rules complete as at 30/09/26
 @NodeInfo(cycles = CYCLES_2, size = SIZE_1)
 public final class AbsNode extends UnaryArithmeticNode<Abs> implements ArithmeticLIRLowerable, NarrowableArithmeticNode {
     public static final NodeClass<AbsNode> TYPE = NodeClass.create(AbsNode.class);
@@ -73,6 +74,8 @@ public final class AbsNode extends UnaryArithmeticNode<Abs> implements Arithmeti
         }
         if (forValue.stamp(view) instanceof IntegerStamp && ((IntegerStamp) forValue.stamp(view)).isPositive()) {
             // The value always positive so nothing to do
+            // veriopt: AbsPositiveSelf: abs(e) |-> e
+            //          when (stamp_expr e = IntegerStamp b lo hi && wf_stamp e && is_stamp_positive (stamp_expr e))
             return forValue;
         }
         // abs(-x) => abs(x)
