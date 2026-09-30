@@ -75,7 +75,6 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
         if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
             Constant zero = op.getZero(forX.stamp(view));
             if (zero != null) {
-
                 // veriopt: SubSelfIsZero: (x - x) |-> 0
                 return ConstantNode.forPrimitive(stamp, zero);
             }
@@ -127,6 +126,8 @@ public class SubNode extends BinaryArithmeticNode<Sub> implements NarrowableArit
                 OrNode or = (OrNode) forX;
                 XorNode xor = (XorNode) forY;
                 if ((or.getX() == xor.getX() && or.getY() == xor.getY()) || (or.getX() == xor.getY() && or.getY() == xor.getX())) {
+                    // veriopt: SubOrXorToAnd: (x | y) - (x ^ y) |-> x & y
+                    // veriopt: SubOrXorToAndCommute: (x | y) - (y ^ x) |-> x & y
                     return AndNode.create(or.getX(), or.getY(), view);
                 }
             }
