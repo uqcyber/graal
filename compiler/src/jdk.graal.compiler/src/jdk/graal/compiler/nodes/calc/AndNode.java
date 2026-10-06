@@ -150,7 +150,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
                     // veriopt: RedundantLHSYAdd: (x + y) & z |-> x & z
                     //          when (!is_unrestricted (stamp_expr y) && (up(y) & up(z) == 0) && up(z) != 0 && is_mask up(z))
 
-                    // veriopt: RedundantRHSYAdd: z & (x + y) |-> x & z
+                    // veriopt: RedundantRHSYAdd: z & (x + y) |-> z & x
                     //          when (!is_unrestricted (stamp_expr y) && (up(y) & up(z) == 0) && up(z) != 0 && is_mask up(z))
                     return opX;
                 }
@@ -158,7 +158,7 @@ public final class AndNode extends BinaryArithmeticNode<And> implements Narrowab
                     // veriopt: RedundantLHSXAdd: (x + y) & z |-> y & z
                     //          when (!is_unrestricted (stamp_expr x) && (up(x) & up(z) == 0) && up(z) != 0 && is_mask up(z))
 
-                    // veriopt: RedundantRHSXAdd: z & (x + y) |-> y & z
+                    // veriopt: RedundantRHSXAdd: z & (x + y) |-> z & y
                     //          when (!is_unrestricted (stamp_expr x) && (up(x) & up(z) == 0) && up(z) != 0 && is_mask up(z))
                     return opY;
                 }
