@@ -45,6 +45,7 @@ import jdk.graal.compiler.nodeinfo.NodeInfo;
 /**
  * The {@code NegateNode} node negates its operand.
  */
+// veriopt-note: All rewrite rules complete as at 07/10/26
 @NodeInfo(cycles = CYCLES_2, size = SIZE_1)
 public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableArithmeticNode, StampInverter {
 
@@ -98,9 +99,7 @@ public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableAr
         }
         if (forValue instanceof SubNode && !(forValue.stamp(view) instanceof FloatStamp)) {
             SubNode sub = (SubNode) forValue;
-
-            // todo not sure how to encode in Isabelle
-            // veriopt: DistributeSubtraction: -(x - y) |-> (y - x) if ~(is_Float (x - y))
+            // veriopt: DistributeSubtraction: -(x - y) |-> (y - x) if ~(is_FloatStamp (stamp_expr (x - y)))
             return SubNode.create(sub.getY(), sub.getX(), view);
         }
         // e.g. -(x >> 31) => x >>> 31
@@ -110,11 +109,9 @@ public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableAr
             if (shift.getY().isConstant() && stamp instanceof IntegerStamp) {
                 int shiftAmount = shift.getY().asJavaConstant().asInt();
                 if (shiftAmount == ((IntegerStamp) stamp).getBits() - 1) {
-
-                    // todo unsure of encoding
-                    // veriopt: NegativeShift: -(x >> y) |-> x >>> y when (is_Constant y &&
-                    //                                                     stamp(x >> y) = IntegerStamp bits lo hi &&
-                    //                                                     y == (x >> y).getBits() - 1)
+                    // veriopt: NegativeShift: -(x >> y) |-> x >>> y
+                    //                         when (stamp_expr (x >> y) = IntegerStamp b lo hi &&
+                    //                               y = const (new_int yb yv) && yv = b - 1)
                     return UnsignedRightShiftNode.create(shift.getX(), shift.getY(), view);
                 }
             }
