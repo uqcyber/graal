@@ -49,6 +49,7 @@ import jdk.vm.ci.meta.Value;
 /**
  * Multiplication node.
  */
+// veriopt-note: All rewrite rules complete as at 12/10/26
 @NodeInfo(shortName = "*", cycles = CYCLES_4, cyclesRationale = "The node cycle estimate is taken from Agner Fog's instruction tables (https://www.agner.org/optimize/instruction_tables.pdf).")
 public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArithmeticNode, Canonicalizable.BinaryCommutative<ValueNode> {
 
@@ -156,17 +157,17 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
             return NegateNode.create(forX, view);
         } else if (i > 0) {
             if (CodeUtil.isPowerOf2(i)) {
-                // veriopt: MulPower2: x * const(2^j) |-> x << const(j) when (j >= 0)
+                // veriopt: MulPower2: x * const c |-> x << const (log2 c) when (is_power_of_2 c && c != 1)
                 return new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i)));
             } else if (CodeUtil.isPowerOf2(i - 1)) {
-                // veriopt: MulPower2Add1: x * const((2^j) + 1) |-> x << const(j) + x
+                // veriopt: MulPower2Add1: x * const c |-> (x << const (log2 (c - 1))) + x when (is_power_of_2 (c - 1))
                 return AddNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i - 1))), forX, view);
             } else if (CodeUtil.isPowerOf2(i + 1)) {
-                // veriopt: MulPower2Sub1: x * const((2^j) - 1) |-> x << const(j) - x
+                // veriopt: MulPower2Sub1: x * const c |-> (x << const (log2 (c + 1))) - x when (is_power_of_2 (c + 1))
                 return SubNode.create(new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(i + 1))), forX, view);
             } else {
-                // veriopt-definition: constant_condition: (is_ConstantExpr c && c > 0 && c != 1 && ~is_Power2(c) &&
-                //                                          ~is_Power2(c + 1) && ~is_Power2(c - 1))
+                // veriopt-definition: constant_condition: (is_ConstantExpr c && c > 0 && ~(is_power_of_2 c) &&
+                //                                          ~(is_power_of_2 (c + 1)) && ~(is_power_of_2 (c - 1)))
 
                 // veriopt-definition: highestBitValue: highestOneBit_Long c
                 int bitCount = Long.bitCount(i);
@@ -180,10 +181,10 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                     assert lowerBitValue > 1 : Assertions.errorMessageContext("stamp", stamp, "forX", forX, "i", i, "lowerBitVal", lowerBitValue);
                     ValueNode left = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(highestBitValue)));
                     ValueNode right = new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(lowerBitValue)));
-
                     // veriopt-definition: lowerBitValue: c - highestBitValue c
 
-                    // veriopt: MulPower2AddPower2: x * c |-> (x << const(log2 (highestBitValue))) + (x << const(log2 (lowerBitValue)))
+                    // veriopt: MulPower2AddPower2: x * c |->
+                    //                              (x << const (log2 highestBitValue)) + (x << const (log2 lowerBitValue))
                     //          when (constant_condition && bitCount c = 2 && lowerBitValue > 1)
                     return AddNode.create(left, right, view);
                 } else {
@@ -195,31 +196,36 @@ public class MulNode extends BinaryArithmeticNode<Mul> implements NarrowableArit
                         // For Long.MAX_VALUE, i + 1 overflows, so this valid subtraction by one is
                         // not handled by the preceding i + 1 check.
                         ValueNode right = subValue == 1 ? forX : new LeftShiftNode(forX, ConstantNode.forInt(CodeUtil.log2(subValue)));
-
-                        // veriopt-definition: shiftPow2: (log2 (highestBitValue)) + 1
+                        // veriopt-definition: shiftPow2: (log2 highestBitValue) + 1
                         // veriopt-definition: subVal: (1 << shiftPow2) - c
+                        // veriopt-definition: shift_condition: bitCount c != 2 && is_power_of_2 subVal &&
+                        //                                      stamp_expr (x * c) = IntegerStamp b lo hi &&
+                        //                                      shiftPow2 < b
 
-                        // veriopt: MulPower2SubPower2:   x * c |-> (x << const(shiftPow2)) - (x << const(log2 (subVal)))
-                        //          when (constant_condition && bitCount c != 2 && is_Power2(subVal) && subVal != 1 &&
-                        //                stamp_expr (x * c) = IntegerStamp b lo hi && shiftPow2 < b)
+                        // veriopt: MulPower2SubPower2: x * c |-> (x << const shiftPow2) - (x << const (log2 subVal))
+                        //          when (constant_condition && shift_condition && subVal != 1)
 
-                        // veriopt: MulPower2Sub1_MaxVal: x * c |-> (x << const(shiftPow2)) - x
-                        //          when (constant_condition && bitCount c != 2 && is_Power2(subVal) && subVal == 1 &&
-                        //                stamp_expr (x * c) = IntegerStamp b lo hi && shiftPow2 < b)
+                        // veriopt: MulPower2Sub1_MaxVal: x * c |-> (x << const shiftPow2) - x
+                        //          when (constant_condition && shift_condition && subVal == 1)
                         return SubNode.create(left, right, view);
                     }
                 }
             }
         } else if (i < 0) {
+            // veriopt-definition: negative_condition: c < 0 && c != -1
             if (stamp instanceof IntegerStamp integerStamp && i == CodeUtil.minValue(integerStamp.getBits())) {
                 /*
                  * The min value is negative, but for multiplication it behaves like the largest
                  * unsigned power of 2. So unlike the case below, we do not need a negation.
                  */
+
+                // veriopt: MulMinValue: x * const c |-> x << (b - 1)
+                //          when (negative_condition && stamp_expr (x * c) = IntegerStamp b lo hi && c = min_value b)
                 return LeftShiftNode.create(forX, ConstantNode.forInt(integerStamp.getBits() - 1), view);
             }
             if (CodeUtil.isPowerOf2(-i)) {
-                // veriopt: MulNegativeConstShift: x * const(-(2^j)) |-> -(x << const(j))
+                // veriopt: MulNegativeConstShift: x * const c |-> -(x << const (log2 (-c)))
+                //          when (negative_condition && is_power_of_2 (-c))
                 return NegateNode.create(LeftShiftNode.create(forX, ConstantNode.forInt(CodeUtil.log2(-i)), view), view);
             }
         }
