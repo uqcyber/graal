@@ -92,6 +92,7 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
             // patterns like min(x, y) == y --> x >= y, see doc for conditionForEqualsUsage
             LogicNode equivalentCondition = minMax.conditionForEqualsUsage(forY, tool);
             if (equivalentCondition != null) {
+                // veriopt: TODO encoding
                 return equivalentCondition;
             }
         }
@@ -99,6 +100,7 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
             // patterns like x == min(x, y) --> x <= y, see doc for conditionForEqualsUsage
             LogicNode equivalentCondition = minMax.conditionForEqualsUsage(forX, tool);
             if (equivalentCondition != null) {
+                // veriopt: TODO encoding
                 return equivalentCondition;
             }
         }
@@ -134,8 +136,13 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
         public LogicNode canonical(ConstantReflectionProvider constantReflection, MetaAccessProvider metaAccess, OptionValues options, Integer smallestCompareWidth, CanonicalCondition condition,
                         boolean unorderedIsTrue, ValueNode forX, ValueNode forY, NodeView view) {
             if (GraphUtil.unproxify(forX) == GraphUtil.unproxify(forY)) {
+                // veriopt: EqualSelf: x == x |-> true
                 return LogicConstantNode.tautology();
             } else if (forX.stamp(view).alwaysDistinct(forY.stamp(view))) {
+                // veriopt: DistinctNeverEqual: x == y |-> false
+                //                              when (stamp_expr x = IntegerStamp b xl xh && wf_stamp x &&
+                //                                    stamp_expr y = IntegerStamp b yl yh && wf_stamp y &&
+                //                                    alwaysDistinct (stamp_expr x) (stamp_expr y))
                 return LogicConstantNode.contradiction();
             }
 
@@ -284,6 +291,7 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                      * comparison will be false. So the comparison can only be true if the min/max
                      * returns x, and the returned value equals C2. So simplify to x == C2 directly.
                      */
+                    // veriopt: TODO encoding
                     return IntegerEqualsNode.create(minMax.getX(), forY, view);
                 }
             }
@@ -303,12 +311,19 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                     // (respective -1) for a more canonical graph and also to allow for faster
                     // execution
                     // on specific platforms.
+
+                    // veriopt: EqualPosOneNegate: (x == const (IntVal b 1)) |-> !(x == const (IntVal b 0))
+                    //          when (wf_stamp x && stamp_expr x = IntegerStamp b 0 1)
+
+                    // veriopt: EqualNegOneNegate: (x == const (IntVal b (not 0))) |-> !(x == const (IntVal b 0))
+                    //          when (wf_stamp x && stamp_expr x = IntegerStamp b (-1) 0)
                     return LogicNegationNode.create(
                                     IntegerEqualsNode.create(constantReflection, metaAccess, options, smallestCompareWidth, nonConstant, ConstantNode.forIntegerStamp(nonConstantStamp, 0),
                                                     view));
                 } else if (primitiveConstant.asLong() == 0) {
                     if (nonConstant instanceof AndNode) {
                         AndNode andNode = (AndNode) nonConstant;
+                        // veriopt: EqualAndZeroTest: (x & y) == const (IntVal b 0) |-> BinaryExpr BinIntegerTest x y
                         return new IntegerTestNode(andNode.getX(), andNode.getY());
                     } else if (nonConstant instanceof SubNode || nonConstant instanceof XorNode) {
                         BinaryNode binaryNode = (BinaryNode) nonConstant;
@@ -325,8 +340,18 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                                 int mask = shift.getShiftAmountMask();
                                 int amount = shift.getY().asJavaConstant().asInt() & mask;
                                 if (shift.getX().getStackKind() == JavaKind.Int) {
+                                    // veriopt: EqualLShiftZeroIntTest:
+                                    //          (x << const y) == const 0 |->
+                                    //          BinaryExpr BinIntegerTest x (const (IntVal 32 ((not 0) >>> shift_amount sb y)))
+                                    //          when (stamp_expr (x << const y) = IntegerStamp sb sl sh &&
+                                    //                stamp_expr x = IntegerStamp 32 xl xh)
                                     return new IntegerTestNode(shift.getX(), ConstantNode.forInt(-1 >>> amount));
                                 } else {
+                                    // veriopt: EqualLShiftZeroLongTest:
+                                    //          (x << const y) == const 0 |->
+                                    //          BinaryExpr BinIntegerTest x (const (IntVal 64 ((not 0) >>> shift_amount sb y)))
+                                    //          when (stamp_expr (x << const y) = IntegerStamp sb sl sh &&
+                                    //                stamp_expr x = IntegerStamp 64 xl xh)
                                     assert shift.getX().getStackKind() == JavaKind.Long : Assertions.errorMessage(shift, shift.getX(), shift.getY());
                                     return new IntegerTestNode(shift.getX(), ConstantNode.forLong(-1L >>> amount));
                                 }
@@ -337,8 +362,20 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                                 int mask = shift.getShiftAmountMask();
                                 int amount = shift.getY().asJavaConstant().asInt() & mask;
                                 if (shift.getX().getStackKind() == JavaKind.Int) {
+                                    // veriopt: EqualRShiftZeroIntTest:
+                                    //          (x >> const y) == const 0 |->
+                                    //          BinaryExpr BinIntegerTest x (const (IntVal 32 ((not 0) << shift_amount sb y)))
+                                    //          when (stamp_expr (x >> const y) = IntegerStamp sb sl sh &&
+                                    //                stamp_expr x = IntegerStamp 32 xl xh &&
+                                    //                is_stamp_positive (stamp_expr x))
                                     return new IntegerTestNode(shift.getX(), ConstantNode.forInt(-1 << amount));
                                 } else {
+                                    // veriopt: EqualRShiftZeroLongTest:
+                                    //          (x >> const y) == const 0 |->
+                                    //          BinaryExpr BinIntegerTest x (const (IntVal 64 ((not 0) << shift_amount sb y)))
+                                    //          when (stamp_expr (x >> const y) = IntegerStamp sb sl sh &&
+                                    //                stamp_expr x = IntegerStamp 64 xl xh &&
+                                    //                is_stamp_positive (stamp_expr x))
                                     assert shift.getX().getStackKind() == JavaKind.Long : Assertions.errorMessage(shift, shift.getX(), shift.getY());
                                     return new IntegerTestNode(shift.getX(), ConstantNode.forLong(-1L << amount));
                                 }
@@ -349,8 +386,18 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                                 int mask = shift.getShiftAmountMask();
                                 int amount = shift.getY().asJavaConstant().asInt() & mask;
                                 if (shift.getX().getStackKind() == JavaKind.Int) {
+                                    // veriopt: EqualURShiftZeroIntTest:
+                                    //          (x >>> const y) == const 0 |->
+                                    //          BinaryExpr BinIntegerTest x (const (IntVal 32 ((not 0) << shift_amount sb y)))
+                                    //          when (stamp_expr (x >>> const y) = IntegerStamp sb sl sh &&
+                                    //                stamp_expr x = IntegerStamp 32 xl xh)
                                     return new IntegerTestNode(shift.getX(), ConstantNode.forInt(-1 << amount));
                                 } else {
+                                    // veriopt: EqualURShiftZeroLongTest:
+                                    //          (x >>> const y) == const 0 |->
+                                    //          BinaryExpr BinIntegerTest x (const (IntVal 64 ((not 0) << shift_amount sb y)))
+                                    //          when (stamp_expr (x >>> const y) = IntegerStamp sb sl sh &&
+                                    //                stamp_expr x = IntegerStamp 64 xl xh)
                                     assert shift.getX().getStackKind() == JavaKind.Long : Assertions.errorMessage(shift, shift.getX(), shift.getY());
                                     return new IntegerTestNode(shift.getX(), ConstantNode.forLong(-1L << amount));
                                 }
@@ -361,6 +408,7 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                 if (nonConstant instanceof AddNode) {
                     AddNode addNode = (AddNode) nonConstant;
                     if (addNode.getY().isJavaConstant()) {
+                        // veriopt: EqualAddShiftConst: x + const y == const z |-> x == (const (z - y))
                         return new IntegerEqualsNode(addNode.getX(), ConstantNode.forIntegerStamp(nonConstantStamp, primitiveConstant.asLong() - addNode.getY().asJavaConstant().asLong()));
                     }
                 }
@@ -370,6 +418,10 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                      */
                     AndNode andNode = (AndNode) nonConstant;
                     if (Long.bitCount(((PrimitiveConstant) constant).asLong()) == 1 && andNode.getY().isConstant() && andNode.getY().asJavaConstant().equals(constant)) {
+                        // TODO encoding
+                        // veriopt: EqualOneBitTest: (x & y) == c |-> !(BinaryExpr BinIntegerTest x y)
+                        //          when (c = const (IntVal b cv) && y = const (IntVal b yv) && yv = cv &&
+                        //                bitCount c = 1)
                         return LogicNegationNode.create(new IntegerTestNode(andNode.getX(), andNode.getY()));
                     }
                 }
