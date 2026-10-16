@@ -38,6 +38,7 @@ import jdk.vm.ci.meta.TriState;
 /**
  * Logic node that negates its argument.
  */
+// veriopt-note: All rewrite rules complete as at 16/10/26
 @NodeInfo(cycles = CYCLES_0, size = SIZE_0)
 public final class LogicNegationNode extends LogicNode implements Canonicalizable.Unary<LogicNode> {
 
@@ -60,8 +61,11 @@ public final class LogicNegationNode extends LogicNode implements Canonicalizabl
     private static LogicNode findSynonym(LogicNode value) {
         if (value instanceof LogicConstantNode) {
             LogicConstantNode logicConstantNode = (LogicConstantNode) value;
+            // veriopt: LogicNegationTrue: !(true) |-> false
+            // veriopt: LogicNegationFalse: !(false) |-> true
             return LogicConstantNode.forBoolean(!logicConstantNode.getValue());
         } else if (value instanceof LogicNegationNode) {
+            // veriopt: LogicNegationCancel: !(!e)) |-> e when (is_boolean e)
             return ((LogicNegationNode) value).getValue();
         }
         return null;
