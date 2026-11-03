@@ -52,8 +52,7 @@ public final class RightShiftNode extends ShiftNode<Shr> {
 
     public static ValueNode create(ValueNode x, int y, NodeView view) {
         if (y == 0) {
-
-            // veriopt: ReturnXOnZeroShift: (x >> const(0)) |-> x
+            // veriopt: ReturnXOnZeroShift: (x >> const 0) |-> x
             return x;
         }
         return create(x, ConstantNode.forInt(y), view);
@@ -89,10 +88,8 @@ public final class RightShiftNode extends ShiftNode<Shr> {
     private static ValueNode canonical(RightShiftNode rightShiftNode, ArithmeticOpTable.ShiftOp<Shr> op, Stamp stamp, ValueNode forX, ValueNode forY, NodeView view) {
         RightShiftNode self = rightShiftNode;
         if (forX.stamp(view) instanceof IntegerStamp && ((IntegerStamp) forX.stamp(view)).isPositive()) {
-
             // veriopt: TransformToUnsignedOnPositiveX: (x >> y) |-> (x >>> y)
-            //                                     when ((stamp_expr x = IntegerStamp b lo hi)
-            //                                       && (lo >= 0))
+            //          when (stamp_expr x = IntegerStamp b lo hi && is_stamp_positive (stamp_expr x))
             return new UnsignedRightShiftNode(forX, forY);
         }
 
@@ -111,6 +108,7 @@ public final class RightShiftNode extends ShiftNode<Shr> {
         }
 
         if (forY.isConstant() && op.isNeutral(forY.asConstant())) {
+            // veriopt: ReturnXOnZeroShift: (x >> const 0) |-> x
             return forX;
         }
 
@@ -119,10 +117,10 @@ public final class RightShiftNode extends ShiftNode<Shr> {
             int originalAmout = amount;
             int mask = op.getShiftAmountMask(stamp);
             amount &= mask;
+            // veriopt-alias: expr_stamp: stamp_expr (x >> y)
             if (amount == 0) {
-
-                // veriopt: EliminateConstantRHS: (x >> const(y)) |-> x
-                //                           when ((y & mask(x >> y)) == 0)
+                // veriopt: EliminateConstantRHS: (x >> const (IntVal yb yv)) |-> x
+                //                           when (expr_stamp = IntegerStamp b lo hi && shift_amount b yv = 0)
                 return forX;
             }
 
@@ -132,9 +130,10 @@ public final class RightShiftNode extends ShiftNode<Shr> {
                 if (xStamp.lowerBound() >> amount == xStamp.upperBound() >> amount) {
                     // Right shift turns the result of the expression into a constant.
 
-                    // veriopt: TransformRightShiftIntoConstantShift: (x >> const(y)) |-> const(lo >> (y & mask(x >> y)))
-                    //                                           when ((stamp_expr x = IntegerStamp b lo hi)
-                    //                                             && (lo >> (y & mask(x >> y))) == (hi >> (y & mask(x >> y))))
+                    // veriopt: TransformRightShiftIntoConstantShift:
+                    //          (x >> const (IntVal yb yv))) |-> const (IntVal xb (xl >> shift_amount b yv))
+                    //          when (stamp_expr x = IntegerStamp xb xl xh && expr_stamp = IntegerStamp b lo hi &&
+                    //               ((xl >> shift_amount b yv) = (xh >> shift_amount b yv)))
                     return ConstantNode.forIntegerBits(xStamp.getBits(), xStamp.lowerBound() >> amount);
                 }
             }
@@ -145,32 +144,33 @@ public final class RightShiftNode extends ShiftNode<Shr> {
                     int otherAmount = other.getY().asJavaConstant().asInt() & mask;
                     if (other instanceof RightShiftNode) {
                         int total = amount + otherAmount;
+                        // veriopt-alias: total: ((shift_amount b zv) + (shift_amount b yv))
 
-                        // veriopt-alias: x = a >> const(b)
-                        // veriopt-definition: total = ((y & mask(x >> y)) + (b & mask(x >> y)))
+                        // TODO verify
+                        //    b <= total <--> total != (total & shift_mask b)
 
                         if (total != (total & mask)) {
                             if (other.getX().stamp(view) instanceof SimdStamp) {
+                                // veriopt: TODO SimdStamp encoding
                                 return new RightShiftNode(other.getX(), ConstantNode.forInt(mask));
                             }
                             assert other.getX().stamp(view) instanceof IntegerStamp : Assertions.errorMessageContext("rightShiftNode", rightShiftNode, "forX", forX, "forY", forY, "other", other,
                                             "other.x", other.getX());
                             IntegerStamp istamp = (IntegerStamp) other.getX().stamp(view);
 
+                            // veriopt-definition: width_leq_total: expr_stamp = IntegerStamp b lo hi && b <= total
                             if (istamp.isPositive()) {
-
-                                // veriopt: RightShiftsBecomeZero: ((a >> const(b)) >> const(y)) |-> const(0)
-                                //                            when ((stamp_expr a = IntegerStamp b lo hi)
-                                //                              && (lo >= 0)
-                                //                              && (total != (total & mask(x >> y))))
+                                // veriopt: RightShiftsBecomeZero:
+                                //          (x >> const (IntVal zb zv)) >> const (IntVal yb yv) |-> const (IntVal xb 0)
+                                //          when (stamp_expr x = IntegerStamp xb xl xh && width_leq_total &&
+                                //                is_stamp_positive (stamp_expr x))
                                 return ConstantNode.forIntegerBits(istamp.getBits(), 0);
                             }
                             if (istamp.isStrictlyNegative()) {
-
-                                // veriopt: RightShiftsBecomeNegativeOne: ((a >> const(b)) >> const(y)) |-> const(-1)
-                                //                                   when ((stamp_expr a = IntegerStamp b lo hi)
-                                //                                     && (lo < 0)
-                                //                                     && (total != (total & mask(x >> y))))
+                                // veriopt: RightShiftsBecomeNegativeOne:
+                                //          (x >> const (IntVal zb zv)) >> const (IntVal yb yv) |-> const (IntVal xb (-1))
+                                //           when (stamp_expr x = IntegerStamp xb xl xh && width_leq_total &&
+                                //                 is_stamp_strictly_negative (stamp_expr x))
                                 return ConstantNode.forIntegerBits(istamp.getBits(), -1L);
                             }
 
@@ -182,25 +182,22 @@ public final class RightShiftNode extends ShiftNode<Shr> {
                                             "rightShiftNode", rightShiftNode, "forX", forX, "forY", forY, "other", other,
                                             "other.x", other.getX(), "total", total, "mask", mask);
 
-                            // todo unsure
-                            // veriopt: RightShiftsMerge1: ((a >> const(b)) >> const(y)) |-> (a >> const(mask(x >> y)))
-                            //                        when (total != (total & mask(x >> y)
-                            //                          && (total >= mask(x >> y)) todo)
+                            // veriopt: RightShiftsMerge: (x >> const (IntVal zb zv)) >> const (IntVal yb yv) |->
+                            //                            (x >> const (IntVal 32 (shift_mask b)))
+                            //          when (width_leq_total && total >= shift_mask b && is_IntegerStamp (stamp_expr x))
                             return new RightShiftNode(other.getX(), ConstantNode.forInt(mask));
                         }
-
-                        // veriopt: RightShiftsMerge2: ((a >> const(b)) >> const(y)) |-> (a >> total)
-                        //                        when (total == (total & mask(x >> y)))
+                        // veriopt: EliminateOtherRightShift: ((x >> const (IntVal zb zv)) >> const (IntVal yb yv)) |->
+                        //                                    (x >> const (IntVal 32 total))
+                        //          when (expr_stamp = IntegerStamp b lo hi && b > total)
                         return new RightShiftNode(other.getX(), ConstantNode.forInt(total));
                     }
                 }
             }
             if (originalAmout != amount) {
-
-                // todo unsure
-                // veriopt: ShiftRightByConstantAnd: (x >> const(y)) |-> (x >> const(y & mask(x >> y)))
-                //                              when (y != (y & mask(x >> y))
-                //                                && (!(x instanceof ShiftNode) || (x instanceof ShiftNode && ~is_Constant(x.getY))))
+                // veriopt: ShiftRightByShiftAmount:
+                //          (x >> const (IntVal yb yv)) |-> (x >> const (IntVal 32 (shift_amount b yv)))
+                //           when (expr_stamp = IntegerStamp b lo hi && shift_amount b yv != yv)
                 return new RightShiftNode(forX, ConstantNode.forInt(amount));
             }
         }
