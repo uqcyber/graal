@@ -93,6 +93,7 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
                 /* This will trap, cannot canonicalize. */
                 return self != null ? self : new SignedDivNode(forX, forY, zeroCheck);
             }
+            // veriopt: SignedDivFoldConst: (const x / const y) |-> const (x / y) when (y = new_int b yv && yv != 0)
             return ConstantNode.forIntegerStamp(stamp, forX.asJavaConstant().asLong() / y);
         } else if (forY.isConstant()) {
             long c = forY.asJavaConstant().asLong();
@@ -112,8 +113,11 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
                     if (self != null) {
                         return self.createWithInputs(integerSubNode.getX(), forY, zeroCheck, self.stateBefore);
                     }
+                    // veriopt-alias: expr_stamp = stamp_expr ((x - (x % y)) / y)
 
-                    // veriopt: EliminateRedundantMod: ((x - x % y) / y) |-> x / y
+                    // veriopt: EliminateRedundantMod: ((x - (x % y)) / y) |-> x / y
+                    //          when (compatible expr_stamp (stamp_expr (x - (x % y))) &&
+                    //                compatible expr_stamp (stamp_expr (x % y)))
                     return new SignedDivNode(integerSubNode.getX(), forY, zeroCheck);
                 }
             }
@@ -122,6 +126,7 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
         if (self != null && self.canFloat() && GraalOptions.FloatingDivNodes.getValue(self.getOptions()) && self.graph().isBeforeStage(GraphState.StageFlag.VALUE_PROXY_REMOVAL)) {
             IntegerStamp yStamp = (IntegerStamp) forY.stamp(view);
             if (!yStamp.contains(0) && divisionIsJVMSCompliant(forX, forY, divisionOverflowIsJVMSCompliant)) {
+                // veriopt: TODO encoding
                 return SignedFloatingIntegerDivNode.create(forX, forY, view, zeroCheck, divisionOverflowIsJVMSCompliant);
             }
         }
@@ -129,7 +134,6 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
         if (self != null && self.next() instanceof SignedDivNode) {
             NodeClass<?> nodeClass = self.getNodeClass();
             if (self.next().getClass() == self.getClass() && nodeClass.equalInputs(self, self.next()) && self.valueEquals(self.next())) {
-
                 // veriopt: todo not sure
                 return self.next();
             }
@@ -174,12 +178,10 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
 
     public static ValueNode canonical(ValueNode forX, long c, NodeView view) {
         if (c == 1) {
-
             // veriopt: DivisionByOneIsSelf: a / const(1) |-> a
             return forX;
         }
         if (c == -1) {
-
             // veriopt: DivisionByNegativeOneIsNegativeSelf: a / const(-1) |-> -a
             return NegateNode.create(forX, view);
         }
@@ -200,32 +202,37 @@ public class SignedDivNode extends IntegerDivRemNode implements LIRLowerable {
             }
             RightShiftNode shift = new RightShiftNode(dividend, ConstantNode.forInt(log2));
 
-            // veriopt: lowBitsAlwaysZero = (stampX.upMask() & (abs(c) - 1)) == 0
-            if (c < 0) {
+            // veriopt-defn: lowBitsAlwaysZero = (up(x) & ((abs yv) - 1)) == 0
+            // veriopt-defn: stamp_pow_2_cond = (stamp_expr x = IntegerStamp xb lo hi && is_power_of_2 (abs yv))
+            // veriopt-defn: bit_minus v = new_int xb (xb - v)
 
+            // veriopt-alias: shift_rhs = new_int xb (log2 (abs yv))
+            // veriopt-alias: true_shift = ((x + ((x >> (bit_minus 1)) >>> (bit_minus (log2 (abs yv))))) >> shift_rhs)
+            // veriopt-alias: false_shift = (x >> shift_rhs)
+
+            if (c < 0) {
                 // TODO two cases: either above rounding if-statement ran, or it did not.
                 // todo if ran
-                // veriopt: TrueCLessZero: x / c |-> -((x + ((x >> const(x.getBits() - 1)) >>> const(x.getBits() - j))) >> const(j))
-                //                         when (abs(c) = 2^j && c < 0 &&                   // simple conditions
-                //                               canBeNegative(x) && ~lowBitsAlwaysZero)    // rounding conditions
+                // veriopt: TrueCLessZero: x / const (new_int yb yv) |-> -(true_shift)
+                //          when (stamp_pow_2_cond && yv <s 0 &&                         // simple conditions
+                //                can_be_negative (stamp_expr x) && ~lowBitsAlwaysZero)  // rounding conditions
 
                 // todo if didn't
-                // veriopt: FalseCLessZero: x / c |-> -(x >> const(j))
-                //                          when (abs(c) = 2^j && c < 0 &&                // simple conditions
-                //                               (isPositive(x) || lowBitsAlwaysZero))    // rounding conditions
+                // veriopt: FalseCLessZero: x / const (new_int yb yv) |-> -(false_shift)
+                //          when (stamp_pow_2_cond && yv <s 0 &&                     // simple conditions
+                //               (is_positive (stamp_expr x) || lowBitsAlwaysZero))  // rounding conditions
                 return NegateNode.create(shift, view);
             }
-
             // TODO two cases: either above rounding if-statement ran, or it did not.
             // todo if ran
-            // veriopt: TrueCGeqZero: x / c |-> ((x + ((x >> const(x.getBits() - 1)) >>> const(x.getBits() - j))) >> const(j))
-            //                        when (abs(c) = 2^j && c >= 0 &&                  // simple conditions
-            //                              canBeNegative(x) && ~lowBitsAlwaysZero)    // rounding conditions
+            // veriopt: TrueCGeqZero: x / const (new_int yb yv) |-> true_shift
+            //          when (stamp_pow_2_cond && yv >= 0 &&                         // simple conditions
+            //                can_be_negative (stamp_expr x) && ~lowBitsAlwaysZero)  // rounding conditions
 
             // todo if didn't
-            // veriopt: FalseCGeqZero: x / c |-> (x >> const(j))
-            //                         when (abs(c) = 2^j && c >= 0 &&               // simple conditions
-            //                              (isPositive(x) || lowBitsAlwaysZero))    // rounding conditions
+            // veriopt: FalseCGeqZero: x / const (new_int yb yv) |-> false_shift
+            //          when (stamp_pow_2_cond && yv >= 0 &&                     // simple conditions
+            //               (is_positive (stamp_expr x) || lowBitsAlwaysZero))  // rounding conditions
             return shift;
         }
         return null;
