@@ -408,7 +408,7 @@ public final class IntegerEqualsNode extends CompareNode implements Canonicaliza
                 if (nonConstant instanceof AddNode) {
                     AddNode addNode = (AddNode) nonConstant;
                     if (addNode.getY().isJavaConstant()) {
-                        // veriopt: EqualAddShiftConst: x + const y == const z |-> x == (const (z - y))
+                        // veriopt: EqualAddShiftConst: x + const y == const z |-> x == (const (z - y)) when (stamp_expr x = IntegerStamp b lo hi && wf_stamp x)
                         return new IntegerEqualsNode(addNode.getX(), ConstantNode.forIntegerStamp(nonConstantStamp, primitiveConstant.asLong() - addNode.getY().asJavaConstant().asLong()));
                     }
                 }
