@@ -141,6 +141,7 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                         }
                     }
                     if (other != null) {
+                        // veriopt: TODO encoding
                         return BinaryArithmeticNode.add(other, BinaryArithmeticNode.mul(ConstantNode.forIntegerStamp(integerStamp, count), addend, view), view);
                     }
                 }
@@ -182,17 +183,16 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
 
                             if (!IntegerStamp.addCanOverflow(narrowConstantStamp, beforeExtendStamp)) {
                                 ConstantNode constantNode = ConstantNode.forIntegerStamp(narrowConstantStamp, constant);
+                                // veriopt-defn: stamp_conditions =
+                                //      stamp_expr (a + b) = IntegerStamp bits lo hi &&
+                                //      stamp_expr c = constantAsStamp c &&
+                                //      c >= min_value bits && c <= max_value bits &&
+                                //      ~(add_can_overflow (stamp_expr c) (stamp_expr (a + b)))
                                 if (forX instanceof SignExtendNode) {
-
-
-                                    // veriopt: MergeSignExtendAdd: x + c |-> SignExtend((a + b) + c, x.ResultBits) when
-                                    //                               is_Constant c              &
-                                    //                               is_SignExtendNode x        &     todo not sure how to encode
-                                    //                               x.ValueNode = AddNode(a,b) &     todo not sure how to encode
-                                    //                               is_Constant b              &
-                                    //                               c >= (a+b).Stamp.bits.minValue &
-                                    //                               c <= (a+b).Stamp.bits.maxValue & todo c is in valid range of (a+b) ?
-                                    //                               (a + b) + c won't overflow       todo not sure how to encode
+                                    // veriopt: MergeSignExtendAdd:
+                                    //          (UnaryExpr UnarySignExtend in out (a + const b)) + const c |->
+                                    //          (UnaryExpr UnarySignExtend in out ((a + const b) + const c))
+                                    //          when (stamp_conditions)
                                     return SignExtendNode.create(AddNode.create(addBeforeExtend, constantNode, view), integerConvertNode.getResultBits(), view);
                                 } else {
                                     assert forX instanceof ZeroExtendNode : Assertions.errorMessage(forX);
@@ -211,20 +211,14 @@ public class AddNode extends BinaryArithmeticNode<Add> implements NarrowableArit
                                         }
                                     }
                                     if (!crossesZeroPoint) {
+                                        // veriopt-defn: add_doesnt_cross_zero stamp c =
+                                        // if (c > 0)  then (stamp.lower >= 0  || stamp.upper < -c) else
+                                        // if (c <= 0) then (stamp.lower >= -c || stamp.upper < 0)  else false
 
-                                        // veriopt: addDoesntCrossZero =
-                                        // (c > 0)  && ((a+b).Stamp.lower >= 0  || (a+b).Stamp.upper < -c) ||
-                                        // (c <= 0) && ((a+b).Stamp.lower >= -c || (a+b).Stamp.upper < 0)
-
-                                        // veriopt: MergeZeroExtendAdd: x + c |-> ZeroExtend((a + b) + c, x.ResultBits) when
-                                        //                            is_Constant c &
-                                        //                            is_ZeroExtendNode x &             todo not sure how to encode
-                                        //                            x.ValueNode = AddNode(a,b) &      todo not sure how to encode
-                                        //                            is_Constant b &
-                                        //                            c >= (a+b).Stamp.bits.minValue &
-                                        //                            c <= (a+b).Stamp.bits.maxValue &  todo c is in valid range of (a+b) ?
-                                        //                            (a + b) + c won't overflow &      todo not sure how to encode
-                                        //                            addDoesntCrossZero
+                                        // veriopt: MergeZeroExtendAdd:
+                                        //          (UnaryExpr UnaryZeroExtend in out (a + const b)) + const c |->
+                                        //          (UnaryExpr UnaryZeroExtend in out ((a + const b) + const c))
+                                        //          when (stamp_conditions && add_doesnt_cross_zero (stamp_expr (a + b)) c)
                                         return ZeroExtendNode.create(AddNode.create(addBeforeExtend, constantNode, view), integerConvertNode.getResultBits(), view);
                                     }
                                 }
