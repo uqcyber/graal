@@ -117,11 +117,14 @@ public final class IntegerBelowNode extends IntegerLowerThanNode {
                  * @formatter:on
                  */
                 if (c == -1) {
+                    // veriopt: AllOnesBelowCompareFalse: -1 |<| (BinaryExpr BinIntegerNormalizeCompare x y) |-> false
                     return LogicConstantNode.contradiction();
                 } else if (c == 0) {
                     LogicNode equal = normalizeNode.createEqualComparison(constantReflection, metaAccess, options, smallestCompareWidth, view);
+                    // veriopt: ZeroBelowCompareNotEqual: 0 |<| (BinaryExpr BinIntegerNormalizeCompare x y) |-> !(x eq y)
                     return LogicNegationNode.create(equal);
                 } else {
+                    // veriopt: TODO encoding
                     return normalizeNode.createLowerComparison(constantReflection, metaAccess, options, smallestCompareWidth, view);
                 }
             } else {
@@ -134,12 +137,15 @@ public final class IntegerBelowNode extends IntegerLowerThanNode {
                  * @formatter:on
                  */
                 if (c == 0) {
+                    // veriopt: CompareBelowZeroFalse: (BinaryExpr BinIntegerNormalizeCompare x y) |<| 0 |-> false
                     return LogicConstantNode.contradiction();
                 } else if (c == 1) {
+                    // veriopt: CompareBelowOneEqual: (BinaryExpr BinIntegerNormalizeCompare x y) |<| 1 |-> (x eq y)
                     return normalizeNode.createEqualComparison(constantReflection, metaAccess, options, smallestCompareWidth, view);
                 } else {
                     // a >= b -> !(a < b)
                     LogicNode compare = normalizeNode.createLowerComparison(constantReflection, metaAccess, options, smallestCompareWidth, view);
+                    // veriopt: TODO encoding
                     return LogicNegationNode.create(compare);
                 }
             }
