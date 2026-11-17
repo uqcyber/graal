@@ -133,6 +133,7 @@ public abstract class IntegerLowerThanNode extends CompareNode {
         public LogicNode canonical(ConstantReflectionProvider constantReflection, MetaAccessProvider metaAccess, OptionValues options, Integer smallestCompareWidth, CanonicalCondition condition,
                         boolean unorderedIsTrue, ValueNode forX, ValueNode forY, NodeView view) {
             if (forX == forY) {
+                // veriopt: LowerThanSelfFalse: x lt x |-> false
                 return LogicConstantNode.contradiction();
             }
             LogicNode result = super.canonical(constantReflection, metaAccess, options, smallestCompareWidth, condition, unorderedIsTrue, forX, forY, view);
