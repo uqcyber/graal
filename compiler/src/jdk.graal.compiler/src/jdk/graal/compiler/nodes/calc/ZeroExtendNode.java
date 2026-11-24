@@ -123,6 +123,8 @@ public final class ZeroExtendNode extends IntegerConvertNode<ZeroExtend> {
         if (forValue instanceof ZeroExtendNode) {
             // xxxx -(zero-extend)-> 0000 xxxx -(zero-extend)-> 00000000 0000xxxx
             // ==> xxxx -(zero-extend)-> 00000000 0000xxxx
+            // veriopt: ZeroExtendIdempotent: UnaryExpr UnaryZeroExtend in out (ZeroExtend in' out' v') |->
+            //                                UnaryExpr UnaryZeroExtend in' out v'
             ZeroExtendNode other = (ZeroExtendNode) forValue;
             return new ZeroExtendNode(other.getValue(), other.getInputBits(), resultBits);
         }
