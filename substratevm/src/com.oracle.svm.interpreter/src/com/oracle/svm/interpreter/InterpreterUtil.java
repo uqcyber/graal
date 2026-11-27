@@ -36,6 +36,8 @@ import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
 
+import jdk.graal.compiler.api.directives.GraalDirectives;
+
 public class InterpreterUtil {
     private static final boolean assertionsEnabled;
     static {
@@ -44,12 +46,19 @@ public class InterpreterUtil {
         assertionsEnabled = status;
     }
 
+    /** Alternative to {@link VMError#guarantee(boolean)} that keeps the failure path outlined. */
+    public static void guarantee(boolean condition) {
+        if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, !condition)) {
+            throw shouldNotReachHereAtRuntime();
+        }
+    }
+
     /**
      * Alternative to {@link VMError#guarantee(boolean, String, Object)} that avoids
      * {@link String#format(String, Object...)} .
      */
     public static void guarantee(boolean condition, String simpleFormat, Object arg1) {
-        if (!condition) {
+        if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, !condition)) {
             throw shouldNotReachHere(simpleFormat, arg1);
         }
     }
@@ -59,7 +68,7 @@ public class InterpreterUtil {
      * {@link String#format(String, Object...)} .
      */
     public static void guarantee(boolean condition, String simpleFormat, Object arg1, Object arg2) {
-        if (!condition) {
+        if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, !condition)) {
             throw shouldNotReachHere(simpleFormat, arg1, arg2);
         }
     }
@@ -69,7 +78,7 @@ public class InterpreterUtil {
      * {@link String#format(String, Object...)} .
      */
     public static void guarantee(boolean condition, String simpleFormat, Object arg1, Object arg2, Object arg3) {
-        if (!condition) {
+        if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, !condition)) {
             throw shouldNotReachHere(simpleFormat, arg1, arg2, arg3);
         }
     }
@@ -162,10 +171,16 @@ public class InterpreterUtil {
     public static Log traceInterpreter() {
         if (InterpreterOptions.InterpreterTraceSupport.getValue()) {
             if (InterpreterOptions.InterpreterTrace.getValue()) {
-                return Log.log().string(" ".repeat(Interpreter.logIndent.get()));
+                return forceTraceInterpreter();
             }
         }
         return Log.noopLog();
+    }
+
+    /** Appends the current interpreter log indent without checking whether tracing is enabled. */
+    @NeverInline("Keep trace formatting out of bytecode-handler stubs")
+    public static Log forceTraceInterpreter() {
+        return Log.log().string(" ".repeat(Interpreter.logIndent.get()));
     }
 
     /**

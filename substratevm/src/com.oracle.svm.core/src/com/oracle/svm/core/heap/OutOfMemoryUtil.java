@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,9 +37,9 @@ import com.oracle.svm.core.jdk.JDKUtils;
 import com.oracle.svm.core.jfr.HasJfrSupport;
 import com.oracle.svm.core.jfr.SubstrateJVM;
 import com.oracle.svm.guest.staging.log.Log;
-import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.guest.staging.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMOperation;
-import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.guest.staging.util.PreallocatedExceptions;
 import com.oracle.svm.shared.util.VMError;
 
 /**
@@ -48,15 +48,16 @@ import com.oracle.svm.shared.util.VMError;
  * be thrown directly.
  */
 public class OutOfMemoryUtil {
-    private static final OutOfMemoryError OUT_OF_MEMORY_ERROR = new OutOfMemoryError("Garbage-collected heap size exceeded. Consider increasing the maximum Java heap size, for example with '-Xmx'.");
+    private static final OutOfMemoryError OUT_OF_MEMORY_ERROR = PreallocatedExceptions.createOutOfMemoryError(
+                    "Garbage-collected heap size exceeded. Consider increasing the maximum Java heap size, for example with '-Xmx'.");
 
+    @NeverInline("Keep error reporting out of allocation slow paths.")
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Can't allocate when out of memory.")
     public static OutOfMemoryError heapSizeExceeded() {
         return reportOutOfMemoryError(OUT_OF_MEMORY_ERROR);
     }
 
     @NeverInline("Error reporting is always a slowpath.")
-    @Uninterruptible(reason = "Not fully uninterruptible but it doesn't matter for the callers.")
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Can't allocate while out of memory.")
     public static OutOfMemoryError reportOutOfMemoryError(OutOfMemoryError error) {
         StackOverflowCheck.singleton().makeYellowZoneAvailable();
@@ -68,7 +69,6 @@ public class OutOfMemoryUtil {
         throw error;
     }
 
-    @Uninterruptible(reason = "Not uninterruptible but it doesn't matter for the callers.", calleeMustBe = false)
     private static void reportOutOfMemoryError0(OutOfMemoryError error) {
         if (VMOperation.isGCInProgress()) {
             /* If a GC is in progress, then we can't execute the more complex logic below. */

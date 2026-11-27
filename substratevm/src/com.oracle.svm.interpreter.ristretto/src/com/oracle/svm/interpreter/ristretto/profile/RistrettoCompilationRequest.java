@@ -25,19 +25,25 @@
 package com.oracle.svm.interpreter.ristretto.profile;
 
 import java.util.concurrent.Callable;
+import java.util.function.Predicate;
 
 import com.oracle.svm.core.locks.VMCondition;
 import com.oracle.svm.core.locks.VMMutex;
+import com.oracle.svm.graal.RuntimeCompilationSupport;
 import com.oracle.svm.graal.meta.SubstrateInstalledCodeImpl;
+import com.oracle.svm.guest.staging.option.RuntimeOptionValues;
 import com.oracle.svm.interpreter.ristretto.RistrettoOptions;
 import com.oracle.svm.interpreter.ristretto.RistrettoUtils;
-import com.oracle.svm.interpreter.ristretto.compile.RistrettoInstalledCode;
 import com.oracle.svm.interpreter.ristretto.meta.RistrettoMethod;
 
+import jdk.graal.compiler.debug.CounterKey;
+import jdk.graal.compiler.debug.DebugContext;
 import jdk.vm.ci.code.BailoutException;
 import jdk.vm.ci.code.InstalledCode;
 
 public class RistrettoCompilationRequest implements Comparable<RistrettoCompilationRequest>, Callable<InstalledCode> {
+    private static final CounterKey PUBLISHED_OSR_COMPILATIONS = DebugContext.counter("RistrettoOSRCompilations").doc("Number of published Ristretto OSR compilations.");
+
     /** Protects completion publication and per-request waiter counts. */
     private static final VMMutex COMPLETION_WAITERS_MUTEX = new VMMutex("ristrettoCompilationCompletionWaiters");
     /** Wakes completion waiters, which recheck the predicate of their own request. */
@@ -119,8 +125,31 @@ public class RistrettoCompilationRequest implements Comparable<RistrettoCompilat
 
     @Override
     public InstalledCode call() throws Exception {
+        boolean compilationStarted = false;
+        try (DebugContext debug = openDebugContext();
+                        DebugContext.Activation _ = debug.activate()) {
+            compilationStarted = true;
+            return compileAndPublish(debug);
+        } catch (Throwable t) {
+            // Compilation handles its own failures; closing a published context must not reset it.
+            if (!compilationStarted) {
+                onCompilationFailure();
+            }
+            throw t;
+        }
+    }
+
+    /** Opens the context owned by {@link #call()}, including code publication and failure cleanup. */
+    protected DebugContext openDebugContext() {
+        return RuntimeCompilationSupport.get().openDebugContext(RuntimeOptionValues.singleton().get(), RistrettoUtils.getDescription(rMethod), DebugContext.getDefaultLogStream());
+    }
+
+    private InstalledCode compileAndPublish(DebugContext debug) {
+        SubstrateInstalledCodeImpl code;
+        boolean installCode;
         try {
-            SubstrateInstalledCodeImpl code = compileAndInstall();
+            installCode = RistrettoCompilationManager.TestingBackdoor.installCode();
+            code = compileAndInstall(debug, compiledCode -> publishCompiledCode(compiledCode, installCode));
             if (code == null) {
                 onCompilationFailure();
                 return null;
@@ -132,16 +161,6 @@ public class RistrettoCompilationRequest implements Comparable<RistrettoCompilat
              * lifecycle as InterpreterMethod->RistrettoMethod->code, so the root pointer is only
              * dropped when a class is unloaded and the interpreter jvmci objects are collected.
              */
-            boolean installCode = RistrettoCompilationManager.TestingBackdoor.installCode();
-            boolean published = publishCompiledCode(code, installCode);
-            if (!published) {
-                if (code.isValid()) {
-                    code.invalidate();
-                }
-                onCompilationFailure();
-                return null;
-            }
-            return code;
         } catch (BailoutException e) {
             if (!e.isPermanent()) {
                 onCompilationFailure();
@@ -154,24 +173,20 @@ public class RistrettoCompilationRequest implements Comparable<RistrettoCompilat
             onCompilationFailure();
             throw t;
         }
-    }
-
-    protected SubstrateInstalledCodeImpl compileAndInstall() {
-        return RistrettoUtils.compileAndInstallForPublication(rMethod, entryBCI);
-    }
-
-    /** Publishes {@code code}, atomically with hierarchy validation when it carries such assumptions. */
-    private boolean publishCompiledCode(SubstrateInstalledCodeImpl code, boolean installCode) {
-        if (code instanceof RistrettoInstalledCode ristrettoCode) {
-            return ristrettoCode.registerHierarchyAssumptionsAndPublish(() -> publishCompiledCodeAfterHierarchyValidation(code, installCode));
+        if (isOSR() && installCode) {
+            PUBLISHED_OSR_COMPILATIONS.increment(debug);
         }
-        return publishCompiledCodeAfterHierarchyValidation(code, installCode);
+        return code;
     }
 
-    /** Performs the method-state publication step after hierarchy validation. */
-    protected boolean publishCompiledCodeAfterHierarchyValidation(SubstrateInstalledCodeImpl code, boolean installCode) {
+    protected SubstrateInstalledCodeImpl compileAndInstall(DebugContext debug, Predicate<SubstrateInstalledCodeImpl> publish) {
+        return RistrettoUtils.compileAndInstall(rMethod, entryBCI, debug, publish);
+    }
+
+    /** Performs the actual invocation- or OSR-state publication after final assumption attachment. */
+    protected boolean publishCompiledCode(SubstrateInstalledCodeImpl code, boolean installCode) {
         if (isOSR()) {
-            return rMethod.onOSRCompilationSuccessAfterHierarchyValidation(entryBCI, osrCompilationRequestId, code, installCode);
+            return rMethod.tryPublishOSRCompilation(entryBCI, osrCompilationRequestId, code, installCode);
         }
         return rMethod.onCompilationSuccess(code, installCode);
     }

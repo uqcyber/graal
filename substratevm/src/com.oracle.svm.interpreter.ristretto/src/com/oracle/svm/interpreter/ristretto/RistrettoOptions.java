@@ -27,10 +27,15 @@ package com.oracle.svm.interpreter.ristretto;
 import static com.oracle.svm.guest.staging.option.RuntimeOptionKey.RuntimeOptionKeyFlag.Immutable;
 import static com.oracle.svm.guest.staging.option.RuntimeOptionValidators.NON_NEGATIVE;
 
+import org.graalvm.nativeimage.Platform.HOSTED_ONLY;
+import org.graalvm.nativeimage.Platforms;
+
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
 import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
 import com.oracle.svm.guest.staging.option.RuntimeOptionValidation;
+import com.oracle.svm.guest.staging.option.RuntimeOptionValues.Origin;
 import com.oracle.svm.shared.option.HostedOptionKey;
 
 import jdk.graal.compiler.api.replacements.Fold;
@@ -38,6 +43,25 @@ import jdk.graal.compiler.options.Option;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class RistrettoOptions {
+
+    @Option(help = "Preserve AOT bytecodes for inlining and deoptimization in Ristretto runtime compilations. " +
+                    "Example: com.foo.Bar.baz registers baz as an analysis root, while com.foo.Bar.* and negative patterns only match methods that " +
+                    "analysis already reaches. Class initializers and bodies loading unresolved runtime-deferred constant dynamics, including through " +
+                    "invokedynamic bootstrap arguments, cannot be preserved. Unsupported exact selections fail; wildcard selections are normally skipped, " +
+                    "but unsupported field, invocation, or constant semantics newly discovered for a retained body at final analysis are fatal for all selections.")//
+    public static final HostedOptionKey<String> JITPreserveBytecodesForRuntime = new HostedOptionKey<>(null, RistrettoOptions::validatePreservedBytecodes);
+
+    @Option(help = "Fail when preserving AOT bytecodes requires additional method, type, field or image-heap reachability. " +
+                    "By default, retain these dependencies and log them only when -H:Log=PreserveBytecodes is enabled. " +
+                    "Reachability is checked before each selected method is registered during analysis.")//
+    public static final HostedOptionKey<Boolean> JITPreserveBytecodesFailOnAdditionalReachability = new HostedOptionKey<>(false);
+
+    @Option(help = "Fail if a wildcard-selected AOT method loses its preserved bytecodes after analysis retained them. " +
+                    "By default, skip the body and log the rejection only when -H:Log=PreserveBytecodes is enabled. " +
+                    "Dependencies registered during preservation analysis may remain in the image. " +
+                    "Early wildcard exclusions are unaffected; exact preservation requests still fail if their bodies cannot be kept. This option does not " +
+                    "control final-analysis safety rejection of newly resolved unsupported field, invocation, or constant semantics, which always fails.")//
+    public static final HostedOptionKey<Boolean> JITPreserveBytecodesFailOnLateRejection = new HostedOptionKey<>(false);
 
     @Option(help = "Use the Graal JIT compiler at runtime to compile bytecodes. Can only be configured during startup.")//
     public static final RuntimeOptionKey<Boolean> JITEnableCompilation = new RuntimeOptionKey<>(true, Immutable);
@@ -54,6 +78,9 @@ public class RistrettoOptions {
      */
     private static boolean compilationEnabled;
     private static boolean useOSR;
+
+    @Option(help = "Use CallSite target-value assumptions to fold stable mutable and volatile CallSite targets in runtime-compiled code.")//
+    public static final RuntimeOptionKey<Boolean> JITUseCallSiteTargetValueAssumptions = new RuntimeOptionKey<>(true, null, RistrettoOptions::validateCallSiteTargetValueAssumptions, Immutable);
 
     @Option(help = "Number of loop backedges before OSR compilation is triggered for a method and target BCI.")//
     public static final RuntimeOptionKey<Integer> JITCompilerOSRBackedgeThreshold = new RuntimeOptionKey<>(30000, NON_NEGATIVE, null);
@@ -103,6 +130,13 @@ public class RistrettoOptions {
         }
     }
 
+    private static void validatePreservedBytecodes(HostedOptionKey<String> option) {
+        String value = option.getValue();
+        if (value != null && !value.isBlank() && !SubstrateOptions.useRistretto()) {
+            throw UserError.invalidOptionValue(option, value, "Preserving bytecodes requires Ristretto.");
+        }
+    }
+
     private static void validateCompilerStatisticsPeriod(HostedOptionKey<Integer> option) {
         if (option.getValue() <= 0) {
             throw UserError.invalidOptionValue(option, option.getValue(), "The value must be positive.");
@@ -126,6 +160,20 @@ public class RistrettoOptions {
     static void initializeRuntimeOptionCache() {
         compilationEnabled = JITEnableCompilation.getValue();
         useOSR = compilationEnabled && JITUseOnStackReplacement.getValue();
+    }
+
+    @Platforms(HOSTED_ONLY.class)
+    static void configureCallSiteTargetValueAssumptions() {
+        if (!useDeoptimization() && !JITUseCallSiteTargetValueAssumptions.hasBeenSet()) {
+            /* No-deoptimization images cannot honor target assumptions. Preserve explicit user values for startup validation. */
+            JITUseCallSiteTargetValueAssumptions.update(false, Origin.BuildTime);
+        }
+    }
+
+    private static void validateCallSiteTargetValueAssumptions(RuntimeOptionKey<Boolean> optionKey) {
+        if (optionKey.hasBeenSet() && optionKey.getValue() && !useDeoptimization()) {
+            throw new IllegalArgumentException("Option '" + optionKey.getName() + "' requires '-H:+JITUseDeoptimization' to be enabled at build-time.");
+        }
     }
 
     public static final class ConcealedOptions {

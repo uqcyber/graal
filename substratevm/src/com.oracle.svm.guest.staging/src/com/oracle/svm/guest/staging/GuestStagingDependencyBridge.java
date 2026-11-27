@@ -24,14 +24,27 @@
  */
 package com.oracle.svm.guest.staging;
 
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import java.io.PrintStream;
+import java.lang.reflect.Executable;
+import java.lang.reflect.Parameter;
 
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.RuntimeStateTrimConfig;
+import org.graalvm.nativeimage.MissingReflectionRegistrationError;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.impl.RuntimeStateTrimConfig;
+import org.graalvm.nativeimage.c.type.CCharPointer;
+import org.graalvm.nativeimage.c.type.CCharPointerPointer;
+import org.graalvm.word.LocationIdentity;
+import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 
+import com.oracle.svm.guest.staging.core.c.NonmovableArray;
 import com.oracle.svm.guest.staging.log.Log;
-import com.oracle.svm.guest.staging.option.NotifyGCRuntimeOptionKey;
+import com.oracle.svm.guest.staging.reflect.RuntimeConstantPool;
+import com.oracle.svm.shared.Uninterruptible;
 
 /**
  * Temporary bridge for cutting builder-to-guest migration dependencies.
@@ -42,18 +55,37 @@ import com.oracle.svm.guest.staging.option.NotifyGCRuntimeOptionKey;
  */
 public interface GuestStagingDependencyBridge {
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static GuestStagingDependencyBridge singleton() {
         return ImageSingletons.lookup(GuestStagingDependencyBridge.class);
     }
 
     /**
-     * Delegates to
-     * {@code com.oracle.svm.core.IsolateArgumentParser.singleton().verifyOptionValues()}.
+     * During the image build, get the backing array that will be nonmovable in the image heap.
      * <p>
-     * Remove this method when {@code com.oracle.svm.core.IsolateArgumentParser} moves to
-     * guest/staging (GR-77356).
+     * Delegates to {@code com.oracle.svm.core.c.NonmovableArrays.getHostedArray(array)}.
+     * Remove this method when the hosted array conversion moves to guest staging (GR-78110).
      */
-    void verifyIsolateArgumentOptionValues();
+    @Platforms(Platform.HOSTED_ONLY.class)
+    <T> T getHostedArray(NonmovableArray<?> array);
+
+    /**
+     * Delegates to {@code com.oracle.svm.core.util.NonmovableByteArrayReader.pointerTo}.
+     * <p>
+     * Remove this method when
+     * {@code com.oracle.svm.core.util.NonmovableByteArrayReader.pointerTo} moves to guest/staging.
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    Pointer nonmovableByteArrayPointerTo(NonmovableArray<Byte> array, long index);
+
+    /**
+     * Delegates to {@code com.oracle.svm.core.c.NonmovableArrays.fromImageHeap(array)}.
+     * <p>
+     * Remove this method when conversion of image-heap byte arrays to nonmovable arrays moves to
+     * guest staging (GR-78110).
+     */
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    NonmovableArray<Byte> nonmovableByteArrayFromImageHeap(byte[] array);
 
     /**
      * Delegates to {@code com.oracle.svm.core.SubstrateOptions.useEpsilonGC()}.
@@ -93,35 +125,29 @@ public interface GuestStagingDependencyBridge {
     int getHeapCompressionShift();
 
     /**
-     * Verifies and records an updated minimum heap size.
+     * Returns the exact canonical {@code NamedLocationIdentity.OFF_HEAP_LOCATION} used by the
+     * compiler.
      * <p>
-     * Remove this method when heap-size verification and isolate-argument storage move to
-     * guest/staging (GR-77356).
+     * Remove this method when the guest-visible word API can directly supply the canonical off-heap
+     * identity without a compiler implementation dependency.
      */
-    void minHeapSizeOptionValueChanged(long newValue);
+    LocationIdentity offHeapLocationIdentity();
 
     /**
-     * Verifies and records an updated maximum heap size.
+     * Returns the canonical class object for {@code com.oracle.svm.core.hub.DynamicHub}.
      * <p>
-     * Remove this method when heap-size verification and isolate-argument storage move to
-     * guest/staging (GR-77356).
+     * Remove this method when DynamicHub moves to guest staging (GR-78110).
      */
-    void maxHeapSizeOptionValueChanged(long newValue);
+    Class<?> dynamicHubClass();
 
     /**
-     * Verifies and records an updated maximum young-generation size.
+     * Delegates to {@code com.oracle.svm.core.hub.DynamicHubIntrinsics.readHub(object)}.
      * <p>
-     * Remove this method when heap-size verification and isolate-argument storage move to
-     * guest/staging (GR-77356).
+     * Remove this method when DynamicHub and its hub-read intrinsic move to guest staging
+     * (GR-78110).
      */
-    void maxNewSizeOptionValueChanged(long newValue);
-
-    /**
-     * Delegates to {@code com.oracle.svm.core.heap.Heap.getHeap().optionValueChanged(key)}.
-     * <p>
-     * Remove this method when GC option change notification moves to guest/staging.
-     */
-    void heapOptionValueChanged(NotifyGCRuntimeOptionKey<?> key);
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    Object readHub(Object object);
 
     /**
      * Delegates to {@code com.oracle.svm.core.Isolates.isCurrentFirst()}.
@@ -186,11 +212,61 @@ public interface GuestStagingDependencyBridge {
      * <p>
      * Remove this method when isolate startup policy moves to guest/staging.
      */
-    boolean shouldParseRuntimeOptions();
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    boolean shouldParseRuntimeOptions(boolean isCompilationIsolate);
+
+    /**
+     * Returns whether libc support is available in the image.
+     * <p>
+     * Remove this method when libc support moves to guest/staging (GR-79128).
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    boolean isLibCSupported();
+
+    /**
+     * Returns the current libc errno value.
+     * <p>
+     * Remove this method when libc support moves to guest/staging (GR-79128).
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    int libcErrno();
+
+    /**
+     * Sets the libc errno value.
+     * <p>
+     * Remove this method when libc support moves to guest/staging (GR-79128).
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    void libcSetErrno(int value);
+
+    /**
+     * Checks whether a character is a decimal digit according to libc.
+     * <p>
+     * Remove this method when libc support moves to guest/staging (GR-79128).
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    int libcIsDigit(int value);
+
+    /**
+     * Returns the length of a libc string.
+     * <p>
+     * Remove this method when libc support moves to guest/staging (GR-79128).
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    UnsignedWord libcStrlen(CCharPointer string);
+
+    /**
+     * Parses an unsigned long integer using libc.
+     * <p>
+     * Remove this method when libc support moves to guest/staging (GR-79128).
+     */
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    UnsignedWord libcStrtoull(CCharPointer string, CCharPointerPointer endPtr, int base);
 
     /// Returns whether strict runtime Java option handling is enabled.
     ///
     /// Remove this method when `StrictRuntimeJavaOptions` moves to guest/staging.
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     boolean strictRuntimeJavaOptions();
 
     /**
@@ -213,6 +289,37 @@ public interface GuestStagingDependencyBridge {
      * Remove this method when runtime class loading (aka Crema) options move to guest/staging.
      */
     boolean isRuntimeClassLoadingSupported();
+
+    /**
+     * Returns checked constant-pool access for a run-time-loaded class, or {@code null} when runtime
+     * class loading is disabled or {@code clazz} is not runtime-loaded.
+     * <p>
+     * Remove this method when the constant-pool adapter and its Crema access move to guest/staging.
+     */
+    RuntimeConstantPool getRuntimeConstantPool(Class<?> clazz);
+
+    /**
+     * Delegates to {@code com.oracle.svm.core.hub.DynamicHub.fromClass(clazz).isLoaded()}.
+     * <p>
+     * Remove this method when DynamicHub and its loaded-state query move to guest staging
+     * (GR-78110).
+     */
+    boolean isClassLoaded(Class<?> clazz);
+
+    /**
+     * Delegates to {@code com.oracle.svm.core.hub.DynamicHub.fromClass(clazz).isReached()}.
+     * <p>
+     * Remove this method when the type-reached query is available directly to guest/staging.
+     */
+    boolean isTypeReached(Class<?> clazz);
+
+    /**
+     * Delegates to
+     * {@code com.oracle.svm.core.configure.ConfigurationFiles.Options.TrackUnsatisfiedTypeReachedConditions.getValue()}.
+     * <p>
+     * Remove this method when tracking unsatisfied type-reached conditions becomes guest-owned.
+     */
+    boolean trackUnsatisfiedTypeReachedConditions();
 
     /**
      * Delegates to {@code com.oracle.svm.core.SubstrateOptions.useRistretto()}.
@@ -261,4 +368,24 @@ public interface GuestStagingDependencyBridge {
      * to guest/staging.
      */
     void trimRuntimeState(RuntimeStateTrimConfig config);
+
+    /** Remove when {@code DynamicHub} moves to guest/staging. */
+    boolean isRuntimeLoadedClass(Class<?> clazz);
+
+    /** Remove when parameter metadata conversion moves to guest/staging. */
+    Parameter[] getRuntimeReflectParameters(Executable executable, Object parameterMetadata);
+
+    /** Remove when metadata tracing moves to guest/staging. */
+    boolean isMetadataTracingEnabled();
+
+    /** Remove when metadata tracing moves to guest/staging. */
+    void traceReflectionExecutableAccess(Executable executable);
+
+    /** Remove when missing-reflection-registration reporting moves to guest/staging. */
+    MissingReflectionRegistrationError reportInvokedExecutable(Executable executable);
+
+    /** Remove when layered-image reflection support moves to guest/staging. */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    int currentImageLayerNumber();
+
 }

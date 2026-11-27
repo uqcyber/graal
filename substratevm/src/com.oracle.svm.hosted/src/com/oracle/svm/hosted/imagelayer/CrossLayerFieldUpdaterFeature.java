@@ -40,9 +40,9 @@ import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.meta.AnalysisField;
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.image.ImageHeapLayoutInfo;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.hosted.FeatureImpl;
@@ -159,7 +159,7 @@ public class CrossLayerFieldUpdaterFeature implements InternalFeature {
         int receiverId = ImageHeapConstant.getConstantID(receiver);
         int fieldId = field.getWrapped().getId();
         UpdatableField fieldInfo = new UpdatableField(receiverId, fieldId);
-        JavaKind kind = JavaKind.fromJavaClass(field.getType().getJavaClass());
+        JavaKind kind = field.getType().getJavaKind();
         UpdatableFieldStatus updateInfo = new UpdatableFieldStatus(fieldInfo, NumUtil.safeToInt(heapOffset), kind);
         var prev = updateInfoMap.put(fieldInfo, updateInfo);
         VMError.guarantee(prev == null);

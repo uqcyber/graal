@@ -62,8 +62,9 @@
   }),
 
   local terminus = task_spec({
-    mxgate_dy+: ["/espresso-compiler-stub"],
-    mxgate_extra_args+: ["-B=--targets=GRAALVM"],
+    environment+: {
+      MX_ENV_PATH: "terminus",
+    },
   }),
 
   local standalone_pointsto_deps = task_spec({
@@ -134,7 +135,7 @@
     "style-fullbuild": mxgate("fullbuild,style,nativeimagehelp,check_libcontainer_annotations,check_libcontainer_namespace") + jdt + spotbugs + maven + mx_build_exploded + gdb("14.2") + platform_spec(no_jobs) + platform_spec({
       "linux:amd64:jdk-latest": tier1 + t("30:00"),
     }),
-    "basics": mxgate("build,helloworld,all_native_unittests,driver_unittests,check_svm_invariants,truffle_unittests,debuginfotest,hellomodule,java_agent,condconfig,java_desktop_integration") + maven + jsonschema + platform_spec(no_jobs) + platform_spec({
+    "basics": mxgate("build,helloworld,all_native_unittests,hosted_unittests,check_svm_invariants,truffle_unittests,debuginfotest,hellomodule,java_agent,condconfig,java_desktop_integration") + maven + jsonschema + platform_spec(no_jobs) + platform_spec({
       "linux:amd64:jdk-latest": tier2 + partial(2) + gdb("14.2") + t("40:00"),
       "windows:amd64:jdk-latest": tier3 + partial(2) + t("1:00:00"),
     }) + variants({

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -102,6 +102,7 @@ import com.oracle.svm.hosted.CommonPoolUncaughtExceptionHandler;
 import com.oracle.svm.hosted.NativeImageGeneratorRunner;
 import com.oracle.svm.hosted.NativeImageOptions;
 import com.oracle.svm.hosted.NativeImageSystemClassLoader;
+import com.oracle.svm.hosted.imagelayer.LayerArchiveSupport;
 import com.oracle.svm.hosted.util.JDKArgsUtils;
 import com.oracle.svm.shared.option.BundleMember;
 import com.oracle.svm.shared.option.CommonOptionNames;
@@ -151,6 +152,7 @@ public class NativeImage {
      */
     private final Path driverTempDir;
     private static final String DRIVER_TEMP_DIR_PREFIX = "driverRoot-";
+    private Path layerClassIdentityHashCodesFile;
 
     private static Map<String, String[]> getCompilerFlags() {
         Map<String, String[]> result = new HashMap<>();
@@ -286,6 +288,7 @@ public class NativeImage {
     final String oHClass = oH(SubstrateOptions.Class);
     final String oHName = oH(SubstrateOptions.Name);
     final String oHPath = oH(SubstrateOptions.ConcealedOptions.Path);
+    final String oHOptimize = oH(SubstrateOptions.Optimize);
     final String oHUseLibC = oH(SubstrateOptions.UseLibC);
     final String oHEnableStaticExecutable = oHEnabled(SubstrateOptions.StaticExecutable);
     final String oHEnableSharedLibraryFlagPrefix = oHEnabled + SubstrateOptions.SharedLibrary.getName();
@@ -635,7 +638,7 @@ public class NativeImage {
                  * Truffle to the builder module path. This is legacy support and should in the
                  * future no longer be needed.
                  */
-                jars.addAll(getJars(libTruffleDir, "truffle-compiler"));
+                jars.addAll(getJars(libTruffleDir, "truffle-compiler", "jniutils", "nativebridge"));
                 Path builderPath = rootDir.resolve(Paths.get("lib", "truffle", "builder"));
                 if (Files.exists(builderPath)) {
                     List<Path> truffleRuntimeSVMJars = getJars(builderPath, "truffle-runtime-svm", "truffle-enterprise-svm");
@@ -645,10 +648,6 @@ public class NativeImage {
                         // JDKs
                         jars.addAll(getJars(libJvmciDir, "polyglot"));
                     }
-                }
-                if (libJvmciDir != null) {
-                    // truffle-runtime depends on polyglot, which is not part of non-jlinked JDKs
-                    jars.addAll(getJars(libTruffleDir, "jniutils"));
                 }
             }
             /*
@@ -1127,6 +1126,11 @@ public class NativeImage {
         processNativeImageArgs();
         apiOptionHandler.validateExperimentalOptions();
 
+        if (getHostedOptionArgument(imageBuilderArgs, oHOptimize).isEmpty()) {
+            // Ensure fallback -H:Optimize comes before any option that could implicitly modify the optimization level.
+            imageBuilderArgs.add(0, oH(SubstrateOptions.Optimize, OptionOrigin.originDriver) + SubstrateOptions.OPTIMIZE_DEFAULT_VALUE);
+        }
+
         if (config.getBuilderInspectServerPath() != null) {
             addPlainImageBuilderArg(oHInspectServerContentPath + config.getBuilderInspectServerPath());
         }
@@ -1140,6 +1144,7 @@ public class NativeImage {
         }
 
         completeOptionArgs();
+        configureLayerClassIdentityHashCodes();
         addTargetArguments();
 
         String defaultLibC = OS.getCurrent() == OS.LINUX ? "glibc" : null;
@@ -1248,9 +1253,6 @@ public class NativeImage {
             }
 
             Optional<ArgumentEntry> lastImageName = getHostedOptionArgument(imageBuilderArgs, oHName);
-            if (!lastImageName.isEmpty()) {
-                validateImageName(lastImageName.get().value());
-            }
 
             if (!jarOptionMode) {
                 mainClassModule = getHostedOptionArgumentValue(imageBuilderArgs, oHModule);
@@ -1291,7 +1293,7 @@ public class NativeImage {
                     boolean extraNameIsLast = lastImageName.isEmpty() || lastImageName.get().index < extraImageName.index;
                     if (extraNameIsLast) {
                         /* extraImageArg that comes after lastImageName wins */
-                        imageBuilderArgs.add(oH(SubstrateOptions.Name, "explicit image name") + validateImageName(extraImageName.value));
+                        imageBuilderArgs.add(oH(SubstrateOptions.Name, "explicit image name") + extraImageName.value);
                     }
                 }
             } else { /* jarOptionMode */
@@ -1333,7 +1335,7 @@ public class NativeImage {
             if (!useBundle()) {
                 /*
                  * In bundle-mode the value of imagePath is purely virtual before it gets
-                 * substituted by substituteImagePath(imagePath) below. Validating the virtual value
+                 * redirected to the bundle's output directory below. Validating the virtual value
                  * would make no sense (and cause errors if the path does not exist anymore)
                  */
                 if (!Files.isDirectory(imageNamePathParent)) {
@@ -1361,7 +1363,7 @@ public class NativeImage {
             bundleSupport.updateBundleLocation(imagePath.resolve(bundleName), false);
 
             /* The imagePath has to be redirected to be within the bundle */
-            imagePath = bundleSupport.substituteImagePath(imagePath);
+            imagePath = bundleSupport.imagePathOutputDir;
             /* and we need to adjust the argument that passes the imagePath to the builder */
             updateArgumentEntryValue(imageBuilderArgs, imagePathEntry, imagePath.toString());
         } else {
@@ -1405,6 +1407,50 @@ public class NativeImage {
             if (useColorfulOutput) {
                 performANSIReset();
             }
+        }
+    }
+
+    /**
+     * Configures the builder JVM to preserve {@link Class} identity hash codes across image layers.
+     * Must run after {@link #completeOptionArgs()} has finalized the layer options and before the
+     * builder JVM starts: HotSpot installs these hashes during class mirror creation, before any
+     * code can observe the mirrors or compute their hashes.
+     * <p>
+     * Every layered build enables deterministic hashes for eligible hidden classes and their array
+     * types, including the initial layer build that has no input mapping yet. This changes their
+     * identity hash codes, not their names. When using a previous layer, its archived mapping supplies
+     * hashes for named classes, primitives, and proxies matched by their ordered interface lists.
+     * Layers without a mapping are accepted for compatibility, but cannot restore those hashes.
+     * <p>
+     * Extracts the mapping to a temporary file before launching the builder. The file is also mounted
+     * when running the builder in a container. Extraction is skipped for dry runs because a bundle
+     * may contain a placeholder layer path that is replaced when applying the bundle.
+     */
+    private void configureLayerClassIdentityHashCodes() {
+        Optional<ArgumentEntry> layerUse = getHostedOptionArgument(imageBuilderArgs, oH(LayeredImageOptions.LayerUse)).filter(entry -> !entry.value().isEmpty());
+        if (!layerCreate() && layerUse.isEmpty()) {
+            return;
+        }
+        addImageBuilderJavaArgs("-XX:+JVMCIUseStableGeneratedClassIdentityHashCodes");
+        // A dry-run bundle may use a placeholder layer path that is replaced when applying it.
+        if (layerUse.isEmpty() || dryRun) {
+            return;
+        }
+
+        Path layerFile = canonicalize(Path.of(layerUse.get().value()));
+        try (JarFile jarFile = new JarFile(layerFile.toFile())) {
+            var entry = jarFile.getJarEntry(LayerArchiveSupport.CLASS_IDENTITY_HASH_CODES_FILE_NAME);
+            if (entry == null) {
+                return;
+            }
+            Path hashCodesFile = createFileInTempDir(LayerArchiveSupport.CLASS_IDENTITY_HASH_CODES_FILE_NAME);
+            try (InputStream input = jarFile.getInputStream(entry); var output = Files.newOutputStream(hashCodesFile)) {
+                input.transferTo(output);
+            }
+            layerClassIdentityHashCodesFile = hashCodesFile;
+            addImageBuilderJavaArgs("-XX:JVMCIClassIdentityHashCodeFile=" + hashCodesFile);
+        } catch (IOException e) {
+            throw showError("Unable to read class identity hash codes from Native Image layer " + layerFile, e);
         }
     }
 
@@ -1457,13 +1503,6 @@ public class NativeImage {
             }
         }
         return null;
-    }
-
-    private static String validateImageName(String imageName) {
-        if (imageName.startsWith("-")) {
-            LogUtils.warning("Image name ('" + imageName + "') start with a dash. Is another option wrongly interpreted as image name? (see --help)");
-        }
-        return imageName;
     }
 
     private static void updateArgumentEntryValue(List<String> argList, ArgumentEntry listEntry, String newValue) {
@@ -1760,12 +1799,13 @@ public class NativeImage {
         arguments.addAll(config.getGeneratorMainClass());
 
         Path keepAliveFile;
-        if (OS.getCurrent().hasProcFS) {
+        Path procPIDCommPath = Path.of("/proc/" + ProcessHandle.current().pid() + "/comm");
+        if (OS.getCurrent().hasProcFS && Files.isReadable(procPIDCommPath)) {
             /*
              * On Linux we use the procfs entry of the driver itself. This guarantees builder
              * shutdown even if the driver is terminated via SIGKILL.
              */
-            keepAliveFile = Path.of("/proc/" + ProcessHandle.current().pid() + "/comm");
+            keepAliveFile = procPIDCommPath;
         } else {
             keepAliveFile = createFileInTempDir(".native_image.alive");
         }
@@ -1820,6 +1860,9 @@ public class NativeImage {
             mountMapping.put(argFile, ContainerSupport.TargetPath.readonly(argFile));
             mountMapping.put(builderArgFile, ContainerSupport.TargetPath.readonly(builderArgFile));
             mountMapping.put(keepAliveFile, ContainerSupport.TargetPath.readonly(keepAliveFileInContainer));
+            if (layerClassIdentityHashCodesFile != null) {
+                mountMapping.put(layerClassIdentityHashCodesFile, ContainerSupport.TargetPath.readonly(layerClassIdentityHashCodesFile));
+            }
 
             List<String> containerCommand = bundleSupport.containerSupport.createCommand(imageBuilderEnvironment, mountMapping);
             command.addAll(containerCommand);
@@ -1995,7 +2038,13 @@ public class NativeImage {
                         .collect(Collectors.toMap(m -> m.descriptor().name(), m -> m));
 
         Set<String> modulePathRequiredModules = new HashSet<>(); // noEconomicSet(api)
-        Queue<ModuleReference> discoveryQueue = new ArrayDeque<>(modules.values());
+        /*
+         * Only the modules on the module path are discovery roots. Other modules (including system
+         * ones) are brought in only as transitive dependencies.
+         */
+        Queue<ModuleReference> discoveryQueue = modulePathFinder.findAll().stream()
+                        .map(m -> modules.get(m.descriptor().name()))
+                        .collect(Collectors.toCollection(ArrayDeque::new));
 
         while (!discoveryQueue.isEmpty()) {
             ModuleReference module = discoveryQueue.poll();
@@ -2256,6 +2305,7 @@ public class NativeImage {
     class NativeImageArgsProcessor implements Consumer<String> {
 
         private final ArgumentQueue args;
+        private final ArgFilesOptionPreprocessor argFilesPreprocessor = new ArgFilesOptionPreprocessor();
 
         NativeImageArgsProcessor(String argumentOrigin) {
             args = new ArgumentQueue(argumentOrigin);
@@ -2263,7 +2313,12 @@ public class NativeImage {
 
         @Override
         public void accept(String arg) {
-            args.add(arg);
+            if (OptionOrigin.originUser.equals(args.argumentOrigin)) {
+                // Command-line argument files have already been expanded.
+                args.add(arg);
+            } else {
+                argFilesPreprocessor.process(arg, OptionOrigin.from(args.argumentOrigin)).forEach(args::add);
+            }
         }
 
         void apply(boolean strict) {
@@ -2293,6 +2348,8 @@ public class NativeImage {
                 if (!consumed) {
                     if (strict) {
                         showError("Property 'Args' contains invalid entry '" + queue.peek() + "'");
+                    } else if (queue.peek().startsWith("-")) {
+                        showError("Unrecognized option '" + queue.peek() + "'. Use '--help' to list available options.");
                     } else {
                         /* Ensure unique object identity for leftover arg */
                         String uniqueLeftoverArg = new String(queue.poll());

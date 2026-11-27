@@ -74,10 +74,11 @@ import org.graalvm.home.impl.DefaultHomeFinder;
 import org.graalvm.nativeimage.AnnotationAccess;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
-import org.graalvm.nativeimage.hosted.RuntimeClassInitialization;
+import com.oracle.svm.util.JVMCIRuntimeClassInitializationSupport;
 import org.graalvm.nativeimage.hosted.RuntimeReflection;
 import org.graalvm.nativeimage.hosted.RuntimeResourceAccess;
 import org.graalvm.polyglot.Engine;
+import org.graalvm.polyglot.HostAccess.Optimized;
 
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisType;
@@ -93,13 +94,15 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
+import com.oracle.svm.core.config.ObjectLayoutCompilerSupport;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
+import com.oracle.svm.core.fieldvaluetransformer.JVMCIFieldValueTransformerWithAvailability;
 import com.oracle.svm.core.graal.word.SubstrateWordTypes;
 import com.oracle.svm.core.heap.Pod;
 import com.oracle.svm.core.reflect.target.ReflectionSubstitutionSupport;
-import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.guest.staging.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.graal.hosted.runtimecompilation.GraalGraphObjectReplacer;
 import com.oracle.svm.graal.hosted.runtimecompilation.SubstrateGraalCompilerSetup;
@@ -127,6 +130,7 @@ import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.GuestAnnotationAccess;
+import com.oracle.svm.util.JVMCIReflectionUtil;
 import com.oracle.svm.util.OriginalClassProvider;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
@@ -169,6 +173,7 @@ import jdk.graal.compiler.truffle.host.TruffleHostEnvironment;
 import jdk.graal.compiler.truffle.substitutions.TruffleInvocationPlugins;
 import jdk.internal.misc.TerminatingThreadLocal;
 import jdk.internal.misc.Unsafe;
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -201,7 +206,7 @@ public final class TruffleBaseFeature implements InternalFeature {
      * When modifying the version values defined below, ensure that the corresponding version fields
      * in {@code TruffleVersions} are also updated accordingly to maintain consistency.
      */
-    private static final Version NEXT_POLYGLOT_VERSION_UPDATE = Version.create(25, 6);
+    private static final Version NEXT_POLYGLOT_VERSION_UPDATE = Version.create(25, 8);
     private static final int MAX_JDK_VERSION = 26;
 
     @Override
@@ -341,7 +346,7 @@ public final class TruffleBaseFeature implements InternalFeature {
      * unsafe accessed, which is necessary for correctness of the static analysis.
      */
     @SuppressWarnings("unused")
-    private void processInlinedField(DuringAnalysisAccess access, InlinableField inlinableField, ScanReason reason) {
+    private void processInlinedField(InlinableField inlinableField) {
         if (processedInlinedFields.putIfAbsent(inlinableField, true) == null) {
             VMError.guarantee(markAsUnsafeAccessed != null, "New InlinedField found after static analysis");
             try {
@@ -394,7 +399,7 @@ public final class TruffleBaseFeature implements InternalFeature {
                         "Unsupported TruffleRuntime %s (only SubstrateTruffleRuntime or DefaultTruffleRuntime allowed)",
                         runtime.getClass().getName());
 
-        RuntimeClassInitialization.initializeAtBuildTime("com.oracle.graalvm.locator",
+        JVMCIRuntimeClassInitializationSupport.singleton().initializeAtBuildTime("com.oracle.graalvm.locator",
                         "Truffle classes are always initialized at build time");
 
         initializeTruffleReflectively(imageClassLoader);
@@ -563,7 +568,13 @@ public final class TruffleBaseFeature implements InternalFeature {
         if (!ImageSingletons.contains(TruffleFeature.class) && isSubstrateRuntime(Truffle.getRuntime())) {
             VMError.shouldNotReachHere("TruffleFeature is required for SubstrateTruffleRuntime.");
         }
-        access.registerObjectReachableCallback(InlinableField.class, this::processInlinedField);
+        /*
+         * Guest features cannot enumerate image classes, so discover @HostAccess.Optimized interfaces in
+         * this builder feature and pass them to the guest-owned PolyglotProxyFeature.
+         */
+        Class<?>[] proxyInterfaces = access.getImageClassLoader().findAnnotatedClasses(Optimized.class, false).toArray(Class<?>[]::new);
+        invokeStaticMethod("com.oracle.truffle.polyglot.PolyglotProxyFeature", "initializeNativeImageState", List.of(Class[].class), (Object) proxyInterfaces);
+        access.registerObjectReachabilityHandler(this::processInlinedField, InlinableField.class);
 
         StaticObjectSupport.duringSetup(a);
 
@@ -636,7 +647,7 @@ public final class TruffleBaseFeature implements InternalFeature {
         libraryFactoryCacheField = access.findField("com.oracle.truffle.api.library.LibraryFactory$ResolvedDispatch", "CACHE");
         if (Options.TruffleCheckPreinitializedFiles.getValue()) {
             var classInitializationSupport = access.getHostVM().getClassInitializationSupport();
-            access.registerObjectReachableCallback(TruffleFile.class, (_, file, _) -> checkTruffleFile(classInitializationSupport, file));
+            access.registerObjectReachabilityHandler(file -> checkTruffleFile(classInitializationSupport, file), TruffleFile.class);
         }
 
         if (includeLanguageResources) {
@@ -813,7 +824,7 @@ public final class TruffleBaseFeature implements InternalFeature {
         }
 
         for (AnalysisType type : access.getBigBang().getUniverse().getTypes()) {
-            if (!a.isReachable(type.getJavaClass())) {
+            if (!access.isReachable(type)) {
                 continue;
             }
             initializeTruffleLibrariesAtBuildTime(access, type);
@@ -985,14 +996,14 @@ public final class TruffleBaseFeature implements InternalFeature {
     private void initializeTruffleLibrariesAtBuildTime(DuringAnalysisAccessImpl access, AnalysisType type) {
         if (GuestAnnotationAccess.isAnnotationPresent(type, GenerateLibrary.class)) {
             /* Eagerly resolve library type. */
-            LibraryFactory<? extends Library> factory = LibraryFactory.resolve(type.getJavaClass().asSubclass(Library.class));
+            LibraryFactory<? extends Library> factory = LibraryFactory.resolve(OriginalClassProvider.getJavaClass(type).asSubclass(Library.class));
             /* Trigger computation of uncachedDispatch. */
             factory.getUncached();
             /* Manually rescan the field since this is during analysis. */
             access.rescanField(factory, uncachedDispatchField, scanReason);
         }
         if (GuestAnnotationAccess.isAnnotationPresent(type, ExportLibrary.class) || GuestAnnotationAccess.isAnnotationPresent(type, ExportLibrary.Repeat.class)) {
-            Class<?> receiverClass = type.getJavaClass();
+            Class<?> receiverClass = OriginalClassProvider.getJavaClass(type);
             if (registeredExportLibraryClasses.add(receiverClass)) {
                 if (registeredExportLibraryReceiverClasses.add(receiverClass)) {
                     access.registerSubtypeReachabilityHandler(this::registerConcreteTruffleLibraryReceiver, receiverClass);
@@ -1042,7 +1053,7 @@ public final class TruffleBaseFeature implements InternalFeature {
 
     private void initializeDynamicObjectLayouts(AnalysisType type) {
         if (type.isInstantiated()) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             if (DynamicObject.class.isAssignableFrom(javaClass) && dynamicObjectClasses.add(javaClass)) {
                 initializeDynamicObjectLayoutImpl(javaClass);
             }
@@ -1151,8 +1162,8 @@ public final class TruffleBaseFeature implements InternalFeature {
                 // correct for the base JDK but might differ from those of Native Image. When this
                 // happens, we allocate a larger byte[] and copy over the contents of the original
                 // one at a base offset that keeps the other offsets long-aligned.
-                int longIndexScale = ObjectLayout.singleton().getArrayIndexScale(JavaKind.Long);
-                int misalignment = ObjectLayout.singleton().getArrayBaseOffset(JavaKind.Byte) % longIndexScale;
+                int longIndexScale = ObjectLayoutCompilerSupport.getArrayIndexScale(ObjectLayout.singleton(), JavaKind.Long);
+                int misalignment = ObjectLayoutCompilerSupport.getArrayBaseOffset(ObjectLayout.singleton(), JavaKind.Byte) % longIndexScale;
                 ALIGNMENT_CORRECTION = misalignment == 0 ? 0 : longIndexScale - misalignment;
 
                 if (ALIGNMENT_CORRECTION != 0) {
@@ -1232,12 +1243,14 @@ public final class TruffleBaseFeature implements InternalFeature {
             static void beforeAnalysis(BeforeAnalysisAccess access) {
                 beforeAnalysisAccess = access;
 
-                access.registerFieldValueTransformer(ReflectionUtil.lookupField(ArrayBasedShapeGeneratorOffsetTransformer.SHAPE_GENERATOR, "byteArrayOffset"),
-                                new ArrayBasedShapeGeneratorOffsetTransformer("primitive"));
-                access.registerFieldValueTransformer(ReflectionUtil.lookupField(ArrayBasedShapeGeneratorOffsetTransformer.SHAPE_GENERATOR, "objectArrayOffset"),
-                                new ArrayBasedShapeGeneratorOffsetTransformer("object"));
-                access.registerFieldValueTransformer(ReflectionUtil.lookupField(ArrayBasedShapeGeneratorOffsetTransformer.SHAPE_GENERATOR, "shapeOffset"),
-                                new ArrayBasedShapeGeneratorOffsetTransformer("shape"));
+                BeforeAnalysisAccessImpl accessImpl = (BeforeAnalysisAccessImpl) access;
+                ResolvedJavaType shapeGenerator = GuestAccess.get().lookupAppClassLoaderType("com.oracle.truffle.api.staticobject.ArrayBasedShapeGenerator");
+                accessImpl.registerFieldValueTransformer(JVMCIReflectionUtil.getUniqueDeclaredField(shapeGenerator, "byteArrayOffset"),
+                                new ArrayBasedShapeGeneratorOffsetTransformer(shapeGenerator, "primitive"));
+                accessImpl.registerFieldValueTransformer(JVMCIReflectionUtil.getUniqueDeclaredField(shapeGenerator, "objectArrayOffset"),
+                                new ArrayBasedShapeGeneratorOffsetTransformer(shapeGenerator, "object"));
+                accessImpl.registerFieldValueTransformer(JVMCIReflectionUtil.getUniqueDeclaredField(shapeGenerator, "shapeOffset"),
+                                new ArrayBasedShapeGeneratorOffsetTransformer(shapeGenerator, "shape"));
 
                 access.registerFieldValueTransformer(ReflectionUtil.lookupField(StaticProperty.class, "offset"),
                                 new StaticPropertyOffsetTransformer(ALIGNMENT_CORRECTION));
@@ -1574,8 +1587,8 @@ final class StaticPropertyOffsetTransformer implements FieldValueTransformerWith
         /*
          * Find SVM array base offset and array index scale for this JavaKind
          */
-        long svmArrayBaseOffset = ObjectLayout.singleton().getArrayBaseOffset(javaKind);
-        long svmArrayIndexScaleOffset = ObjectLayout.singleton().getArrayIndexScale(javaKind);
+        long svmArrayBaseOffset = ObjectLayoutCompilerSupport.getArrayBaseOffset(ObjectLayout.singleton(), javaKind);
+        long svmArrayIndexScaleOffset = ObjectLayoutCompilerSupport.getArrayIndexScale(ObjectLayout.singleton(), javaKind);
 
         /*
          * Redo the offset computation with the SVM array base offset and array index scale
@@ -1585,13 +1598,13 @@ final class StaticPropertyOffsetTransformer implements FieldValueTransformerWith
 
 }
 
-final class ArrayBasedShapeGeneratorOffsetTransformer implements FieldValueTransformerWithAvailability {
-    // JVMCI migration blocked by GR-71999: Prepare Truffle for Terminus.
-    static final Class<?> SHAPE_GENERATOR = TruffleBaseFeature.lookupClass("com.oracle.truffle.api.staticobject.ArrayBasedShapeGenerator");
+final class ArrayBasedShapeGeneratorOffsetTransformer implements JVMCIFieldValueTransformerWithAvailability {
+    private final ResolvedJavaType shapeGenerator;
 
     private final String storageClassFieldName;
 
-    ArrayBasedShapeGeneratorOffsetTransformer(String storageClassFieldName) {
+    ArrayBasedShapeGeneratorOffsetTransformer(ResolvedJavaType shapeGenerator, String storageClassFieldName) {
+        this.shapeGenerator = shapeGenerator;
         this.storageClassFieldName = storageClassFieldName;
     }
 
@@ -1601,14 +1614,15 @@ final class ArrayBasedShapeGeneratorOffsetTransformer implements FieldValueTrans
     }
 
     @Override
-    public Object transform(Object receiver, Object originalValue) {
-        Class<?> generatedStorageClass = ReflectionUtil.readField(SHAPE_GENERATOR, "generatedStorageClass", receiver);
-        Field field = ReflectionUtil.lookupField(generatedStorageClass, storageClassFieldName);
+    public JavaConstant transform(JavaConstant receiver, JavaConstant originalValue) {
+        ResolvedJavaType generatedStorageClass = GuestAccess.get().getProviders().getConstantReflection().asJavaType(
+                        JVMCIReflectionUtil.readInstanceField(receiver, shapeGenerator, "generatedStorageClass"));
+        ResolvedJavaField field = JVMCIReflectionUtil.getUniqueDeclaredField(generatedStorageClass, storageClassFieldName);
         int offset = ReflectionSubstitutionSupport.singleton().getFieldOffset(field, false);
         if (offset <= 0) {
             throw VMError.shouldNotReachHere("Field is not marked as accessed: " + field);
         }
-        return Integer.valueOf(offset);
+        return JavaConstant.forInt(offset);
     }
 }
 
@@ -1702,22 +1716,24 @@ final class Target_com_oracle_truffle_api_nodes_NodeClassImpl_NodeFieldData {
     @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = OffsetComputer.class, isFinal = true) //
     private long offset;
 
-    private static final class OffsetComputer implements FieldValueTransformerWithAvailability {
+    private static final class OffsetComputer implements JVMCIFieldValueTransformerWithAvailability {
         @Override
         public boolean isAvailable() {
             return BuildPhaseProvider.isHostedUniverseBuilt();
         }
 
         @Override
-        public Object transform(Object receiver, Object originalValue) {
-            Class<?> declaringClass = ReflectionUtil.readField(receiver.getClass(), "declaringClass", receiver);
-            String name = ReflectionUtil.readField(receiver.getClass(), "name", receiver);
-            Field field = ReflectionUtil.lookupField(declaringClass, name);
+        public JavaConstant transform(JavaConstant receiver, JavaConstant originalValue) {
+            ResolvedJavaType receiverType = GuestAccess.get().getProviders().getMetaAccess().lookupJavaType(receiver);
+            ResolvedJavaType declaringClass = GuestAccess.get().getProviders().getConstantReflection().asJavaType(
+                            JVMCIReflectionUtil.readInstanceField(receiver, receiverType, "declaringClass"));
+            String name = GuestAccess.get().asHostString(JVMCIReflectionUtil.readInstanceField(receiver, receiverType, "name"));
+            ResolvedJavaField field = JVMCIReflectionUtil.getUniqueDeclaredField(declaringClass, name);
             int offset = ReflectionSubstitutionSupport.singleton().getFieldOffset(field, false);
             if (offset <= 0) {
                 throw VMError.shouldNotReachHere("Field is not marked as accessed: " + field);
             }
-            return Long.valueOf(offset);
+            return JavaConstant.forLong(offset);
         }
     }
 }
@@ -1734,23 +1750,24 @@ final class Target_com_oracle_truffle_api_dsl_InlineSupport_UnsafeField {
     @Delete private Class<?> declaringClass;
     @Delete private String name;
 
-    private static final class OffsetComputer implements FieldValueTransformerWithAvailability {
-        // JVMCI migration blocked by GR-71999: Prepare Truffle for Terminus.
+    private static final class OffsetComputer implements JVMCIFieldValueTransformerWithAvailability {
         @Override
         public boolean isAvailable() {
             return BuildPhaseProvider.isHostedUniverseBuilt();
         }
 
         @Override
-        public Object transform(Object receiver, Object originalValue) {
-            Class<?> declaringClass = ReflectionUtil.readField(InlinableField.class.getSuperclass(), "declaringClass", receiver);
-            String name = ReflectionUtil.readField(InlinableField.class.getSuperclass(), "name", receiver);
-            Field field = ReflectionUtil.lookupField(declaringClass, name);
+        public JavaConstant transform(JavaConstant receiver, JavaConstant originalValue) {
+            ResolvedJavaType unsafeFieldType = GuestAccess.get().lookupType(InlinableField.class).getSuperclass();
+            ResolvedJavaType declaringClass = GuestAccess.get().getProviders().getConstantReflection().asJavaType(
+                            JVMCIReflectionUtil.readInstanceField(receiver, unsafeFieldType, "declaringClass"));
+            String name = GuestAccess.get().asHostString(JVMCIReflectionUtil.readInstanceField(receiver, unsafeFieldType, "name"));
+            ResolvedJavaField field = JVMCIReflectionUtil.getUniqueDeclaredField(declaringClass, name);
             int offset = ReflectionSubstitutionSupport.singleton().getFieldOffset(field, false);
             if (offset == -1) {
                 throw VMError.shouldNotReachHere("Field is not marked as accessed: " + field);
             }
-            return Long.valueOf(offset);
+            return JavaConstant.forLong(offset);
         }
     }
 

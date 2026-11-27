@@ -35,17 +35,17 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateTarget;
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
 import com.oracle.svm.core.genscavenge.HeapChunk;
 import com.oracle.svm.core.genscavenge.ObjectHeaderImpl;
 import com.oracle.svm.core.genscavenge.UnalignedHeapChunk;
 import com.oracle.svm.core.genscavenge.UnalignedHeapChunk.UnalignedHeader;
-import com.oracle.svm.core.heap.ObjectHeader;
+import com.oracle.svm.guest.staging.core.heap.ObjectHeader;
 import com.oracle.svm.core.heap.StoredContinuation;
 import com.oracle.svm.core.heap.StoredContinuationAccess;
 import com.oracle.svm.core.heap.UninterruptibleObjectReferenceVisitor;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.hub.HubType;
+import com.oracle.svm.guest.staging.hub.HubType;
 import com.oracle.svm.core.hub.InteriorObjRefWalker;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.hub.DynamicHubIntrinsics;
@@ -205,7 +205,7 @@ final class UnalignedChunkRememberedSet {
         UnsignedWord objStartOffset = getObjectStartOffset(chunk);
         Object obj = HeapChunk.asPointer(chunk).add(objStartOffset).toObjectNonNull();
 
-        DynamicHub objHub = ObjectHeader.readDynamicHubFromObject(obj);
+        DynamicHub objHub = (DynamicHub) ObjectHeader.readDynamicHubFromObject(obj);
 
         // Return as early as possible for primitive arrays.
         if (objHub.getHubType() == HubType.PRIMITIVE_ARRAY) {
@@ -250,7 +250,7 @@ final class UnalignedChunkRememberedSet {
     private static void walkObjectArrayPrecise(Object obj, Pointer cardTableStart, UnsignedWord cardTableLimitIdx, UninterruptibleObjectReferenceVisitor refVisitor, boolean clean) {
         int referenceSize = ObjectLayout.singleton().getReferenceSize();
 
-        DynamicHub objHub = ObjectHeader.readDynamicHubFromObject(obj);
+        DynamicHub objHub = (DynamicHub) ObjectHeader.readDynamicHubFromObject(obj);
         int length = ArrayLengthNode.arrayLength(obj);
         int layoutEncoding = objHub.getLayoutEncoding();
 
@@ -344,6 +344,9 @@ final class UnalignedChunkRememberedSet {
                     if (!CardTable.isDirty(ctAdr, curIdx)) {
                         return curIdx;
                     }
+                    if (clean) {
+                        CardTable.setClean(ctAdr, curIdx);
+                    }
                     curIdx = curIdx.add(1);
                 }
                 VMError.shouldNotReachHere("should have early-returned");
@@ -409,7 +412,7 @@ final class UnalignedChunkRememberedSet {
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static Pointer getCardTableEnd(UnalignedHeader chunk) {
-        return getCardTableStart(chunk).add(getCardTableSize(getObjectStartOffset(chunk).subtract(sizeOfObjectStartOffsetField())));
+        return getCardTableStart(chunk).add(getCardTableSize(chunk));
     }
 
     @Fold

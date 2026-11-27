@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2025, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,14 +38,17 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.InterpreterExecutionOffsets;
 import com.oracle.svm.core.hub.DynamicHubCompanion;
-import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
-import com.oracle.svm.core.meta.MethodPointer;
+import com.oracle.svm.core.meta.MethodRefSupport;
+import com.oracle.svm.core.methodhandles.RuntimeCallSiteTargetSupport;
 import com.oracle.svm.graal.hosted.DeoptimizationFeature;
 import com.oracle.svm.graal.hosted.runtimecompilation.RuntimeCompilationFeature;
+import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
+import com.oracle.svm.interpreter.BuildTimeInterpreterUniverse;
 import com.oracle.svm.interpreter.CremaFeature;
 import com.oracle.svm.interpreter.InterpreterFeature;
+import com.oracle.svm.interpreter.InterpreterOptions;
 import com.oracle.svm.interpreter.RistrettoInterpreterSupport;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedObjectType;
@@ -105,6 +108,8 @@ public final class RistrettoFeature implements InternalFeature {
     private static final Method interpEntryShort = ReflectionUtil.lookupMethod(InterpreterDeoptEntryPoints.class, "entryShort", RistrettoDeoptimizedInterpreterFrame.class);
     private static final Method interpEntryChar = ReflectionUtil.lookupMethod(InterpreterDeoptEntryPoints.class, "entryChar", RistrettoDeoptimizedInterpreterFrame.class);
 
+    private final RistrettoPreserveBytecodeSupport preserveBytecodeSupport = new RistrettoPreserveBytecodeSupport();
+
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
         return SubstrateOptions.useRistretto();
@@ -127,6 +132,7 @@ public final class RistrettoFeature implements InternalFeature {
         RuntimeSupport.getRuntimeSupport().addTearDownHook(RistrettoCompilationManager.getProfileSupportTearDownHook());
 
         if (RistrettoOptions.useDeoptimization()) {
+            RuntimeSupport.getRuntimeSupport().addStartupHook(new RistrettoCallSiteTargetAssumptionStartupHook());
             ImageSingletons.add(RistrettoDeoptimizationSupport.class, new RistrettoDeoptimizationSupport());
         }
     }
@@ -137,8 +143,11 @@ public final class RistrettoFeature implements InternalFeature {
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess a) {
         FeatureImpl.BeforeAnalysisAccessImpl access = (FeatureImpl.BeforeAnalysisAccessImpl) a;
+        preserveBytecodeSupport.beforeAnalysis(access);
         RistrettoUtils.forcePreserveType(access.getBigBang(), RistrettoDirectives.class);
         RistrettoUtils.forcePreserveType(access.getBigBang(), RistrettoOSRSupport.class);
+        RistrettoOptions.configureCallSiteTargetValueAssumptions();
+
         /*
          * The low-level Ristretto fast path reads these fields via offsets recorded in
          * InterpreterExecutionOffsets. Analysis does not necessarily observe those reads as normal
@@ -169,6 +178,30 @@ public final class RistrettoFeature implements InternalFeature {
         }
     }
 
+    @Override
+    public void duringAnalysis(DuringAnalysisAccess a) {
+        preserveBytecodeSupport.duringAnalysis(a);
+    }
+
+    @Override
+    public void afterAnalysis(AfterAnalysisAccess access) {
+        preserveBytecodeSupport.afterAnalysis((FeatureImpl.AfterAnalysisAccessImpl) access);
+    }
+
+    @Override
+    public void afterCompilation(AfterCompilationAccess access) {
+        var accessImpl = (FeatureImpl.AfterCompilationAccessImpl) access;
+        if (!InterpreterOptions.DebuggerWithInterpreter.getValue()) {
+            /*
+             * Crema has initialized generic field metadata before this callback. The debugger owns
+             * complete pools when enabled; otherwise hydrate only types with retained method bodies
+             * before checking which Ristretto selections survived final executable-callee pruning.
+             */
+            BuildTimeInterpreterUniverse.singleton().createConstantPoolsForMethodBodies(accessImpl.getUniverse());
+        }
+        preserveBytecodeSupport.afterCompilation(accessImpl);
+    }
+
     private static void registerFastPathField(FeatureImpl.BeforeAnalysisAccessImpl access, AnalysisType declaringType, String fieldName) {
         access.registerAsAccessed((AnalysisField) JVMCIReflectionUtil.getUniqueDeclaredField(declaringType, fieldName),
                         "Read by the Ristretto fast path via hosted field offsets.");
@@ -177,22 +210,23 @@ public final class RistrettoFeature implements InternalFeature {
     @Override
     public void beforeCompilation(BeforeCompilationAccess a) {
         FeatureImpl.BeforeCompilationAccessImpl config = (FeatureImpl.BeforeCompilationAccessImpl) a;
+        preserveBytecodeSupport.beforeCompilation(config);
         initializeExecutionOffsets(config);
         if (RistrettoOptions.useDeoptimization()) {
             config.registerAsImmutable(ImageSingletons.lookup(RistrettoDeoptimizationSupport.class));
             HostedMetaAccess metaAccess = config.getMetaAccess();
 
             RistrettoDeoptimizationSupport.initialize(
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryVoid)),
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryInt)),
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryLong)),
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryFloat)),
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryDouble)),
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryObject)),
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryBoolean)),
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryByte)),
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryShort)),
-                            new MethodPointer(metaAccess.lookupJavaMethod(interpEntryChar)));
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryVoid)),
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryInt)),
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryLong)),
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryFloat)),
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryDouble)),
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryObject)),
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryBoolean)),
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryByte)),
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryShort)),
+                            MethodRefSupport.createMethodPointer(metaAccess.lookupJavaMethod(interpEntryChar)));
         }
     }
 
@@ -241,5 +275,14 @@ public final class RistrettoFeature implements InternalFeature {
         public boolean getAsBoolean() {
             return SubstrateOptions.useRistretto();
         }
+    }
+}
+
+/** Configures CallSite target-assumption tracking after runtime options are parsed. */
+final class RistrettoCallSiteTargetAssumptionStartupHook implements RuntimeSupport.Hook {
+    @Override
+    public void execute(boolean isFirstIsolate) {
+        RuntimeCallSiteTargetSupport.setTargetAssumptionTrackingEnabled(
+                        RistrettoOptions.JITUseCallSiteTargetValueAssumptions.getValue());
     }
 }

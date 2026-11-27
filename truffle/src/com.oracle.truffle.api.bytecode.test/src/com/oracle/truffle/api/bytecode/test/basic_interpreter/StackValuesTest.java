@@ -46,6 +46,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.graalvm.polyglot.Context;
+import org.junit.Assume;
 import org.junit.Test;
 
 import com.oracle.truffle.api.bytecode.BytecodeConfig;
@@ -54,6 +55,7 @@ import com.oracle.truffle.api.bytecode.BytecodeLocal;
 import com.oracle.truffle.api.bytecode.BytecodeParser;
 import com.oracle.truffle.api.bytecode.BytecodeRootNode;
 import com.oracle.truffle.api.bytecode.BytecodeRootNodes;
+import com.oracle.truffle.api.bytecode.BytecodeVersion;
 import com.oracle.truffle.api.bytecode.GenerateBytecode;
 import com.oracle.truffle.api.bytecode.Operation;
 import com.oracle.truffle.api.bytecode.StackValue;
@@ -746,6 +748,74 @@ public class StackValuesTest extends AbstractBasicInterpreterTest {
         assertFrameDoesNotContainValue(frame, marker);
     }
 
+    /**
+     * Regression test: on block end, a block result is moved below stack values using
+     * store.stackvalue. The result should not get BEd by its consumer because store.stackvalue
+     * cannot handle a primitive value.
+     */
+    @Test
+    public void testBlockResultBoxingElimination() {
+        Assume.assumeTrue(run.hasBoxingElimination());
+        for (int numStackValues : new int[]{0, 1, 2, 3}) {
+            for (int depth : new int[]{1, 2}) {
+                BasicInterpreter root = parseNode("blockResultBoxingElimination", b -> {
+                    b.beginRoot();
+                    b.beginReturn();
+                    b.beginAdd();
+                    for (int i = 0; i < depth; i++) {
+                        b.beginBlock();
+                        for (int j = 0; j < numStackValues; j++) {
+                            b.beginBindStackValue();
+                            b.emitLoadConstant("saved value");
+                            b.endBindStackValue();
+                        }
+                    }
+                    b.emitLoadArgument(0);
+                    for (int i = 0; i < depth; i++) {
+                        b.endBlock();
+                    }
+                    b.emitLoadConstant(1L);
+                    b.endAdd();
+                    b.endReturn();
+                    b.endRoot();
+                });
+                root.getBytecodeNode().setUncachedThreshold(0);
+
+                assertEquals(42L, root.getCallTarget().call(41L));
+                assertEquals("value1", root.getCallTarget().call("value"));
+                assertEquals(42L, root.getCallTarget().call(41L));
+            }
+        }
+    }
+
+    /**
+     * Like {@link #testBlockResultBoxingElimination()} but tests the special case where the stack
+     * value is the block result.
+     */
+    @Test
+    public void testStackValueBlockResultBoxingElimination() {
+        Assume.assumeTrue(run.hasBoxingElimination());
+        BasicInterpreter root = parseNode("stackValueBlockResultBoxingElimination", b -> {
+            b.beginRoot();
+            b.beginReturn();
+            b.beginAdd();
+            b.beginBlock();
+            b.beginBindStackValue();
+            b.emitLoadArgument(0);
+            b.endBindStackValue();
+            b.endBlock();
+            b.emitLoadConstant(1L);
+            b.endAdd();
+            b.endReturn();
+            b.endRoot();
+        });
+        root.getBytecodeNode().setUncachedThreshold(0);
+
+        assertEquals(42L, root.getCallTarget().call(41L));
+        assertEquals("value1", root.getCallTarget().call("value"));
+        assertEquals(42L, root.getCallTarget().call(41L));
+    }
+
     @Test
     public void testBindMustProduceValue() {
         assertParseFailure("Operation BindStackValue expected a value-producing child at position 0, but a void one was provided.", IllegalStateException.class, b -> {
@@ -1060,7 +1130,7 @@ public class StackValuesTest extends AbstractBasicInterpreterTest {
                 "Custom operation with name BindStackValue conflicts with a built-in operation with the same name. The built-in operation will not be generated.%",
                 "Custom operation with name LoadStackValue conflicts with a built-in operation with the same name. The built-in operation will not be generated.%",
                 "Custom operation with name StoreStackValue conflicts with a built-in operation with the same name. The built-in operation will not be generated.%"})
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class)
 abstract class HidesStackValueBuiltins extends RootNode implements BytecodeRootNode {
 
     protected HidesStackValueBuiltins(BytecodeDSLTestLanguage language, FrameDescriptor frameDescriptor) {

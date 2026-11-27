@@ -48,7 +48,6 @@ import java.util.function.Function;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
-import org.graalvm.collections.Pair;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.MissingForeignRegistrationError;
 import org.graalvm.nativeimage.Platform;
@@ -62,12 +61,12 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.ForeignSupport;
-import com.oracle.svm.core.FunctionPointerHolder;
+import com.oracle.svm.guest.staging.c.function.FunctionPointerHolder;
 import com.oracle.svm.core.MissingRegistrationUtils;
 import com.oracle.svm.core.OS;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTarget;
-import com.oracle.svm.core.c.InvokeJavaFunctionPointer;
+import com.oracle.svm.guest.staging.c.function.InvokeJavaFunctionPointer;
 import com.oracle.svm.core.foreign.AbiUtils.TrampolineTemplate;
 import com.oracle.svm.core.foreign.phases.SubstrateOptimizeSharedArenaAccessPhase.OptimizeSharedArenaConfig;
 import com.oracle.svm.core.graal.code.PreparedSignature;
@@ -83,7 +82,7 @@ import com.oracle.svm.core.interpreter.InterpreterForeignFunctionsSupport.Foreig
 import com.oracle.svm.core.interpreter.InterpreterForeignFunctionsSupport.ForeignUpcallPlan;
 import com.oracle.svm.core.methodhandles.Target_java_lang_invoke_BoundMethodHandle;
 import com.oracle.svm.core.snippets.SnippetRuntime;
-import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
+import com.oracle.svm.guest.staging.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.guest.staging.util.ImageHeapMap;
 import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.shared.BuildPhaseProvider;
@@ -121,7 +120,7 @@ public class ForeignFunctionsRuntime implements ForeignSupport, OptimizeSharedAr
 
     private final EconomicMap<NativeEntryPointInfo, FunctionPointerHolder> downcallStubs = ImageHeapMap.create("downcallStubs");
     private final EconomicMap<MethodType, FunctionPointerHolder> downcallStubInvokers = ImageHeapMap.create("downcallStubInvokers");
-    private final EconomicMap<Pair<DirectMethodHandleDesc, JavaEntryPointInfo>, FunctionPointerHolder> directUpcallStubs = ImageHeapMap.create("directUpcallStubs");
+    private final EconomicMap<DirectUpcallKey, FunctionPointerHolder> directUpcallStubs = ImageHeapMap.create("directUpcallStubs");
     private final EconomicMap<JavaEntryPointInfo, FunctionPointerHolder> upcallStubs = ImageHeapMap.create("upcallStubs");
     private final EconomicSet<ResolvedJavaType> neverAccessesSharedArenaTypes = EconomicSet.create();
     private final EconomicSet<ResolvedJavaMethod> neverAccessesSharedArenaMethods = EconomicSet.create();
@@ -216,8 +215,8 @@ public class ForeignFunctionsRuntime implements ForeignSupport, OptimizeSharedAr
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public boolean directUpcallStubExists(DirectMethodHandleDesc desc, JavaEntryPointInfo jep) {
-        return directUpcallStubs.containsKey(Pair.create(desc, jep));
+    public boolean directUpcallStubExists(DirectMethodHandleDesc desc, JavaEntryPointInfo jep, FunctionDescriptor functionDescriptor) {
+        return directUpcallStubs.containsKey(new DirectUpcallKey(desc, jep, functionDescriptor));
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -236,9 +235,17 @@ public class ForeignFunctionsRuntime implements ForeignSupport, OptimizeSharedAr
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public boolean addDirectUpcallStubPointer(DirectMethodHandleDesc desc, JavaEntryPointInfo jep, CFunctionPointer ptr) {
-        var key = Pair.create(desc, jep);
+    public boolean addDirectUpcallStubPointer(DirectMethodHandleDesc desc, JavaEntryPointInfo jep, FunctionDescriptor functionDescriptor, CFunctionPointer ptr) {
+        var key = new DirectUpcallKey(desc, jep, functionDescriptor);
         return directUpcallStubs.putIfAbsent(key, new FunctionPointerHolder(ptr)) == null;
+    }
+
+    /*
+     * Direct stubs embed the argument bindings of their registered descriptor. The native calling
+     * convention alone does not distinguish bindings such as pointers with different target layouts.
+     * Function descriptors must have their layout names stripped, as in AbstractLinker.upcallStub.
+     */
+    private record DirectUpcallKey(DirectMethodHandleDesc target, JavaEntryPointInfo jep, FunctionDescriptor functionDescriptor) {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -355,7 +362,7 @@ public class ForeignFunctionsRuntime implements ForeignSupport, OptimizeSharedAr
         }
 
         JavaEntryPointInfo jep = AbiUtils.singleton().makeJavaEntryPoint(functionDescriptor, options);
-        FunctionPointerHolder functionPointerHolder = directUpcallStubs.get(Pair.create(desc, jep));
+        FunctionPointerHolder functionPointerHolder = directUpcallStubs.get(new DirectUpcallKey(desc, jep, functionDescriptor));
         if (functionPointerHolder == null) {
             return;
         }

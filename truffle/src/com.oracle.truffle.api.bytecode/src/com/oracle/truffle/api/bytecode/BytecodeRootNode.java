@@ -48,6 +48,8 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.EventContext;
 import com.oracle.truffle.api.instrumentation.ExecutionEventListener;
 import com.oracle.truffle.api.instrumentation.ExecutionEventNode;
+import com.oracle.truffle.api.instrumentation.InstrumentableNode;
+import com.oracle.truffle.api.instrumentation.StandardTags;
 import com.oracle.truffle.api.nodes.ControlFlowException;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.api.source.SourceSection;
@@ -123,8 +125,34 @@ public interface BytecodeRootNode {
     }
 
     /**
+     * Supplies the node object for a tagged bytecode region. The generated instrumentation node
+     * delegates {@link InstrumentableNode#getNodeObject()} to this hook. The default returns
+     * {@code null}, which instrumentation treats as an empty node object.
+     * <p>
+     * Use the supplied node's tags and source sections to identify the region and expose language
+     * metadata. Source sections can be absent if source information has not been materialized
+     * or the parser did not supply a source section. The result must satisfy the interop and
+     * tag-specific contracts of {@link InstrumentableNode#getNodeObject()}. For example,
+     * {@link StandardTags.ReadVariableTag} and {@link StandardTags.WriteVariableTag} require a
+     * node object with the variable name.
+     * <p>
+     * The same restrictions and usage details of {@link InstrumentableNode#getNodeObject()} also
+     * apply to this method. Since bytecode indices are not stable, they should not be used to
+     * identify the node's code region (unless accompanied by a {@link BytecodeNode}).
+     *
+     * @param node the tagged region belonging to this root
+     * @return an interop node object, or {@code null} if no properties are available
+     * @since 25.6
+     */
+    @SuppressWarnings("unused")
+    default Object getInstrumentationNodeObject(TagTreeNode node) {
+        return null;
+    }
+
+    /**
      * Optional hook invoked when a {@link ControlFlowException} is thrown during execution. This
-     * hook can do one of four things:
+     * hook is not invoked for exceptions configured by
+     * {@link GenerateBytecode#unwindExceptions()}. It can do one of four things:
      *
      * <ol>
      * <li>It can return a value. The value will be returned from the root node (this can be used to
@@ -151,8 +179,9 @@ public interface BytecodeRootNode {
     /**
      * Optional hook invoked when an internal exception (i.e., anything other than
      * {@link AbstractTruffleException} or {@link ControlFlowException}) is thrown during execution.
-     * This hook can be used to convert such exceptions into guest-language exceptions that can be
-     * handled by guest code.
+     * This hook is not invoked for exceptions configured by
+     * {@link GenerateBytecode#unwindExceptions()}. It can be used to convert other exceptions into
+     * guest-language exceptions that can be handled by guest code.
      * <p>
      * For example, if a Java {@link StackOverflowError} is thrown, this hook can be used to return
      * a guest-language equivalent exception that the guest code understands.
@@ -178,8 +207,9 @@ public interface BytecodeRootNode {
 
     /**
      * Optional hook invoked when an {@link AbstractTruffleException} is thrown during execution.
-     * This hook can be used to preprocess the exception or replace it with another exception before
-     * it is handled.
+     * This hook is not invoked for exceptions configured by
+     * {@link GenerateBytecode#unwindExceptions()}. It can be used to preprocess other exceptions or
+     * replace them with another exception before they are handled.
      *
      * @param ex the Truffle exception
      * @param frame the frame at the point the exception was thrown

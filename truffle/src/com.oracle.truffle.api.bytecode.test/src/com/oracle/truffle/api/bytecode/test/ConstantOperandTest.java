@@ -55,6 +55,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.junit.Test;
@@ -70,6 +71,7 @@ import com.oracle.truffle.api.bytecode.BytecodeNode;
 import com.oracle.truffle.api.bytecode.BytecodeParser;
 import com.oracle.truffle.api.bytecode.BytecodeRootNode;
 import com.oracle.truffle.api.bytecode.BytecodeRootNodes;
+import com.oracle.truffle.api.bytecode.BytecodeVersion;
 import com.oracle.truffle.api.bytecode.ConstantOperand;
 import com.oracle.truffle.api.bytecode.ContinuationResult;
 import com.oracle.truffle.api.bytecode.EpilogExceptional;
@@ -104,7 +106,13 @@ import com.oracle.truffle.api.nodes.RootNode;
 public class ConstantOperandTest {
     private static final BytecodeDSLTestLanguage LANGUAGE = null;
 
-    private record TestRun(ConstantOperandTestRootNodeBuilder.BytecodeVariant variant, boolean testSerialize) {
+    private enum SerializationMode {
+        NONE,
+        BUILDER,
+        EXECUTION
+    }
+
+    private record TestRun(ConstantOperandTestRootNodeBuilder.BytecodeVariant variant, SerializationMode serializationMode) {
 
         private Class<?> interpreterClass() {
             return variant.getGeneratedClass();
@@ -159,13 +167,13 @@ public class ConstantOperandTest {
                     buffer.writeInt(i);
                 } else if (object instanceof Float f) {
                     buffer.writeByte(TAG_FLOAT);
-                    buffer.writeFloat(f);
+                    buffer.writeInt(Float.floatToRawIntBits(f));
                 } else if (object instanceof Long l) {
                     buffer.writeByte(TAG_LONG);
                     buffer.writeLong(l);
                 } else if (object instanceof Double d) {
                     buffer.writeByte(TAG_DOUBLE);
-                    buffer.writeDouble(d);
+                    buffer.writeLong(Double.doubleToRawLongBits(d));
                 } else if (object instanceof String s) {
                     buffer.writeByte(TAG_STRING);
                     buffer.writeUTF(s);
@@ -221,8 +229,9 @@ public class ConstantOperandTest {
     public static List<TestRun> getParameters() {
         List<TestRun> result = new ArrayList<>();
         for (var bc : ConstantOperandTestRootNodeBuilder.variants()) {
-            result.add(new TestRun(bc, false));
-            result.add(new TestRun(bc, true));
+            for (SerializationMode mode : SerializationMode.values()) {
+                result.add(new TestRun(bc, mode));
+            }
         }
         return result;
     }
@@ -232,20 +241,30 @@ public class ConstantOperandTest {
     @SuppressWarnings("unchecked")
     private ConstantOperandTestRootNode parse(BytecodeParser<ConstantOperandTestRootNodeBuilder> parser) {
         BytecodeRootNodes<ConstantOperandTestRootNode> rootNodes = testRun.variant.create(LANGUAGE, BytecodeConfig.DEFAULT, parser);
-        if (testRun.testSerialize) {
-            rootNodes = doRoundTrip(testRun.variant, rootNodes, testRun.getSerializer(), testRun.getDeserializer());
+        if (testRun.serializationMode != SerializationMode.NONE) {
+            rootNodes = doRoundTrip(testRun, rootNodes);
         }
         return rootNodes.getNode(0);
     }
 
-    private static BytecodeRootNodes<ConstantOperandTestRootNode> doRoundTrip(ConstantOperandTestRootNodeBuilder.BytecodeVariant variant,
-                    BytecodeRootNodes<ConstantOperandTestRootNode> nodes, BytecodeSerializer serializer, BytecodeDeserializer deserializer) {
+    private static BytecodeRootNodes<ConstantOperandTestRootNode> doRoundTrip(TestRun run, BytecodeRootNodes<ConstantOperandTestRootNode> nodes) {
         // Perform a serialize-deserialize round trip.
+        BytecodeSerializer serializer = run.getSerializer();
+        BytecodeDeserializer deserializer = run.getDeserializer();
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         try {
-            nodes.serialize(new DataOutputStream(output), serializer);
-            Supplier<DataInput> input = () -> SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(output.toByteArray()));
-            return variant.deserialize(LANGUAGE, BytecodeConfig.DEFAULT, input, deserializer);
+            nodes.serializeBuilderBytecode(new DataOutputStream(output), serializer);
+            Supplier<DataInput> builderBytecodeInput = () -> SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(output.toByteArray()));
+            if (run.serializationMode == SerializationMode.EXECUTION) {
+                ByteArrayOutputStream executionBytecodeOutput = new ByteArrayOutputStream();
+                nodes.serializeExecutionBytecode(new DataOutputStream(executionBytecodeOutput), BytecodeConfig.DEFAULT, serializer);
+                byte[] executionBytecode = executionBytecodeOutput.toByteArray();
+                Function<BytecodeConfig, DataInput> executionBytecodeInput = config -> config.matches(BytecodeConfig.DEFAULT)
+                                ? SerializationUtils.createByteBufferDataInput(ByteBuffer.wrap(executionBytecode))
+                                : null;
+                return run.variant.deserializeExecutionBytecode(LANGUAGE, BytecodeConfig.DEFAULT, builderBytecodeInput, executionBytecodeInput, deserializer);
+            }
+            return run.variant.deserializeBuilderBytecode(LANGUAGE, BytecodeConfig.DEFAULT, builderBytecodeInput, deserializer);
         } catch (IOException ex) {
             throw new AssertionError(ex);
         }
@@ -521,6 +540,27 @@ public class ConstantOperandTest {
     }
 
     @Test
+    public void testDoubleNaNConstants() {
+        long firstBits = 0x7ff8000000000001L;
+        long secondBits = 0x7ff8000000000002L;
+        ConstantOperandTestRootNode root = parse(b -> {
+            b.beginRoot();
+            b.beginIfThen();
+            b.emitLoadArgument(0);
+            b.beginReturn();
+            b.emitDoubleConstant(Double.longBitsToDouble(firstBits));
+            b.endReturn();
+            b.endIfThen();
+            b.beginReturn();
+            b.emitDoubleConstant(Double.longBitsToDouble(secondBits));
+            b.endReturn();
+            b.endRoot();
+        });
+        assertEquals(firstBits, Double.doubleToRawLongBits((Double) root.getCallTarget().call(true)));
+        assertEquals(secondBits, Double.doubleToRawLongBits((Double) root.getCallTarget().call(false)));
+    }
+
+    @Test
     public void testIntConstants() {
         for (int value : List.of(0, 42, -42, Integer.MAX_VALUE, Integer.MIN_VALUE)) {
             ConstantOperandTestRootNode root = parse(b -> {
@@ -572,6 +612,27 @@ public class ConstantOperandTest {
             assertEquals(value, root.getCallTarget().call());
             assertConstantOperand(value, root, "FloatConstantWithOperand");
         }
+    }
+
+    @Test
+    public void testFloatNaNConstants() {
+        int firstBits = 0x7fc00001;
+        int secondBits = 0x7fc00002;
+        ConstantOperandTestRootNode root = parse(b -> {
+            b.beginRoot();
+            b.beginIfThen();
+            b.emitLoadArgument(0);
+            b.beginReturn();
+            b.emitFloatConstant(Float.intBitsToFloat(firstBits));
+            b.endReturn();
+            b.endIfThen();
+            b.beginReturn();
+            b.emitFloatConstant(Float.intBitsToFloat(secondBits));
+            b.endReturn();
+            b.endRoot();
+        });
+        assertEquals(firstBits, Float.floatToRawIntBits((Float) root.getCallTarget().call(true)));
+        assertEquals(secondBits, Float.floatToRawIntBits((Float) root.getCallTarget().call(false)));
     }
 
     @Test
@@ -705,12 +766,12 @@ public class ConstantOperandTest {
 }
 
 @GenerateBytecodeTestVariants({
-                @Variant(suffix = "Cached", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableSerialization = true, enableUncachedInterpreter = false)),
-                @Variant(suffix = "Uncached", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableSerialization = true, enableUncachedInterpreter = true)),
-                @Variant(suffix = "CachedNoInlining", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableSerialization = true, enableUncachedInterpreter = false, //
-                                inlinePrimitiveConstants = false)),
-                @Variant(suffix = "UncachedNoInlining", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableSerialization = true, enableUncachedInterpreter = true, //
-                                inlinePrimitiveConstants = false))
+                @Variant(suffix = "Cached", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableSerialization = true, enableUncachedInterpreter = false)),
+                @Variant(suffix = "Uncached", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableSerialization = true, enableUncachedInterpreter = true)),
+                @Variant(suffix = "CachedNoInlining", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableSerialization = true, //
+                                enableUncachedInterpreter = false, inlinePrimitiveConstants = false)),
+                @Variant(suffix = "UncachedNoInlining", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, enableYield = true, enableSerialization = true, //
+                                enableUncachedInterpreter = true, inlinePrimitiveConstants = false))
 })
 
 abstract class ConstantOperandTestRootNode extends RootNode implements BytecodeRootNode {
@@ -950,7 +1011,7 @@ abstract class ConstantOperandTestRootNode extends RootNode implements BytecodeR
     }
 }
 
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class)
 abstract class ConstantOperandsInPrologTestRootNode extends RootNode implements BytecodeRootNode {
     public final List<Object> prologEvents = new ArrayList<>();
 
@@ -972,7 +1033,7 @@ abstract class ConstantOperandsInPrologTestRootNode extends RootNode implements 
 
 }
 
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class)
 @SuppressWarnings("unused")
 abstract class ConstantOperandErrorRootNode extends RootNode implements BytecodeRootNode {
     protected ConstantOperandErrorRootNode(BytecodeDSLTestLanguage language, FrameDescriptor frameDescriptor) {

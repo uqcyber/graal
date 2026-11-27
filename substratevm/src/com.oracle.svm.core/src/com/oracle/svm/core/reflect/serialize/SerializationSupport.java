@@ -36,12 +36,12 @@ import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.dynamicaccess.AccessCondition;
 
-import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
+import com.oracle.svm.guest.staging.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.metadata.MetadataTracer;
 import com.oracle.svm.core.reflect.SubstrateConstructorAccessor;
-import com.oracle.svm.core.util.DeferredKeyMap;
+import com.oracle.svm.guest.staging.util.DeferredKeyMap;
 import com.oracle.svm.core.util.DynamicHubKey;
 import com.oracle.svm.shared.BuildPhaseProvider;
 import com.oracle.svm.shared.singletons.LayeredImageSingletonSupport;

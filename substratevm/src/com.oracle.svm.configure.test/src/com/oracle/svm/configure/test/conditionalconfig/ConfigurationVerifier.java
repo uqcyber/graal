@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,7 @@ import com.oracle.svm.configure.ConfigurationBase;
 import com.oracle.svm.configure.ConfigurationFile;
 import com.oracle.svm.configure.config.ConfigurationFileCollection;
 import com.oracle.svm.configure.config.ConfigurationSet;
-import com.oracle.svm.configure.test.AddExports;
+import com.oracle.svm.test.api.AddExports;
 
 import jdk.graal.compiler.util.json.JsonWriter;
 
@@ -68,6 +68,8 @@ public class ConfigurationVerifier {
             System.err.println("The following configuration was not expected: ");
             System.err.println(getConfigurationJSON(extraConfig));
         }
+        Assert.assertTrue("Missing foreign registrations: " + getConfigurationJSON(missingConfig), missingConfig.getForeignConfiguration().isEmpty());
+        Assert.assertTrue("Unexpected foreign registrations: " + getConfigurationJSON(extraConfig), extraConfig.getForeignConfiguration().isEmpty());
         Assert.assertTrue(missingConfig.isEmpty() && extraConfig.isEmpty());
     }
 

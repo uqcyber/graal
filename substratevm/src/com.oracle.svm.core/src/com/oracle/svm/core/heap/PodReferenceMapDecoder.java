@@ -27,7 +27,7 @@ package com.oracle.svm.core.heap;
 import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
 import static com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils.Byte.toUnsignedInt;
 
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
@@ -35,6 +35,7 @@ import org.graalvm.word.UnsignedWord;
 import com.oracle.svm.shared.AlwaysInline;
 import com.oracle.svm.core.JavaMemoryUtil;
 import com.oracle.svm.shared.Uninterruptible;
+import com.oracle.svm.guest.staging.core.heap.ObjectReferenceVisitor;
 import com.oracle.svm.core.graal.nodes.NewPodInstanceNode;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
@@ -87,7 +88,7 @@ public final class PodReferenceMapDecoder {
         mapOffset = mapOffset.subtract(2);
         int gap = toUnsignedInt(ObjectAccess.readByte(obj, mapOffset));
         int nrefs = toUnsignedInt(ObjectAccess.readByte(obj, mapOffset.add(1)));
-        return gap == 0 && nrefs != 0xff;
+        return gap == 0 && nrefs == 0;
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)

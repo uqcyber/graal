@@ -28,22 +28,21 @@ import static com.oracle.svm.configure.config.ConfigurationMemberInfo.Configurat
 import static com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberAccessibility.NONE;
 import static com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberAccessibility.QUERIED;
 import static com.oracle.svm.core.MissingRegistrationUtils.throwMissingRegistrationErrors;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_CLASSES_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_CONSTRUCTORS_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_DECLARED_CLASSES_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_DECLARED_CONSTRUCTORS_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_DECLARED_FIELDS_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_DECLARED_METHODS_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_FIELDS_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_METHODS_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_NEST_MEMBERS_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_PERMITTED_SUBCLASSES_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_RECORD_COMPONENTS_FLAG;
-import static com.oracle.svm.core.code.RuntimeMetadataDecoderImpl.ALL_SIGNERS_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_CLASSES_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_CONSTRUCTORS_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_DECLARED_CLASSES_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_DECLARED_CONSTRUCTORS_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_DECLARED_FIELDS_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_DECLARED_METHODS_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_FIELDS_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_METHODS_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_NEST_MEMBERS_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_PERMITTED_SUBCLASSES_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_RECORD_COMPONENTS_FLAG;
+import static com.oracle.svm.guest.staging.reflect.RuntimeMetadataDecoder.ALL_SIGNERS_FLAG;
 import static org.graalvm.nativeimage.dynamicaccess.AccessCondition.unconditional;
 
 import java.lang.annotation.AnnotationFormatError;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.GenericArrayType;
@@ -89,14 +88,13 @@ import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberAccessibility;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.configure.ConditionalRuntimeValue;
-import com.oracle.svm.core.configure.RuntimeDynamicAccessMetadata;
+import com.oracle.svm.guest.staging.configure.RuntimeDynamicAccessMetadata;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.imagelayer.BuildingImageLayerPredicate;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.reflect.SubstrateAccessor;
 import com.oracle.svm.core.reflect.target.ReflectionSubstitutionSupport;
 import com.oracle.svm.hosted.ClassLoaderFeature;
 import com.oracle.svm.hosted.ConditionalConfigurationRegistry;
@@ -132,6 +130,7 @@ import jdk.graal.compiler.annotation.EnumElement;
 import jdk.graal.compiler.annotation.MissingType;
 import jdk.graal.compiler.annotation.TypeAnnotationValue;
 import jdk.graal.compiler.debug.GraalError;
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -170,7 +169,7 @@ import sun.reflect.annotation.TypeNotPresentExceptionProxy;
 ///   In this case, we have to be able to reconstruct the queried object at run-time, and therefore need to make sure
 ///   that every field value of the element is seen as reachable by the analysis.
 /// * `ACCESSED`: The element can be reflectively accessed at runtime, through [Field#get(Object)],
-///   [Field#set(Object, Object)], [Method#invoke(Object, Object...)] or [Constructor#newInstance(Object...)]. For
+///   [Field#set(Object, Object)], [Method#invoke(Object, Object...)] or [java.lang.reflect.Constructor#newInstance(Object...)]. For
 ///   types, this means that class queries such as [Class#getMethods()] are allowed. In this case, we need to register
 ///   the actual field or method represented by the element as reachable, and trigger the creation of the necessary
 ///   accessors (e.g. SubstrateMethodAccessor).
@@ -374,11 +373,11 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
     }
 
     private static void registerTypeForRuntimeAccess(AnalysisType type) {
-        if (PredefinedClassesSupport.isPredefined(type.getJavaClass())) {
+        if (PredefinedClassesSupport.isPredefined(type)) {
             return; // must be defined at runtime before it can be looked up
         }
         ClassLoader loader = ClassAccess.getClassLoader(type);
-        ClassRegistries.addAOTClass(ClassLoaderFeature.getRuntimeClassLoader(loader), type.getJavaClass());
+        ClassRegistries.addAOTClass(ClassLoaderFeature.getRuntimeClassLoader(loader), OriginalClassProvider.getJavaClass(type));
     }
 
     /**
@@ -599,13 +598,15 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
                 if (accessibility == NONE) {
                     data.inHeap = true;
                 }
-                if (accessibility.includes(QUERIED) && (previous == null || !previous.includes(QUERIED))) {
-                    if (!aMethod.isConstructor() && aMethod.getDeclaringClass().isAnnotation()) {
-                        processAnnotationMethod(accessibility, aMethod);
-                    }
-                    if (!throwMissingRegistrationErrors()) {
-                        checkHidingMethods(aMethod);
-                    }
+                if (accessibility.includes(QUERIED) && !aMethod.isConstructor() && aMethod.getDeclaringClass().isAnnotation()) {
+                    /*
+                     * Mirror every registration onto the proxy method, not only the first one: a
+                     * later registration can raise the access level or add the preserved bit.
+                     */
+                    processAnnotationMethod(accessibility, preserved, aMethod);
+                }
+                if (accessibility.includes(QUERIED) && (previous == null || !previous.includes(QUERIED)) && !throwMissingRegistrationErrors()) {
+                    checkHidingMethods(aMethod);
                 }
                 if (accessibility.includes(QUERIED)) {
                     data.updateDynamicAccessMetadata(cnd, preserved, accessibility);
@@ -853,8 +854,10 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
         TypeData data = types.computeIfAbsent(type, _ -> new TypeData());
         if (!data.reachabilityHandlerRegistered) {
             data.reachabilityHandlerRegistered = true;
-            analysisAccess.registerSubtypeReachabilityHandler((_, subtype) -> runConditionalTask(unconditional(), _ -> checkSubtypeForOverridingElements(type, metaAccess.lookupJavaType(subtype))),
-                            type.getJavaClass());
+            analysisAccess.registerSubtypeReachabilityHandler((_, subtype) -> {
+                AnalysisType analysisSubtype = subtype instanceof AnalysisType aType ? aType : universe.lookup(subtype);
+                runConditionalTask(unconditional(), _ -> checkSubtypeForOverridingElements(type, analysisSubtype));
+            }, type);
             return true;
         } else {
             return false;
@@ -891,12 +894,12 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
     /*
      * Proxy classes for annotations present the annotation default methods and fields as their own.
      */
-    private void processAnnotationMethod(ConfigurationMemberAccessibility accessibility, AnalysisMethod method) {
+    private void processAnnotationMethod(ConfigurationMemberAccessibility accessibility, boolean preserved, AnalysisMethod method) {
         AnalysisType annotationType = method.getDeclaringClass();
         AnalysisType proxyType = classAccess.getProxyType(annotationType);
         AnalysisMethod proxyMethod = proxyType != null ? proxyType.findMethod(method.getName(), method.getSignature()) : null;
         if (proxyMethod != null) {
-            registerMethod(unconditional(), accessibility, false, proxyMethod);
+            registerMethod(unconditional(), accessibility, preserved, proxyMethod);
         }
     }
 
@@ -1013,8 +1016,8 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
     }
 
     private void registerMethodAccessor(AnalysisMethod method) {
-        SubstrateAccessor accessor = ImageSingletons.lookup(ReflectionFeature.class).getOrCreateAccessor(method.getJavaMethod());
-        universe.getHeapScanner().rescanObject(accessor, scanReason);
+        JavaConstant accessor = ImageSingletons.lookup(ReflectionFeature.class).getOrCreateAccessor(method);
+        universe.getHeapScanner().rescanConstant(accessor, scanReason);
     }
 
     private void registerTypesForGenericSignature(Type[] genericTypes) {
@@ -1087,7 +1090,8 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
     }
 
     private void registerTypesForRecordComponent(ResolvedJavaRecordComponent recordComponent) {
-        universe.lookup(recordComponent.getType()).registerAsReachable("Type of a record component registered for reflection");
+        ResolvedJavaType componentType = recordComponent.getType().resolve(recordComponent.getDeclaringRecord());
+        universe.lookup(componentType).registerAsReachable("Type of a record component registered for reflection");
         registerTypesForAnnotations(recordComponent);
         registerTypesForTypeAnnotations(recordComponent);
     }
@@ -1205,8 +1209,11 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
             }
             case MissingType _ -> typeConsumer.accept(GuestAccess.get().lookupType(TypeNotPresentExceptionProxy.class));
             case ElementTypeMismatch _ -> typeConsumer.accept(AnnotationTypeMismatchExceptionProxy);
+            // Up to at least Eclipse 4.36, there is no preference for spaces after commas between switch type patterns
+            // @formatter:off
             case AnnotationFormatError _, Number _, Boolean _, Character _ -> {
             }
+            // @formatter:on
             default -> throw GraalError.shouldNotReachHere("Invalid annotation member type: " + memberValue.getClass()); // ExcludeFromJacocoGeneratedReport
         }
     }
@@ -1230,18 +1237,15 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
             RuntimeProxyCreation.register(OriginalClassProvider.getJavaClass(type));
             registerClass(unconditional(), ACCESSED, analysisType, false);
         }
-        /*
-         * Exception proxies are stored as-is in the image heap
-         */
         if (GuestAccess.get().lookupType(ExceptionProxy.class).isAssignableFrom(type)) {
             /*
-             * The image heap scanning does not see the actual instances, so we need to be
-             * conservative and assume fields can have any value.
+             * Annotation metadata represents proxy values without exposing their instances to heap
+             * scanning. Summarize their fields for compiled readers.
              */
             analysisType.registerAsInstantiated("Is used by annotation of element registered for reflection.");
             for (var f : analysisType.getInstanceFields(true)) {
                 var aField = (AnalysisField) f;
-                universe.getBigbang().injectFieldTypes(aField, List.of(aField.getType()), true);
+                aField.injectConservativeFieldValues();
             }
         }
     }
@@ -1300,28 +1304,28 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
     }
 
     @Override
-    public Map<Class<?>, Set<Class<?>>> getReflectionInnerClasses() {
+    public Map<ResolvedJavaType, Set<ResolvedJavaType>> getReflectionInnerClasses() {
         guaranteeAnalysisFinishedAndRuntimeMetadataEncodingNotComplete();
-        Map<Class<?>, Set<Class<?>>> innerClasses = new HashMap<>();
+        Map<ResolvedJavaType, Set<ResolvedJavaType>> innerClasses = new HashMap<>();
         types.forEach((type, typeData) -> {
             if (typeData.isRegisteredAs(ACCESSED)) {
                 try {
-                    var innerTypes = innerClasses.computeIfAbsent(type.getJavaClass(), _ -> new HashSet<>());
+                    var innerTypes = innerClasses.computeIfAbsent(OriginalClassProvider.getOriginalType(type), _ -> new HashSet<>());
                     for (var innerType : type.getDeclaredTypes()) {
-                        innerTypes.add(innerType.getJavaClass());
+                        innerTypes.add(OriginalClassProvider.getOriginalType(innerType));
                     }
                     forAllSuperTypes(type, t -> {
-                        var superTypeInnerTypes = innerClasses.computeIfAbsent(t.getJavaClass(), _ -> new HashSet<>());
+                        var superTypeInnerTypes = innerClasses.computeIfAbsent(OriginalClassProvider.getOriginalType(t), _ -> new HashSet<>());
                         for (var innerType : t.getDeclaredTypes()) {
                             if (innerType.isPublic()) {
-                                superTypeInnerTypes.add(innerType.getJavaClass());
+                                superTypeInnerTypes.add(OriginalClassProvider.getOriginalType(innerType));
                             }
                         }
                     });
                     if (!throwMissingRegistrationErrors()) {
                         AnalysisType enclosingType = type.getEnclosingType();
                         if (enclosingType != null) {
-                            innerClasses.computeIfAbsent(enclosingType.getJavaClass(), _ -> new HashSet<>()).add(type.getJavaClass());
+                            innerClasses.computeIfAbsent(OriginalClassProvider.getOriginalType(enclosingType), _ -> new HashSet<>()).add(OriginalClassProvider.getOriginalType(type));
                         }
                     }
                 } catch (LinkageError ignored) {
@@ -1332,13 +1336,12 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
         return Collections.unmodifiableMap(innerClasses);
     }
 
-    public int getEnabledReflectionQueries(Class<?> clazz) {
+    public int getEnabledReflectionQueries(AnalysisType type) {
         guaranteeAnalysisFinishedAndRuntimeMetadataEncodingNotComplete();
         /*
          * Primitives and arrays are registered by default since they provide reflective access to
          * no members.
          */
-        AnalysisType type = metaAccess.lookupJavaType(clazz);
         if (type.isPrimitive() || type.isArray() || types.get(type).isRegisteredAs(ACCESSED)) {
             return ALL_DECLARED_CLASSES_FLAG | ALL_CLASSES_FLAG | ALL_DECLARED_CONSTRUCTORS_FLAG | ALL_CONSTRUCTORS_FLAG | ALL_DECLARED_METHODS_FLAG | ALL_METHODS_FLAG |
                             ALL_DECLARED_FIELDS_FLAG | ALL_FIELDS_FLAG | ALL_RECORD_COMPONENTS_FLAG | ALL_PERMITTED_SUBCLASSES_FLAG | ALL_NEST_MEMBERS_FLAG | ALL_SIGNERS_FLAG;
@@ -1404,12 +1407,12 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
     }
 
     @Override
-    public Object getAccessor(AnalysisMethod method) {
+    public JavaConstant getAccessor(AnalysisMethod method) {
         guaranteeAnalysisFinishedAndRuntimeMetadataEncodingNotComplete();
         if (!methods.containsKey(method) || !methods.get(method).isRegisteredAs(ACCESSED)) {
-            return null;
+            return JavaConstant.NULL_POINTER;
         }
-        return ImageSingletons.lookup(ReflectionFeature.class).getOrCreateAccessor(method.getJavaMethod());
+        return ImageSingletons.lookup(ReflectionFeature.class).getOrCreateAccessor(method);
     }
 
     @Override
@@ -1477,15 +1480,17 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
     }
 
     @Override
-    public void registerHeapReflectionField(Field reflectField, ScanReason reason) {
+    public void registerHeapReflectionField(JavaConstant reflectField, ScanReason reason) {
         guaranteeRuntimeMetadataEncodingNotComplete();
-        registerField(unconditional(), NONE, false, GuestAccess.get().lookupField(reflectField));
+        registerField(unconditional(), NONE, false, GuestAccess.get().asResolvedJavaField(reflectField));
     }
 
     @Override
-    public void registerHeapReflectionExecutable(Executable reflectExecutable, ScanReason reason) {
+    public void registerHeapReflectionExecutable(JavaConstant reflectExecutable, ScanReason reason) {
         guaranteeRuntimeMetadataEncodingNotComplete();
-        if (reflectExecutable instanceof Constructor<?> reflectConstructor && ReflectionSubstitutionSupport.singleton().isCustomSerializationConstructor(reflectConstructor)) {
+        ResolvedJavaMethod method = GuestAccess.get().asResolvedJavaMethod(reflectExecutable);
+        if (method.isConstructor() &&
+                        ReflectionSubstitutionSupport.singleton().isCustomSerializationConstructor(reflectExecutable)) {
             /*
              * Constructors created by Constructor.newWithAccessor are indistinguishable from an
              * equivalent constructor with a "correct" accessor, and as such could hide this
@@ -1494,7 +1499,7 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
              */
             return;
         }
-        registerMethod(unconditional(), NONE, false, GuestAccess.get().lookupMethod(reflectExecutable));
+        registerMethod(unconditional(), NONE, false, method);
     }
 
     @Override
@@ -1546,7 +1551,7 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
         types.forEach((type, data) -> {
             LinkageError error = data.getClassLookupError();
             if (error != null) {
-                classLookupExceptions.put(type.getJavaClass(), error);
+                classLookupExceptions.put(OriginalClassProvider.getJavaClass(type), error);
             }
         });
         return Collections.unmodifiableMap(classLookupExceptions);
@@ -1588,7 +1593,7 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
         types.forEach((type, data) -> {
             LinkageError error = errorGetter.apply(data);
             if (error != null) {
-                lookupExceptions.put(type.getJavaClass(), error);
+                lookupExceptions.put(OriginalClassProvider.getJavaClass(type), error);
             }
         });
         return Collections.unmodifiableMap(lookupExceptions);
@@ -1601,7 +1606,7 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
         types.forEach((type, data) -> {
             LinkageError error = data.getRecordComponentLookupError();
             if (error != null) {
-                recordComponentLookupExceptions.put(type.getJavaClass(), error);
+                recordComponentLookupExceptions.put(OriginalClassProvider.getJavaClass(type), error);
             }
         });
         return Collections.unmodifiableMap(recordComponentLookupExceptions);
@@ -1914,8 +1919,8 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
     }
 
     /// This class encapsulates the remaining accesses to core reflection performed by
-    /// [ReflectionDataBuilder].
-    /// This class should eventually disappear once GR-72109 is unblocked.
+    /// [ReflectionDataBuilder]. GR-72109 tracks replacing them with JVMCI equivalents, after which
+    /// this class can disappear.
     private record ClassAccess(AnalysisMetaAccess metaAccess) {
 
         private Collection<AnalysisType> filterClasses(Class<?>[] classes) {
@@ -1940,7 +1945,7 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
         }
 
         public static ClassLoader getClassLoader(AnalysisType type) {
-            return type.getJavaClass().getClassLoader();
+            return OriginalClassProvider.getJavaClass(type).getClassLoader();
         }
 
         public static RecordComponent[] getRecordComponents(Class<?> clazz) {
@@ -1948,61 +1953,61 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
         }
 
         public static void checkDeclaredFields(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             if (javaClass != null) {
                 javaClass.getDeclaredFields();
             }
         }
 
         public static void checkPublicFields(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             if (javaClass != null) {
                 javaClass.getFields();
             }
         }
 
         public static void checkDeclaredMethods(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             if (javaClass != null) {
                 javaClass.getDeclaredMethods();
             }
         }
 
         public static void checkPublicMethods(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             if (javaClass != null) {
                 javaClass.getMethods();
             }
         }
 
         public static void checkDeclaredConstructors(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             if (javaClass != null) {
                 javaClass.getDeclaredConstructors();
             }
         }
 
         public static void checkPublicConstructors(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             if (javaClass != null) {
                 javaClass.getConstructors();
             }
         }
 
         public static void checkRecordComponents(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             if (javaClass != null) {
                 javaClass.getRecordComponents();
             }
         }
 
         public Collection<AnalysisType> getNestMembers(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             return javaClass != null ? filterClasses(javaClass.getNestMembers()) : Collections.singleton(type);
         }
 
         public static Object[] getSigners(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             return javaClass != null ? javaClass.getSigners() : null;
         }
 
@@ -2018,17 +2023,17 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
         }
 
         public static Type[] getTypeParameters(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             return javaClass != null ? queryGenericInfo(javaClass::getTypeParameters) : null;
         }
 
         public static Type getGenericSuperclass(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             return javaClass != null ? queryGenericInfo(javaClass::getGenericSuperclass) : null;
         }
 
         public static Type[] getGenericInterfaces(AnalysisType type) {
-            Class<?> javaClass = type.getJavaClass();
+            Class<?> javaClass = OriginalClassProvider.getJavaClass(type);
             return javaClass != null ? queryGenericInfo(javaClass::getGenericInterfaces) : null;
         }
 
@@ -2082,7 +2087,7 @@ public class ReflectionDataBuilder extends ConditionalConfigurationRegistry impl
         @SuppressWarnings("deprecation")
         public AnalysisType getProxyType(AnalysisType intf) {
             try {
-                return metaAccess.lookupJavaType(Proxy.getProxyClass(getClassLoader(intf), intf.getJavaClass()));
+                return metaAccess.lookupJavaType(Proxy.getProxyClass(getClassLoader(intf), OriginalClassProvider.getJavaClass(intf)));
             } catch (LinkageError e) {
                 return null;
             }

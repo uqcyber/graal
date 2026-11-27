@@ -24,6 +24,10 @@
  */
 package com.oracle.svm.interpreter;
 
+import static com.oracle.svm.espresso.classfile.ConstantPool.CONSTANT_Double;
+import static com.oracle.svm.espresso.classfile.ConstantPool.CONSTANT_Float;
+import static com.oracle.svm.espresso.classfile.ConstantPool.CONSTANT_Integer;
+import static com.oracle.svm.espresso.classfile.ConstantPool.CONSTANT_Long;
 import static com.oracle.svm.espresso.classfile.Constants.JVM_ArrayType_Boolean;
 import static com.oracle.svm.espresso.classfile.Constants.JVM_ArrayType_Byte;
 import static com.oracle.svm.espresso.classfile.Constants.JVM_ArrayType_Char;
@@ -33,6 +37,10 @@ import static com.oracle.svm.espresso.classfile.Constants.JVM_ArrayType_Int;
 import static com.oracle.svm.espresso.classfile.Constants.JVM_ArrayType_Long;
 import static com.oracle.svm.espresso.classfile.Constants.JVM_ArrayType_Object;
 import static com.oracle.svm.espresso.classfile.Constants.JVM_ArrayType_Short;
+import static com.oracle.svm.interpreter.CachedInterpreterOperandStack.STATE_TOS_1;
+import static com.oracle.svm.interpreter.CachedInterpreterOperandStack.STATE_TOS_2;
+import static com.oracle.svm.interpreter.InterpreterOperandStack.STATE_DEBUGGING;
+import static com.oracle.svm.interpreter.InterpreterOperandStack.STATE_PROFILING;
 import static com.oracle.svm.interpreter.InterpreterOptions.InterpreterTraceSupport;
 import static com.oracle.svm.interpreter.InterpreterToVM.nullCheck;
 import static com.oracle.svm.interpreter.InterpreterUtil.invalidOpcode;
@@ -261,6 +269,7 @@ import com.oracle.svm.core.NeverInlineTrivial;
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.DynamicHubUtils;
 import com.oracle.svm.core.hub.DynamicHubIntrinsics;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
 import com.oracle.svm.core.methodhandles.MethodHandleInterpreterUtils;
@@ -279,6 +288,7 @@ import com.oracle.svm.interpreter.metadata.CremaResolvedJavaFieldImpl;
 import com.oracle.svm.interpreter.metadata.CremaResolvedObjectType;
 import com.oracle.svm.interpreter.metadata.InterpreterConstantPool;
 import com.oracle.svm.interpreter.metadata.InterpreterConstantPool.LinkedInvoke;
+import com.oracle.svm.interpreter.metadata.InterpreterConstantPoolPrimitiveEntry;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedInvokeGenericJavaMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaField;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
@@ -344,6 +354,7 @@ public final class Interpreter {
         return execute0(frame, false);
     }
 
+    @AlwaysInline("Keep ordinary interpreter entry around the physical interpreter root")
     public static Object execute(InterpreterResolvedJavaMethod method, Object[] args, boolean forceStayInInterpreter) {
         InterpreterFrame frame = InterpreterFrame.create(method, args);
         checkExecutable(method);
@@ -429,6 +440,7 @@ public final class Interpreter {
         }
     }
 
+    @AlwaysInline("Keep method entry and exit around the physical interpreter root")
     private static Object execute0(InterpreterFrame frame, boolean stayInInterpreter) {
         InterpreterResolvedJavaMethod method = frame.method;
         boolean releaseSynchronizedMethodLock = false;
@@ -494,6 +506,7 @@ public final class Interpreter {
                         .string("/top=").unsigned(top).newline();
     }
 
+    @NeverInline("Keep return tracing out of the interpreter")
     private static void traceInterpreterReturn(InterpreterResolvedJavaMethod method, int indent, long curBCI, long top) {
         /* arguments to Log methods might have side-effects */
         if (!InterpreterTraceSupport.getValue()) {
@@ -518,10 +531,14 @@ public final class Interpreter {
      * Ristretto OSR returns bypass this helper because the OSR continuation has already left the
      * interpreter and returns as runtime-compiled code.
      */
-    private static void returnFromInterpreter(InterpreterResolvedJavaMethod method, int indent, long curBCI, long top, Object returnValue) {
-        traceInterpreterReturn(method, indent, curBCI, top);
+    @AlwaysInline("Keep the operand-stack overlay virtual across interpreter returns")
+    private static void returnFromInterpreter(InterpreterResolvedJavaMethod method, int indent, long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack, Object returnValue) {
+        if (InterpreterTraceSupport.getValue()) {
+            virtualStack.flushCache(frame);
+            traceInterpreterReturn(method, indent, curBCI, virtualStack.topForFrameStackOperation());
+        }
         Thread currentThread = Thread.currentThread();
-        if (Root.debuggerEventsSupported() && DebuggerEvents.singleton().isEventEnabled(currentThread, EventKind.METHOD_EXIT)) {
+        if (virtualStack.getState() == STATE_DEBUGGING && DebuggerEvents.singleton().isEventEnabled(currentThread, EventKind.METHOD_EXIT)) {
             if (method.getDeclaringClass().isMethodExitEvent()) {
                 int flags = EventKind.METHOD_EXIT.getFlag() | EventKind.METHOD_EXIT_WITH_RETURN_VALUE.getFlag();
                 DebuggerEvents.singleton().getEventHandler().onEventAt(currentThread, method, (int) curBCI, returnValue, flags);
@@ -529,6 +546,7 @@ public final class Interpreter {
         }
     }
 
+    @NeverInline("Keep instruction tracing out of bytecode-handler stubs")
     private static void traceInterpreterInstruction(InterpreterFrame frame, int indent, long curBCI, long top, int curOpcode) {
         /* arguments to Log methods might have side-effects */
         if (!InterpreterTraceSupport.getValue()) {
@@ -544,6 +562,7 @@ public final class Interpreter {
         traceInterpreter("").newline();
     }
 
+    @NeverInline("Keep exception tracing out of the interpreter")
     private static void traceInterpreterException(InterpreterResolvedJavaMethod method, int indent, long curBCI, long top) {
         /* arguments to Log methods might have side-effects */
         if (!InterpreterTraceSupport.getValue()) {
@@ -628,10 +647,9 @@ public final class Interpreter {
                     InterpreterUnresolvedSignature signature = method.getSignature();
                     Object[] calleeArgs = rebasic(frame.getArguments(), signature, !method.isStatic());
                     // This should integrate with the debugger GR-70801
-                    boolean preferStayInInterpreter = forceStayInInterpreter;
                     traceInvokeBasic(target, indent);
                     try {
-                        Object result = InterpreterToVM.dispatchInvocation(target, calleeArgs, CallKind.DIRECT, forceStayInInterpreter, preferStayInInterpreter, false);
+                        Object result = InterpreterToVM.dispatchInvocation(target, calleeArgs, CallKind.DIRECT, forceStayInInterpreter, false);
                         yield unbasic(result, signature.getReturnKind());
                     } catch (SemanticJavaException e) {
                         throw uncheckedThrow(e.getCause());
@@ -643,12 +661,19 @@ public final class Interpreter {
                     InterpreterResolvedJavaMethod resolutionSeed = InterpreterResolvedJavaMethod.fromMemberName(memberName);
                     InterpreterUnresolvedSignature signature = resolutionSeed.getSignature();
                     boolean hasReceiver = intrinsic != SignaturePolymorphicIntrinsic.LinkToStatic;
-                    Object[] basicArgs = unbasic(arguments, signature, hasReceiver);
+                    /*
+                     * Frame arguments are boxed according to the linkTo call-site signature, which
+                     * can contain sub-word types and need not match the target signature. Convert
+                     * through basic kinds to adapt between them: an int call-site parameter can
+                     * correspond to a byte target parameter, or vice versa. For matching sub-word
+                     * kinds, the conversions cancel each other out.
+                     */
+                    Object[] basicArgs = rebasic(arguments, method.getSignature(), !method.isStatic());
+                    Object[] calleeArgs = unbasic(basicArgs, signature, hasReceiver);
                     // This should integrate with the debugger GR-70801
-                    boolean preferStayInInterpreter = forceStayInInterpreter;
                     traceLinkTo(resolutionSeed, intrinsic, indent);
                     try {
-                        Object result = InterpreterToVM.dispatchInvocation(resolutionSeed, basicArgs, intrinsic.getCallKind(), forceStayInInterpreter, preferStayInInterpreter, false);
+                        Object result = InterpreterToVM.dispatchInvocation(resolutionSeed, calleeArgs, intrinsic.getCallKind(), forceStayInInterpreter, false);
                         yield rebasic(result, signature.getReturnKind());
                     } catch (SemanticJavaException e) {
                         throw uncheckedThrow(e.getCause());
@@ -753,31 +778,45 @@ public final class Interpreter {
     public static final class Root {
 
         @NeverInline("needed for stack walking")
-        @BytecodeInterpreterHandlerConfig(maximumOperationCode = QUICK_ZASTORE, arguments = {
+        @BytecodeInterpreterHandlerConfig(maximumOperationCode = QUICK_ZASTORE, enableTailDuplication = true, arguments = {
                         @BytecodeInterpreterHandlerConfig.Argument(returnValue = true),
                         @BytecodeInterpreterHandlerConfig.Argument(expand = BytecodeInterpreterHandlerConfig.Argument.ExpansionKind.MATERIALIZED, fields = {
                                         @BytecodeInterpreterHandlerConfig.Argument.Field(name = "code"),
                                         @BytecodeInterpreterHandlerConfig.Argument.Field(name = "primitives"),
                                         @BytecodeInterpreterHandlerConfig.Argument.Field(name = "references")
                         }),
-                        @BytecodeInterpreterHandlerConfig.Argument(expand = BytecodeInterpreterHandlerConfig.Argument.ExpansionKind.VIRTUAL)
+                        @BytecodeInterpreterHandlerConfig.Argument(expand = BytecodeInterpreterHandlerConfig.Argument.ExpansionKind.VIRTUAL, expandedType = CachedInterpreterOperandStack.class, fields = {
+                                        @BytecodeInterpreterHandlerConfig.Argument.Field(name = "state", templateVariable = STATE_TOS_2 + 1),
+                                        @BytecodeInterpreterHandlerConfig.Argument.Field(name = "tosPrimitive0", validWhen = "state", valid = {
+                                                        STATE_TOS_1, STATE_TOS_2
+                                        }),
+                                        @BytecodeInterpreterHandlerConfig.Argument.Field(name = "tosPrimitive1", validWhen = "state", valid = {
+                                                        STATE_TOS_2
+                                        })
+                        })
         })
         private static Object executeBodyFromBCI(InterpreterFrame frame, InterpreterResolvedJavaMethod method, int startBCI, int startTop,
                         boolean forceStayInInterpreter) {
             /*
-             * SubstrateOptions.useRistretto() is a hosted @Fold switch. When Ristretto is disabled,
-             * graph building sees the false branch below, initializes profiling to an inert
-             * constant, and folds away the profile-entry and profile-site paths.
+             * Debugging and profiling use separate handler variants. Debugger support takes
+             * precedence so events enabled during this invocation are still observed. Both
+             * capability checks fold at image build time.
              */
+            InterpreterOperandStack virtualStack = new CachedInterpreterOperandStack(startTop);
             final MethodProfile methodProfile;
-            if (SubstrateOptions.useRistretto()) {
+            if (debuggerEventsSupported()) {
+                methodProfile = null;
+                virtualStack.setState(STATE_DEBUGGING);
+            } else if (SubstrateOptions.useRistretto()) {
                 methodProfile = RistrettoInterpreterSupport.singleton().profileMethodEntry(method);
+                if (methodProfile != null) {
+                    virtualStack.setState(STATE_PROFILING);
+                }
             } else {
                 methodProfile = null;
             }
 
             long curBCI = startBCI;
-            InterpreterOperandStack virtualStack = new InterpreterOperandStack(startTop);
             int debuggerEventFlags = 0;
             if (debuggerEventsSupported()) {
                 DebuggerEvents debuggerEvents = DebuggerEvents.singleton();
@@ -1079,7 +1118,7 @@ public final class Interpreter {
                         case ARETURN: // fall through
                         case RETURN: {
                             Object returnValue = virtualStack.peekKindAsObject(frame, method.getSignature().getReturnKind());
-                            returnFromInterpreter(method, indent, curBCI, virtualStack.topForFrameStackOperation(), returnValue);
+                            returnFromInterpreter(method, indent, curBCI, frame, virtualStack, returnValue);
                             return returnValue;
                         }
                         // @formatter:off
@@ -1153,11 +1192,15 @@ public final class Interpreter {
                     if (handler != null) {
                         virtualStack.clearOperandStack(frame);
                         virtualStack.pushObject(frame, exception);
-                        curBCI = beforeJumpChecks(frame, curBCI, handler.getHandlerBCI(), virtualStack.topForFrameStackOperation());
+                        // The completed stack update marks the transition to the exception-handler entry BCI.
+                        curBCI = beforeJumpChecks(frame, curBCI, handler.getHandlerBCI(), virtualStack);
                         prepareOpcodeForDispatch(curBCI, frame, virtualStack);
                         continue;
                     } else {
-                        traceInterpreterException(method, indent, curBCI, virtualStack.topForFrameStackOperation());
+                        if (InterpreterTraceSupport.getValue()) {
+                            virtualStack.flushCache(frame);
+                            traceInterpreterException(method, indent, curBCI, virtualStack.topForFrameStackOperation());
+                        }
                         throw uncheckedThrow(exception);
                     }
                 } catch (Throwable e) {
@@ -1184,7 +1227,7 @@ public final class Interpreter {
 
         /**
          * Prepares the bytecode at {@code curBCI} for dispatch when debugging or instruction
-         * tracing is included in the image.
+         * tracing is enabled for this invocation.
          *
          * <p>
          * This is the per-bytecode work that the non-threaded interpreter performs between entering
@@ -1207,7 +1250,8 @@ public final class Interpreter {
          */
         @AlwaysInline("Keep the interpreter fast path call-free")
         private static void prepareOpcodeForDispatch(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            boolean debuggerEventsSupported = debuggerEventsSupported();
+            virtualStack.beforeDispatch();
+            boolean debuggerEventsSupported = virtualStack.getState() == STATE_DEBUGGING;
             if (!debuggerEventsSupported && !InterpreterOptions.InterpreterTraceSupport.getValue()) {
                 return;
             }
@@ -1232,7 +1276,8 @@ public final class Interpreter {
                     frame.debugState.debuggerEventFlags = 0;
                 }
             }
-            if (InterpreterOptions.InterpreterTraceSupport.getValue()) {
+            if (InterpreterOptions.InterpreterTraceSupport.getValue() && InterpreterOptions.InterpreterTrace.getValue()) {
+                virtualStack.flushCache(frame);
                 traceInterpreterInstruction(frame, frame.debugState.indent, curBCI, virtualStack.topForFrameStackOperation(), opcode);
             }
             if (debuggerEventsSupported) {
@@ -1301,14 +1346,14 @@ public final class Interpreter {
         @AlwaysInline("Keep semantic opcode replay on the fast path")
         @BytecodeInterpreterFetchOpcode
         private static int fetchOpcode(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            if (debuggerEventsSupported()) {
+            if (virtualStack.getState() == STATE_DEBUGGING) {
                 /*
                  * Debugger preparation resolves BREAKPOINT to its original semantic opcode. Use
                  * that prepared value instead of reading the breakpoint opcode from the bytecode.
                  */
                 return frame.debugState.opcode;
             }
-            // Without debugger support, the bytecode contains the semantic opcode directly.
+            // Outside debugging mode, the bytecode contains the semantic opcode directly.
             return BytecodeStream.uncheckedOpcode(frame.code, curBCI);
         }
 
@@ -1478,18 +1523,11 @@ public final class Interpreter {
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = LDC, safepoint = false)
         private static long ldcHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            /*
-             * Keep the unsigned one-byte CPI in one 32-bit interval. Without this opaque boundary,
-             * lowering creates separate zero- and sign-extended CPI intervals, increasing register
-             * pressure and potentially causing stack spills.
-             */
-            int cpi = GraalDirectives.opaque(BytecodeStream.uncheckedReadCPI1(frame.code, curBCI));
+            long cpi = BytecodeStream.uncheckedReadCPI1(frame.code, curBCI);
             if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, cpi == 0)) {
                 throw noClassDefFoundError(LDC, null);
             }
-            long top = virtualStack.topForFrameStackOperation();
-            loadConstant(frame, top, cpi, LDC);
-            virtualStack.applyFrameStackOperationDelta(1);
+            loadConstant(frame, cpi, LDC, virtualStack);
             long nextBCI = curBCI + ConstantBytecodes.lengthOf(LDC);
             prepareOpcodeForDispatch(nextBCI, frame, virtualStack);
             return nextBCI;
@@ -1498,25 +1536,62 @@ public final class Interpreter {
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = LDC_W, safepoint = false)
         private static long ldcWHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            int cpi = GraalDirectives.opaque(BytecodeStream.uncheckedReadCPI2(frame.code, curBCI));
+            long cpi = BytecodeStream.uncheckedReadCPI2(frame.code, curBCI);
             if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, cpi == 0)) {
                 throw noClassDefFoundError(LDC_W, null);
             }
-            long top = virtualStack.topForFrameStackOperation();
-            loadConstant(frame, top, cpi, LDC_W);
-            virtualStack.applyFrameStackOperationDelta(1);
+            loadConstant(frame, cpi, LDC_W, virtualStack);
             long nextBCI = curBCI + ConstantBytecodes.lengthOf(LDC_W);
             prepareOpcodeForDispatch(nextBCI, frame, virtualStack);
             return nextBCI;
         }
 
+        @AlwaysInline("Keep resolved constant fast paths in bytecode-handler stubs")
+        private static void loadConstant(InterpreterFrame frame, long cpi, int opcode, InterpreterOperandStack virtualStack) {
+            assert opcode == LDC || opcode == LDC_W || opcode == LDC2_W;
+            Object entry = frame.uncheckedPeekCachedEntry(cpi);
+            if (opcode != LDC2_W && entry instanceof String) {
+                virtualStack.pushObject(frame, entry);
+                return;
+            }
+            if (GraalDirectives.injectBranchProbability(GraalDirectives.FASTPATH_PROBABILITY, entry instanceof InterpreterConstantPoolPrimitiveEntry)) {
+                InterpreterConstantPoolPrimitiveEntry constant = (InterpreterConstantPoolPrimitiveEntry) entry;
+                int tag = constant.tag();
+                if (opcode == LDC2_W) {
+                    if (GraalDirectives.injectBranchProbability(GraalDirectives.LIKELY_PROBABILITY, tag == CONSTANT_Double)) {
+                        virtualStack.pushDouble(frame, constant.asDouble());
+                        return;
+                    } else if (GraalDirectives.injectBranchProbability(GraalDirectives.FASTPATH_PROBABILITY, tag == CONSTANT_Long)) {
+                        virtualStack.pushLong(frame, constant.asLong());
+                        return;
+                    }
+                } else {
+                    if (GraalDirectives.injectBranchProbability(GraalDirectives.LIKELY_PROBABILITY, tag == CONSTANT_Float)) {
+                        virtualStack.pushFloat(frame, constant.asFloat());
+                        return;
+                    } else if (GraalDirectives.injectBranchProbability(GraalDirectives.FASTPATH_PROBABILITY, tag == CONSTANT_Integer)) {
+                        virtualStack.pushInt(frame, constant.asInt());
+                        return;
+                    }
+                }
+            }
+            JavaConstant constant = resolveConstantAtSlowPath(frame, cpi, opcode);
+            switch (constant.getJavaKind()) {
+                case Int -> virtualStack.pushInt(frame, constant.asInt());
+                case Float -> virtualStack.pushFloat(frame, constant.asFloat());
+                case Long -> virtualStack.pushLong(frame, constant.asLong());
+                case Double -> virtualStack.pushDouble(frame, constant.asDouble());
+                case Object -> virtualStack.pushObject(frame, ((ReferenceConstant<?>) constant).getReferent());
+                default -> throw VMError.shouldNotReachHere("Unexpected constant kind " + constant.getJavaKind());
+            }
+        }
+
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = LDC2_W, safepoint = false)
         private static long ldc2WHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            int cpi = GraalDirectives.opaque(BytecodeStream.uncheckedReadCPI2(frame.code, curBCI));
-            long top = virtualStack.topForFrameStackOperation();
-            loadConstant2(frame, top, cpi);
-            virtualStack.applyFrameStackOperationDelta(2);
+            long cpi = BytecodeStream.uncheckedReadCPI2(frame.code, curBCI);
+            InterpreterUtil.guarantee(cpi != 0);
+            loadConstant(frame, cpi, LDC2_W, virtualStack);
             long nextBCI = curBCI + ConstantBytecodes.lengthOf(LDC2_W);
             prepareOpcodeForDispatch(nextBCI, frame, virtualStack);
             return nextBCI;
@@ -2096,7 +2171,9 @@ public final class Interpreter {
             Object[] array = uncheckedCast(nonNullReceiver, Object[].class);
             int index = virtualStack.peekInt(frame, -1);
             Object value = InterpreterToVM.getArrayObject(index, array);
-            profileType(frame, curBCI, value);
+            if (virtualStack.getState() == STATE_PROFILING) {
+                profileType(frame.methodProfile, curBCI, value);
+            }
             virtualStack.pop1(frame, false);
             virtualStack.pop1(frame);
             virtualStack.pushObject(frame, value);
@@ -2266,7 +2343,9 @@ public final class Interpreter {
                 throw SemanticJavaException.raiseArrayIndexOutOfBoundsException(index, length);
             }
             Object value = virtualStack.peekObject(frame, -1);
-            profileType(frame, curBCI, value);
+            if (virtualStack.getState() == STATE_PROFILING) {
+                profileType(frame.methodProfile, curBCI, value);
+            }
             InterpreterToVM.setArrayObject(value, index, array);
             virtualStack.pop1(frame);
             virtualStack.pop1(frame, false);
@@ -2938,7 +3017,9 @@ public final class Interpreter {
 
         @AlwaysInline("Fold branch opcode in individual handlers")
         private static long branch(long curBCI, InterpreterFrame frame, int curOpcode, boolean branchTaken, InterpreterOperandStack virtualStack) {
-            profileBranch(frame.methodProfile, curBCI, branchTaken);
+            if (virtualStack.getState() == STATE_PROFILING) {
+                profileBranch(frame.methodProfile, curBCI, branchTaken);
+            }
             if (branchTaken) {
                 long targetBCI = BytecodeStream.uncheckedReadBranchDest2(frame.code, curBCI);
                 return finishJump(curBCI, targetBCI, frame, virtualStack);
@@ -3136,6 +3217,10 @@ public final class Interpreter {
             } else {
                 targetBCI = TableSwitch.uncheckedDefaultTarget(frame.code, curBCI);
             }
+            if (virtualStack.getState() == STATE_PROFILING) {
+                int caseIndex = low <= index && index <= high ? index - low : high - low + 1;
+                profileSwitch(frame.methodProfile, curBCI, caseIndex);
+            }
             virtualStack.pop1(frame, false);
             return finishJump(curBCI, targetBCI, frame, virtualStack);
         }
@@ -3154,12 +3239,18 @@ public final class Interpreter {
                 } else if (midVal > key) {
                     high = mid - 1;
                 } else {
+                    if (virtualStack.getState() == STATE_PROFILING) {
+                        profileSwitch(frame.methodProfile, curBCI, mid);
+                    }
                     virtualStack.pop1(frame, false);
                     return finishJump(curBCI, curBCI + LookupSwitch.uncheckedOffsetAt(frame.code, curBCI, mid), frame, virtualStack);
                 }
             }
 
             virtualStack.pop1(frame, false);
+            if (virtualStack.getState() == STATE_PROFILING) {
+                profileSwitch(frame.methodProfile, curBCI, LookupSwitch.uncheckedNumberOfCases(frame.code, curBCI));
+            }
             return finishJump(curBCI, LookupSwitch.uncheckedDefaultTarget(frame.code, curBCI), frame, virtualStack);
         }
 
@@ -3174,7 +3265,7 @@ public final class Interpreter {
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = GETFIELD)
         private static long getfieldHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            InterpreterResolvedJavaField resolvedJavaField = resolveField(frame.method, GETFIELD, frame.code, curBCI);
+            InterpreterResolvedJavaField resolvedJavaField = resolveField(frame, GETFIELD, frame.code, curBCI);
             assert !resolvedJavaField.isStatic();
             getField(frame, resolvedJavaField, virtualStack, resolvedJavaField.getJavaKind().getBasicType(), false, null);
             return advanceToNextBytecode(curBCI, GETFIELD, frame, virtualStack);
@@ -3184,6 +3275,7 @@ public final class Interpreter {
         @BytecodeInterpreterHandler(value = QUICK_GETSTATIC)
         private static long quickGetstaticHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
             StaticStorage staticStorage = quickGetStaticStorage(curBCI, frame);
+            InterpreterUtil.guarantee(staticStorage.storage != null);
             getField(frame, staticStorage.field, virtualStack, staticStorage.type, true, staticStorage.storage);
             return advanceToNextBytecode(curBCI, QUICK_GETSTATIC, frame, virtualStack);
         }
@@ -3208,7 +3300,7 @@ public final class Interpreter {
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = PUTFIELD)
         private static long putfieldHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            InterpreterResolvedJavaField field = resolveField(frame.method, PUTFIELD, frame.code, curBCI);
+            InterpreterResolvedJavaField field = resolveField(frame, PUTFIELD, frame.code, curBCI);
             assert !field.isStatic();
             assert !field.isUnmaterializedConstant();
             putField(frame, field, virtualStack, field.getJavaKind().getBasicType(), false, null);
@@ -3236,39 +3328,66 @@ public final class Interpreter {
         @AlwaysInline("Keep invocation stack transitions in bytecode-handler stubs")
         private static void invoke(long curBCI, InterpreterFrame callerFrame, InterpreterOperandStack virtualStack,
                         int opcode, boolean preferStayInInterpreter) {
-            LinkedInvoke linkedInvoke = getOrLinkInvoke(callerFrame.method, callerFrame.code, curBCI, opcode);
+            LinkedInvoke linkedInvoke = getOrLinkInvoke(callerFrame, callerFrame.code, curBCI, opcode);
             Object[] calleeArgs;
             if (opcode == INVOKESTATIC && linkedInvoke.argumentCount == 0) {
+                virtualStack.flushCache(callerFrame);
                 calleeArgs = InterpreterFrame.EMPTY;
             } else {
                 calleeArgs = new Object[linkedInvoke.argumentCount];
+                /*
+                 * A guest call's during-state can describe the caller with its arguments consumed
+                 * and no result yet, while still associated with the invoke BCI. Once preparation
+                 * completes, the arguments remain live in calleeArgs; their frame slots need not
+                 * be retained until invocation returns. Boxing during preparation may safepoint
+                 * between individual pops; this does not make argument preparation atomic.
+                 */
                 virtualStack.popArguments(callerFrame, linkedInvoke.argumentKinds, calleeArgs, linkedInvoke.getAppendix(opcode));
             }
+            byte receiverCheckKind = linkedInvoke.getReceiverCheckKind(opcode);
             if (linkedInvoke.hasReceiver(opcode)) {
-                assert calleeArgs.length > 0;
-                Object receiver = Unsafe.getUnsafe().getReference(calleeArgs, Unsafe.ARRAY_OBJECT_BASE_OFFSET);
-                profileType(callerFrame, curBCI, receiver);
-                nullCheck(receiver);
-                if (linkedInvoke.requiresSymbolicTypeCheck(opcode)) {
+                Object receiver = profileAndCheckReceiver(callerFrame, curBCI, calleeArgs, virtualStack.getState());
+                if (receiverCheckKind == LinkedInvoke.SYMBOLIC_TYPE_CHECK) {
                     DynamicHub instanceHub = DynamicHubIntrinsics.readHub(receiver);
                     if (linkedInvoke.symbolicHolder != null) {
-                        DynamicHub typeHub = linkedInvoke.symbolicHolder.getHub();
+                        // JVMS 4.9.2, Structural Constraints (the non-constructor invokespecial
+                        // target-reference paragraph), requires compatibility with the calling type.
+                        // https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.9.2
+                        DynamicHub typeHub = opcode == INVOKESPECIAL ? callerFrame.method.getDeclaringClass().getHub() : linkedInvoke.symbolicHolder.getHub();
                         boolean assignable = InterpreterToVM.isAssignableFrom(typeHub, instanceHub, opcode != INVOKEINTERFACE);
-                        if (!assignable) {
-                            throw incompatibleInvokeReceiver(instanceHub.getInterpreterType(), linkedInvoke.symbolicHolder);
+                        if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, !assignable)) {
+                            throw incompatibleInvokeReceiver(
+                                            DynamicHubUtils.getInterpreterType(instanceHub),
+                                            DynamicHubUtils.getInterpreterType(typeHub),
+                                            opcode);
                         }
                     }
                 }
             }
 
-            Object retObj = InterpreterToVM.dispatchInvocation(linkedInvoke.seedMethod, calleeArgs, linkedInvoke.callKind,
-                            callerFrame.forceStayInInterpreter(), callerFrame.forceStayInInterpreter() | preferStayInInterpreter, false);
+            boolean stayInInterpreter = callerFrame.forceStayInInterpreter() | preferStayInInterpreter;
+            Object retObj;
+            if (opcode == INVOKEINTERFACE && receiverCheckKind == LinkedInvoke.COMBINED_INTERFACE_LOOKUP) {
+                retObj = InterpreterToVM.dispatchCheckedInterfaceInvocation(linkedInvoke.seedMethod, calleeArgs, stayInInterpreter);
+            } else {
+                retObj = InterpreterToVM.dispatchInvocation(linkedInvoke.seedMethod, calleeArgs, linkedInvoke.callKind, stayInInterpreter, false);
+            }
             virtualStack.pushBasicType(callerFrame, retObj, linkedInvoke.returnKind);
+        }
+
+        @AlwaysInline("Keep invocation receiver profiling and null checks in bytecode-handler stubs")
+        private static Object profileAndCheckReceiver(InterpreterFrame frame, long curBCI, Object[] calleeArgs, int state) {
+            assert calleeArgs.length > 0;
+            Object receiver = Unsafe.getUnsafe().getReference(calleeArgs, Unsafe.ARRAY_OBJECT_BASE_OFFSET);
+            if (state == STATE_PROFILING) {
+                profileType(frame.methodProfile, curBCI, receiver);
+            }
+            return nullCheck(receiver);
         }
 
         @AlwaysInline("Fold invoke opcode in individual handlers")
         private static void invokeBytecode(long curBCI, InterpreterFrame frame, int curOpcode, InterpreterOperandStack virtualStack) {
-            if (debuggerEventsSupported()) {
+            if (virtualStack.getState() == STATE_DEBUGGING) {
                 boolean preferStayInInterpreter = frame.debugState.beforeInvoke();
                 try {
                     invoke(curBCI, frame, virtualStack, curOpcode, preferStayInInterpreter);
@@ -3311,25 +3430,22 @@ public final class Interpreter {
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = INVOKEDYNAMIC)
         private static long invokedynamicHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            boolean preferStayInInterpreter = frame.forceStayInInterpreter();
-            if (debuggerEventsSupported()) {
-                preferStayInInterpreter |= frame.debugState.beforeInvoke();
-            }
-
-            try {
-                long top = virtualStack.topForFrameStackOperation();
-                int slotDelta = invokeDynamicBytecode((int) curBCI, frame, top, preferStayInInterpreter);
-                virtualStack.applyFrameStackOperationDelta(slotDelta);
-            } finally {
-                if (debuggerEventsSupported()) {
+            virtualStack.flushCache(frame);
+            if (virtualStack.getState() == STATE_DEBUGGING) {
+                boolean preferStayInInterpreter = frame.debugState.beforeInvoke();
+                try {
+                    invokeDynamic(curBCI, frame, virtualStack, preferStayInInterpreter);
+                } finally {
                     frame.debugState.afterInvoke();
                 }
+            } else {
+                invokeDynamic(curBCI, frame, virtualStack, false);
             }
             return advanceToNextBytecode(curBCI, INVOKEDYNAMIC, frame, virtualStack);
         }
 
-        @NeverInline("Keep stack-consuming INVOKEDYNAMIC invocation out of bytecode-handler stubs")
-        private static int invokeDynamicBytecode(int curBCI, InterpreterFrame frame, long top, boolean preferStayInInterpreter) {
+        @AlwaysInline("Keep invocation stack transitions in bytecode-handler stubs")
+        private static void invokeDynamic(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack, boolean preferStayInInterpreter) {
             int fullCPI = BytecodeStream.uncheckedReadCPI4(frame.code, curBCI);
             if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, fullCPI == 0)) {
                 // This can happen for the debugger
@@ -3341,24 +3457,16 @@ public final class Interpreter {
 
             int indyCPI = fullCPI >>> 16;
             int extraCPI = fullCPI & 0xFFFF;
-            InterpreterResolvedJavaMethod method = frame.method;
-            Object indyEntry = method.getConstantPool().uncheckedResolvedAt(indyCPI, method.getDeclaringClass());
+            Object indyEntry = frame.constantPoolResolvedAt(indyCPI);
             if (indyEntry instanceof ResolvedInvokeDynamicConstant invokeDynamicConstant) {
                 // runtime-loaded case
-                if (extraCPI == 0) {
-                    extraCPI = linkInvokeDynamicCallSite(invokeDynamicConstant, method, frame.code, curBCI, indyCPI);
-                }
-                CallSiteLink link = invokeDynamicConstant.getCallSiteLink(method, frame.code, curBCI, extraCPI);
-                if (link instanceof SuccessfulCallSiteLink successfulCallSiteLink) {
-                    appendix = successfulCallSiteLink.getUnboxedAppendix();
-                    seedMethod = successfulCallSiteLink.getInvoker();
-                } else {
-                    throw SemanticJavaException.raise(((FailedCallSiteLink) link).getFailure());
-                }
+                SuccessfulCallSiteLink link = getOrLinkInvokeDynamic(invokeDynamicConstant, frame, (int) curBCI, fullCPI);
+                appendix = link.getUnboxedAppendix();
+                seedMethod = link.getInvoker();
             } else if (indyEntry instanceof InterpreterResolvedJavaMethod entryMethod) {
                 // AOT case
                 seedMethod = entryMethod;
-                Object appendixEntry = method.getConstantPool().uncheckedResolvedAt(extraCPI, method.getDeclaringClass());
+                Object appendixEntry = frame.constantPoolResolvedAt(extraCPI);
                 if (JavaConstant.NULL_POINTER.equals(appendixEntry)) {
                     // The appendix is deliberately null.
                     appendix = null;
@@ -3376,26 +3484,24 @@ public final class Interpreter {
 
             InterpreterUnresolvedSignature seedSignature = seedMethod.getSignature();
             boolean hasReceiver = !seedMethod.isStatic();
-
-            InterpreterOperandStack materializedStack = new InterpreterOperandStack(top);
             Object[] calleeArgs = new Object[seedSignature.getParameterCount(hasReceiver)];
-            materializedStack.popArgumentsWithAppendix(frame, hasReceiver, seedSignature, calleeArgs, appendix);
+            // As for ordinary invokes, the guest during-call state has consumed the arguments.
+            virtualStack.popArgumentsWithAppendix(frame, hasReceiver, seedSignature, calleeArgs, appendix);
             if (hasReceiver) {
-                Object receiver = calleeArgs[0];
-                profileType(frame, curBCI, receiver);
-                receiver = nullCheck(receiver);
-                calleeArgs[0] = receiver;
+                profileAndCheckReceiver(frame, curBCI, calleeArgs, virtualStack.getState());
             }
 
-            Object retObj = InterpreterToVM.dispatchInvocation(seedMethod, calleeArgs, CallKind.DIRECT, frame.forceStayInInterpreter(), preferStayInInterpreter, false);
-            materializedStack.pushKind(frame, retObj, seedSignature.getReturnKind());
-            return materializedStack.slotDeltaFrom(top);
+            boolean stayInInterpreter = frame.forceStayInInterpreter() | preferStayInInterpreter;
+            Object retObj = InterpreterToVM.dispatchInvocation(seedMethod, calleeArgs, CallKind.DIRECT, stayInInterpreter, false);
+            virtualStack.pushKind(frame, retObj, seedSignature.getReturnKind());
         }
 
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = NEW)
         private static long newHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            Object value = InterpreterToVM.createNewReference(resolveType(frame.method, NEW, BytecodeStream.uncheckedReadCPI2(frame.code, curBCI)));
+            long cpi = BytecodeStream.uncheckedReadCPI2(frame.code, curBCI);
+            InterpreterResolvedJavaType klass = resolveType(frame, NEW, cpi);
+            Object value = InterpreterToVM.createNewReference(klass);
             virtualStack.pushObject(frame, value);
             return advanceToNextBytecode(curBCI, NEW, frame, virtualStack);
         }
@@ -3415,7 +3521,10 @@ public final class Interpreter {
         @BytecodeInterpreterHandler(value = ANEWARRAY)
         private static long anewarrayHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
             int length = virtualStack.peekInt(frame, -1);
-            Object array = InterpreterToVM.createNewReferenceArray(resolveType(frame.method, ANEWARRAY, BytecodeStream.uncheckedReadCPI2(frame.code, curBCI)), length);
+            long cpi = BytecodeStream.uncheckedReadCPI2(frame.code, curBCI);
+            InterpreterResolvedJavaType componentType = resolveType(frame, ANEWARRAY, cpi);
+            virtualStack.flushCache(frame);
+            Object array = InterpreterToVM.createNewReferenceArray(componentType, length);
             virtualStack.pop1(frame, false);
             virtualStack.pushObject(frame, array);
             return advanceToNextBytecode(curBCI, ANEWARRAY, frame, virtualStack);
@@ -3436,19 +3545,40 @@ public final class Interpreter {
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = ATHROW)
         private static long athrowHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            Object exception = virtualStack.popObject(frame);
+            Object exception = virtualStack.peekObject(frame, -1);
             Object nonNullException = nullCheck(exception);
             throw SemanticJavaException.raise((Throwable) nonNullException);
+        }
+
+        @AlwaysInline("Keep type-check receiver loading in bytecode-handler stubs")
+        private static DynamicHub loadReceiverHub(long bci, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
+            Object receiver = virtualStack.peekObject(frame, -1);
+            if (virtualStack.getState() == STATE_PROFILING) {
+                profileType(frame.methodProfile, bci, receiver);
+            }
+            if (GraalDirectives.injectBranchProbability(GraalDirectives.FASTPATH_PROBABILITY, receiver != null)) {
+                return InterpreterToVM.getObjectHub(receiver);
+            }
+            return null;
+        }
+
+        @AlwaysInline("Keep type-check target loading in bytecode-handler stubs")
+        private static DynamicHub loadTestHub(long bci, InterpreterFrame frame, int opcode) {
+            long cpi = BytecodeStream.uncheckedReadCPI2(frame.code, bci);
+            InterpreterResolvedJavaType resolvedType = resolveType(frame, opcode, cpi);
+            return DynamicHub.fromClass(resolvedType.getJavaClass());
         }
 
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = CHECKCAST)
         private static long checkcastHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            Object receiver = virtualStack.peekObject(frame, -1);
-            profileType(frame, curBCI, receiver);
-            if (receiver != null) {
-                InterpreterResolvedJavaType type = resolveType(frame.method, CHECKCAST, BytecodeStream.uncheckedReadCPI2(frame.code, curBCI));
-                InterpreterToVM.checkCast(receiver, type.getJavaClass());
+            // Avoid Class#cast since it pollutes stack traces.
+            DynamicHub receiverHub = loadReceiverHub(curBCI, frame, virtualStack);
+            if (GraalDirectives.injectBranchProbability(GraalDirectives.FASTPATH_PROBABILITY, receiverHub != null)) {
+                DynamicHub testHub = loadTestHub(curBCI, frame, CHECKCAST);
+                if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, !InterpreterToVM.isAssignableFrom(testHub, receiverHub))) {
+                    throw SemanticJavaException.raiseClassCastException(virtualStack.peekObject(frame, -1), DynamicHub.toClass(testHub));
+                }
             }
             return advanceToNextBytecode(curBCI, CHECKCAST, frame, virtualStack);
         }
@@ -3456,9 +3586,15 @@ public final class Interpreter {
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = INSTANCEOF)
         private static long instanceofHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            Object receiver = virtualStack.popObject(frame);
-            profileType(frame, curBCI, receiver);
-            int result = (receiver != null && InterpreterToVM.instanceOf(receiver, resolveType(frame.method, INSTANCEOF, BytecodeStream.uncheckedReadCPI2(frame.code, curBCI)))) ? 1 : 0;
+            DynamicHub receiverHub = loadReceiverHub(curBCI, frame, virtualStack);
+            int result;
+            if (GraalDirectives.injectBranchProbability(GraalDirectives.FASTPATH_PROBABILITY, receiverHub != null)) {
+                DynamicHub testHub = loadTestHub(curBCI, frame, INSTANCEOF);
+                result = InterpreterToVM.isAssignableFrom(testHub, receiverHub) ? 1 : 0;
+            } else {
+                result = 0;
+            }
+            virtualStack.pop1(frame);
             virtualStack.pushInt(frame, result);
             return advanceToNextBytecode(curBCI, INSTANCEOF, frame, virtualStack);
         }
@@ -3557,9 +3693,13 @@ public final class Interpreter {
         @NeverInlineTrivial(reason = "BytecodeInterpreterHandler")
         @BytecodeInterpreterHandler(value = MULTIANEWARRAY)
         private static long multianewarrayHandler(long curBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            long top = virtualStack.topForFrameStackOperation();
-            int slotDelta = allocateMultiArray(frame, top, curBCI);
-            virtualStack.applyFrameStackOperationDelta(slotDelta);
+            long cpi = BytecodeStream.uncheckedReadCPI2(frame.code, curBCI);
+            InterpreterResolvedJavaType multiArrayType = resolveType(frame, MULTIANEWARRAY, cpi);
+            int allocatedDimensions = BytecodeStream.uncheckedReadUByte(frame.code, curBCI + 3);
+            int[] dimensions = new int[allocatedDimensions];
+            virtualStack.popInts(frame, dimensions);
+            Object value = allocateMultiArray(multiArrayType, dimensions);
+            virtualStack.pushObject(frame, value);
             return advanceToNextBytecode(curBCI, MULTIANEWARRAY, frame, virtualStack);
         }
 
@@ -3573,7 +3713,7 @@ public final class Interpreter {
          */
         @AlwaysInline("Keep branch completion on the fast path")
         private static long finishJump(long curBCI, long targetBCI, InterpreterFrame frame, InterpreterOperandStack virtualStack) {
-            long nextBCI = beforeJumpChecks(frame, curBCI, targetBCI, virtualStack.topForFrameStackOperation());
+            long nextBCI = beforeJumpChecks(frame, curBCI, targetBCI, virtualStack);
             prepareOpcodeForDispatch(nextBCI, frame, virtualStack);
             return nextBCI;
         }
@@ -3599,21 +3739,25 @@ public final class Interpreter {
         }
     }
 
-    @AlwaysInline("Profile-site guards must fold away when Ristretto is disabled in the hosted image.")
-    private static void profileType(InterpreterFrame frame, long bci, Object o) {
-        if (SubstrateOptions.useRistretto()) {
-            MethodProfile methodProfile = frame.methodProfile;
-            if (methodProfile != null) {
-                methodProfile.profileReceiver((int) bci, o);
-            }
-        }
+    @NeverInline("Keep receiver profiling machinery out of bytecode-handler stubs")
+    private static void profileType(MethodProfile methodProfile, long bci, Object o) {
+        assert SubstrateOptions.useRistretto();
+        assert methodProfile != null;
+        methodProfile.profileReceiver((int) bci, o);
     }
 
-    @AlwaysInline("Profile-site guards must fold away when Ristretto is disabled in the hosted image.")
+    @AlwaysInline("Keep switch profiling in the profiling handler variants.")
+    private static void profileSwitch(MethodProfile methodProfile, long curBCI, int caseIndex) {
+        assert SubstrateOptions.useRistretto();
+        assert methodProfile != null;
+        methodProfile.profileSwitch((int) curBCI, caseIndex);
+    }
+
+    @AlwaysInline("Keep branch profiling in the profiling handler variants.")
     private static void profileBranch(MethodProfile methodProfile, long curBCI, boolean branchTaken1) {
-        if (SubstrateOptions.useRistretto() && methodProfile != null) {
-            methodProfile.profileBranch((int) curBCI, branchTaken1);
-        }
+        assert SubstrateOptions.useRistretto();
+        assert methodProfile != null;
+        methodProfile.profileBranch((int) curBCI, branchTaken1);
     }
 
     @SuppressWarnings("unchecked")
@@ -3636,10 +3780,12 @@ public final class Interpreter {
      * must stay in the interpreter.
      */
     @SuppressWarnings("unused")
-    private static long beforeJumpChecks(InterpreterFrame frame, long curBCI, long targetBCI, long stackTop) {
+    @AlwaysInline("Keep the operand-stack overlay virtual across interpreter backedges")
+    private static long beforeJumpChecks(InterpreterFrame frame, long curBCI, long targetBCI, InterpreterOperandStack virtualStack) {
         if (targetBCI <= curBCI) {
             GraalDirectives.safepoint();
-            if (SubstrateOptions.useRistretto() && frame.useOSR()) {
+            if (virtualStack.getState() == STATE_PROFILING && SubstrateOptions.useRistretto() && frame.useOSR()) {
+                long stackTop = virtualStack.topForFrameStackOperation();
                 RistrettoInterpreterSupport.singleton().tryOSR(frame.method, frame.methodProfile, frame, (int) targetBCI, (int) stackTop);
             }
         }
@@ -3754,11 +3900,11 @@ public final class Interpreter {
                 JavaType catchType = null;
                 if (!toCheck.isCatchAll()) {
                     // Exception-handler catch types are resolved like INSTANCEOF types.
-                    char cpi = (char) toCheck.catchTypeCPI();
+                    long cpi = toCheck.catchTypeCPI();
                     // CPI 0 is a marker for unresolvable AND unknown entry
                     if (cpi != 0) {
                         try {
-                            catchType = getConstantPool(method).uncheckedResolvedTypeAt(method.getDeclaringClass(), cpi);
+                            catchType = getConstantPool(method).resolvedTypeAt(method.getDeclaringClass(), (int) cpi);
                         } catch (UnsupportedResolutionException e) {
                             // Leave catchType null and skip the unresolvable handler.
                         } catch (Throwable t) {
@@ -3801,105 +3947,137 @@ public final class Interpreter {
         throw SemanticJavaException.raiseInlined(new NoSuchMethodError(message));
     }
 
+    /// Reports an invalid interface receiver with the exception required by `opcode`.
     @NeverInline("Keep incompatible-receiver exception construction out of bytecode-handler stubs")
-    private static SemanticJavaException incompatibleInvokeReceiver(ResolvedJavaType receiverType, InterpreterResolvedJavaType symbolicHolder) {
+    static SemanticJavaException incompatibleInvokeReceiver(ResolvedJavaType receiverType, ResolvedJavaType symbolicHolder, int opcode) {
+        if (opcode == INVOKESPECIAL) {
+            throw SemanticJavaException.raiseInlined(new IllegalAccessError(MetadataUtil.fmt("Receiver class %s must be the current class or a subtype of interface %s",
+                            receiverType.toJavaName(), symbolicHolder.toJavaName())));
+        }
         String message = MetadataUtil.fmt("Class %s does not implement the requested interface %s",
                         receiverType.toJavaName(),
                         symbolicHolder.toJavaName());
         throw SemanticJavaException.raiseInlined(new IncompatibleClassChangeError(message));
     }
 
-    private static void loadConstant(InterpreterFrame frame, long top, int cpi, int opcode) {
-        assert opcode == LDC || opcode == LDC_W;
-        InterpreterConstantPool pool = getConstantPool(frame.method);
-        byte numericTag = pool.uncheckedTagValueAt(cpi);
-        if (GraalDirectives.injectBranchProbability(GraalDirectives.UNLIKELY_PROBABILITY,
-                        numericTag == ConstantPool.CONSTANT_Integer)) {
-            frame.setStackInt(top, pool.uncheckedIntAt(cpi));
-            return;
-        }
-        if (GraalDirectives.injectBranchProbability(GraalDirectives.FASTPATH_PROBABILITY,
-                        numericTag == ConstantPool.CONSTANT_Float)) {
-            frame.setStackFloat(top, pool.uncheckedFloatAt(cpi));
-            return;
-        }
-        resolveConstantAtSlowPath(frame, top, cpi, opcode, pool);
-    }
-
-    private static void loadConstant2(InterpreterFrame frame, long top, int cpi) {
-        VMError.guarantee(cpi != 0);
-        InterpreterConstantPool pool = getConstantPool(frame.method);
-        byte numericTag = pool.uncheckedTagValueAt(cpi);
-        if (numericTag == ConstantPool.CONSTANT_Long) {
-            frame.setStackLong(top, pool.uncheckedLongAt(cpi));
-            return;
-        }
-        if (GraalDirectives.injectBranchProbability(GraalDirectives.FASTPATH_PROBABILITY,
-                        numericTag == ConstantPool.CONSTANT_Double)) {
-            frame.setStackDouble(top, pool.uncheckedDoubleAt(cpi));
-            return;
-        }
-        resolveConstantAtSlowPath(frame, top, cpi, LDC2_W, pool);
-    }
-
     /**
-     * Resolves non-primitive constant-pool entries that can execute arbitrary Java code.
+     * Caches primitive constants and resolves non-primitive entries, which can execute arbitrary Java code.
+     * Returns a typed constant so the caller can commit the value without reading the constant-pool
+     * tag again. Reference values are wrapped even when a dynamic constant returns a JavaConstant.
      */
     @NeverInline("Keep constant resolution out of the bytecode-handler stubs")
-    private static void resolveConstantAtSlowPath(InterpreterFrame frame, long top, int cpi, int opcode, InterpreterConstantPool pool) {
-        InterpreterResolvedJavaMethod method = frame.method;
-        char narrowCpi = (char) cpi;
-        ConstantPool.Tag tag = pool.uncheckedTagAt(cpi);
-        switch (tag) {
+    private static JavaConstant resolveConstantAtSlowPath(InterpreterFrame frame, long cpi, int opcode) {
+        ConstantPool.Tag tag = frame.constantPoolTagAt(cpi);
+        return switch (tag) {
+            case FLOAT -> {
+                float value = frame.constantPoolFloatAt(cpi);
+                InterpreterConstantPoolPrimitiveEntry entry = new InterpreterConstantPoolPrimitiveEntry(CONSTANT_Float, Float.floatToRawIntBits(value));
+                frame.cachePrimitiveConstant(cpi, entry);
+                yield JavaConstant.forFloat(value);
+            }
+            case INTEGER -> {
+                int value = frame.constantPoolIntAt(cpi);
+                InterpreterConstantPoolPrimitiveEntry entry = new InterpreterConstantPoolPrimitiveEntry(CONSTANT_Integer, value);
+                frame.cachePrimitiveConstant(cpi, entry);
+                yield JavaConstant.forInt(value);
+            }
+            case DOUBLE -> {
+                double value = frame.constantPoolDoubleAt(cpi);
+                InterpreterConstantPoolPrimitiveEntry entry = new InterpreterConstantPoolPrimitiveEntry(CONSTANT_Double, Double.doubleToRawLongBits(value));
+                frame.cachePrimitiveConstant(cpi, entry);
+                yield JavaConstant.forDouble(value);
+            }
+            case LONG -> {
+                long value = frame.constantPoolLongAt(cpi);
+                InterpreterConstantPoolPrimitiveEntry entry = new InterpreterConstantPoolPrimitiveEntry(CONSTANT_Long, value);
+                frame.cachePrimitiveConstant(cpi, entry);
+                yield JavaConstant.forLong(value);
+            }
             case CLASS -> {
-                InterpreterResolvedJavaType resolvedType = resolveType(method, opcode, narrowCpi);
-                frame.setStackObject(top, resolvedType.getJavaClass());
+                InterpreterResolvedJavaType resolvedType = resolveType(frame, opcode, cpi);
+                yield ReferenceConstant.createFromReference(resolvedType.getJavaClass());
             }
             case STRING -> {
-                String string = pool.resolveStringAt(cpi);
-                frame.setStackObject(top, string);
+                String string = frame.constantPoolStringAt(cpi);
+                yield ReferenceConstant.createFromReference(string);
             }
             case METHODTYPE -> {
-                frame.setStackObject(top, resolveMethodType(pool, method, opcode, narrowCpi));
+                yield ReferenceConstant.createFromReference(resolveMethodType(frame, opcode, cpi));
             }
             case METHODHANDLE -> {
-                frame.setStackObject(top, resolveMethodHandle(pool, method, opcode, narrowCpi));
+                yield ReferenceConstant.createFromReference(resolveMethodHandle(frame, opcode, cpi));
             }
             case DYNAMIC -> {
-                Object constant = resolveDynamicConstant(pool, method, opcode, narrowCpi);
-                switch (symbolToJvmciKind(pool.dynamicType(cpi))) {
-                    case Boolean -> frame.setStackInt(top, (Boolean) constant ? 1 : 0);
-                    case Byte -> frame.setStackInt(top, (Byte) constant);
-                    case Short -> frame.setStackInt(top, (Short) constant);
-                    case Char -> frame.setStackInt(top, (Character) constant);
-                    case Int -> frame.setStackInt(top, (Integer) constant);
-                    case Float -> frame.setStackFloat(top, (Float) constant);
-                    case Long -> frame.setStackLong(top, (Long) constant);
-                    case Double -> frame.setStackDouble(top, (Double) constant);
-                    case Object -> frame.setStackObject(top, constant);
-                    default -> throw VMError.shouldNotReachHere("Unexpected dynamic constant type " + pool.dynamicType(cpi));
-                }
+                Object value = resolveDynamicConstant(frame, opcode, cpi);
+                // Normalize narrow primitives to int slots without confusing boxed object values.
+                yield switch (symbolToJvmciKind(frame.constantPoolDynamicType(cpi))) {
+                    case Boolean -> JavaConstant.forInt((Boolean) value ? 1 : 0);
+                    case Byte -> JavaConstant.forInt((Byte) value);
+                    case Short -> JavaConstant.forInt((Short) value);
+                    case Char -> JavaConstant.forInt((Character) value);
+                    case Int -> JavaConstant.forInt((Integer) value);
+                    case Float -> JavaConstant.forFloat((Float) value);
+                    case Long -> JavaConstant.forLong((Long) value);
+                    case Double -> JavaConstant.forDouble((Double) value);
+                    case Object -> ReferenceConstant.createFromReference(value);
+                    default -> throw VMError.shouldNotReachHere("Unexpected dynamic constant type " + frame.constantPoolDynamicType(cpi));
+                };
             }
             case INVOKEDYNAMIC -> {
                 // TODO(peterssen): GR-68576 Storing the pre-resolved appendix in the CP is a
                 // workaround for the JDWP debugger until proper INVOKEDYNAMIC resolution is
                 // implemented.
-                Object appendix = pool.uncheckedResolvedAt(cpi, null);
-                if (appendix instanceof ReferenceConstant<?> referenceConstant) {
+                Object appendix = frame.constantPoolResolvedAt(cpi, null);
+                if (JavaConstant.NULL_POINTER.equals(appendix)) {
+                    // Hydrated Java null is distinct from an unavailable image-heap reference.
+                    yield ReferenceConstant.createFromReference(null);
+                } else if (appendix instanceof ReferenceConstant<?> referenceConstant) {
                     VMError.guarantee(referenceConstant.isNonNull(), FAILURE_CONSTANT_NOT_PART_OF_IMAGE_HEAP);
                     Object constantValue = referenceConstant.getReferent();
-                    frame.setStackObject(top, constantValue);
+                    yield ReferenceConstant.createFromReference(constantValue);
                 } else {
                     // Raw object.
-                    frame.setStackObject(top, appendix);
+                    yield ReferenceConstant.createFromReference(appendix);
                 }
             }
             default -> throw VMError.unimplemented("LDC* constant pool type " + tag);
-        }
+        };
     }
 
     private static InterpreterConstantPool getConstantPool(InterpreterResolvedJavaMethod method) {
         return method.getConstantPool();
+    }
+
+    @AlwaysInline("Keep cached INVOKEDYNAMIC linkage lookup in bytecode-handler stubs")
+    private static SuccessfulCallSiteLink getOrLinkInvokeDynamic(ResolvedInvokeDynamicConstant constant, InterpreterFrame frame, int curBCI, int fullCPI) {
+        int extraCPI = fullCPI & 0xFFFF;
+        if (GraalDirectives.injectBranchProbability(FASTPATH_PROBABILITY, extraCPI != 0)) {
+            CallSiteLink link = constant.getCallSiteLink(extraCPI);
+            if (GraalDirectives.injectBranchProbability(FASTPATH_PROBABILITY, link instanceof SuccessfulCallSiteLink)) {
+                SuccessfulCallSiteLink successfulLink = (SuccessfulCallSiteLink) link;
+                if (GraalDirectives.injectBranchProbability(FASTPATH_PROBABILITY, successfulLink.matchesCallSite(frame.method, curBCI))) {
+                    return successfulLink;
+                }
+            }
+        }
+        return linkInvokeDynamic(constant, frame, curBCI, fullCPI);
+    }
+
+    @NeverInline("Keep INVOKEDYNAMIC linkage, patching retries, and failures out of bytecode-handler stubs")
+    private static SuccessfulCallSiteLink linkInvokeDynamic(ResolvedInvokeDynamicConstant constant, InterpreterFrame frame, int curBCI, int fullCPI) {
+        InterpreterResolvedJavaMethod method = frame.method;
+        byte[] code = frame.code;
+        int indyCPI = fullCPI >>> 16;
+        int linkedExtraCPI = fullCPI & 0xFFFF;
+        if (linkedExtraCPI == 0) {
+            linkedExtraCPI = linkInvokeDynamicCallSite(constant, method, code, curBCI, indyCPI);
+        }
+        // A racing bytecode patch may expose another site's slot; retry outside the handler.
+        CallSiteLink link = constant.getCallSiteLink(method, code, curBCI, linkedExtraCPI);
+        if (link instanceof SuccessfulCallSiteLink successfulLink) {
+            return successfulLink;
+        }
+        throw SemanticJavaException.raise(((FailedCallSiteLink) link).getFailure());
     }
 
     @NeverInline("Keep INVOKEDYNAMIC first-link work out of the bytecode-handler stub")
@@ -3928,20 +4106,20 @@ public final class Interpreter {
     }
 
     @AlwaysInline("Fold invoke opcode and keep cached linkage lookup in bytecode-handler stubs")
-    private static LinkedInvoke getOrLinkInvoke(InterpreterResolvedJavaMethod method, byte[] code, long curBCI, int opcode) {
+    private static LinkedInvoke getOrLinkInvoke(InterpreterFrame frame, byte[] code, long curBCI, int opcode) {
         long cpi = BytecodeStream.uncheckedReadCPI2(code, curBCI);
-        InterpreterConstantPool constantPool = getConstantPool(method);
-        LinkedInvoke linkedInvoke = constantPool.uncheckedPeekLinkedInvoke(cpi, opcode);
+        LinkedInvoke linkedInvoke = frame.constantPoolPeekLinkedInvoke(cpi, opcode);
         if (GraalDirectives.injectBranchProbability(FASTPATH_PROBABILITY, linkedInvoke != null)) {
             return linkedInvoke;
         }
-        return linkInvoke(method, opcode, (char) cpi);
+        return linkInvoke(frame, opcode, cpi);
     }
 
     @NeverInline("Keep invoke resolution out of bytecode-handler stubs")
-    private static LinkedInvoke linkInvoke(InterpreterResolvedJavaMethod method, int opcode, char cpi) {
-        InterpreterResolvedJavaMethod symbolicResolution = Interpreter.resolveMethod(method, opcode, cpi);
-        InterpreterResolvedJavaType symbolicHolder = Interpreter.resolveSymbolicHolder(method, opcode, cpi);
+    private static LinkedInvoke linkInvoke(InterpreterFrame frame, int opcode, long cpi) {
+        InterpreterResolvedJavaMethod method = frame.method;
+        InterpreterResolvedJavaMethod symbolicResolution = resolveMethod(frame, method, opcode, cpi);
+        InterpreterResolvedJavaType symbolicHolder = resolveSymbolicHolder(frame, method, opcode, cpi);
         if (symbolicHolder == null) {
             if (InterpreterTraceSupport.getValue()) {
                 traceInterpreter().string("Failed to resolve symbolic holder during call site resolution for seed ").string(symbolicResolution.toString()).string(" in caller method ").string(
@@ -3954,11 +4132,22 @@ public final class Interpreter {
         InterpreterResolvedJavaMethod seedMethod;
         CallKind callKind;
 
-        // Ensure receivers of an interface method call actually implement the declared
-        // interface. This is not checked by the verifier, so we need to dynamically
-        // check that property. Note: this condition covers both INVOKEINTERFACE, and
-        // INVOKESPECIAL of an interface method.
-        boolean requiresSymbolicTypeCheck = getConstantPool(method).uncheckedTagAt(cpi) == ConstantPool.Tag.INTERFACE_METHOD_REF;
+        /*
+         * JVMS 6.5, invokeinterface, Run-time Exceptions (the resolved-interface implementation
+         * check), requires the receiver to implement the symbolic interface:
+         * https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-6.html#jvms-6.5.invokeinterface
+         *
+         * The verifier does not check interface assignability, so this property is checked
+         * dynamically. The INTERFACE_METHOD_REF condition covers both INVOKEINTERFACE and
+         * INVOKESPECIAL of an interface method. A non-constructor INVOKESPECIAL from an interface
+         * can also target an Object method through a METHOD_REF entry.
+         *
+         * For INVOKESPECIAL, JVMS 4.9.2, Structural Constraints (the non-constructor invokespecial
+         * target-reference paragraph), requires compatibility with the calling type:
+         * https://docs.oracle.com/javase/specs/jvms/se25/html/jvms-4.html#jvms-4.9.2
+         */
+        boolean requiresSymbolicTypeCheck = frame.constantPoolTagAt(cpi) == ConstantPool.Tag.INTERFACE_METHOD_REF ||
+                        (opcode == INVOKESPECIAL && method.getDeclaringClass().isInterface() && !symbolicResolution.isConstructor());
 
         try {
             ResolvedCall<InterpreterResolvedJavaType, InterpreterResolvedJavaMethod, InterpreterResolvedJavaField> resolvedCall = CremaLinkResolver.resolveCallSiteOrThrow(
@@ -3985,33 +4174,33 @@ public final class Interpreter {
             traceInterpreter().string("  ").string(callKind.toString()).string(": ").string(seedMethod.toString()).newline();
         }
 
-        LinkedInvoke linkedInvoke = new LinkedInvoke(symbolicHolder, seedMethod, callKind, appendix, requiresSymbolicTypeCheck);
-        linkedInvoke = getConstantPool(method).cacheLinkedInvoke(cpi, opcode, linkedInvoke);
+        LinkedInvoke linkedInvoke = new LinkedInvoke(symbolicHolder, seedMethod, callKind, appendix, requiresSymbolicTypeCheck, opcode);
+        linkedInvoke = frame.constantPoolCacheLinkedInvoke(cpi, opcode, linkedInvoke);
         return linkedInvoke;
     }
 
-    private static MethodType resolveMethodType(InterpreterConstantPool pool, InterpreterResolvedJavaMethod method, int opcode, char cpi) {
+    private static MethodType resolveMethodType(InterpreterFrame frame, int opcode, long cpi) {
         assert opcode == LDC || opcode == LDC_W : Bytecodes.nameOf(opcode);
         try {
-            return pool.resolvedMethodTypeAt(cpi, method.getDeclaringClass());
+            return frame.constantPoolMethodTypeAt(cpi);
         } catch (Throwable t) {
             throw SemanticJavaException.raise(t);
         }
     }
 
-    private static MethodHandle resolveMethodHandle(InterpreterConstantPool pool, InterpreterResolvedJavaMethod method, int opcode, char cpi) {
+    private static MethodHandle resolveMethodHandle(InterpreterFrame frame, int opcode, long cpi) {
         assert opcode == LDC || opcode == LDC_W : Bytecodes.nameOf(opcode);
         try {
-            return pool.resolvedMethodHandleAt(cpi, method.getDeclaringClass());
+            return frame.constantPoolMethodHandleAt(cpi);
         } catch (Throwable t) {
             throw SemanticJavaException.raise(t);
         }
     }
 
-    private static Object resolveDynamicConstant(InterpreterConstantPool pool, InterpreterResolvedJavaMethod method, int opcode, char cpi) {
-        assert opcode == LDC || opcode == LDC_W : Bytecodes.nameOf(opcode);
+    private static Object resolveDynamicConstant(InterpreterFrame frame, int opcode, long cpi) {
+        assert opcode == LDC || opcode == LDC_W || opcode == LDC2_W : Bytecodes.nameOf(opcode);
         try {
-            return pool.uncheckedResolvedDynamicConstantAt(cpi, method.getDeclaringClass());
+            return frame.constantPoolDynamicConstantAt(cpi);
         } catch (Throwable t) {
             throw SemanticJavaException.raise(t);
         }
@@ -4019,17 +4208,42 @@ public final class Interpreter {
 
     // region Class/Method/Field resolution
 
-    private static InterpreterResolvedJavaType resolveType(InterpreterResolvedJavaMethod method, int opcode, char cpi) {
-        assert opcode == INSTANCEOF || opcode == CHECKCAST || opcode == NEW || opcode == ANEWARRAY || opcode == MULTIANEWARRAY || opcode == LDC || opcode == LDC_W : Bytecodes.nameOf(opcode);
+    @AlwaysInline("Keep the unknown-type CPI check before unchecked constant-pool access")
+    private static void checkTypeCpi(int opcode, long cpi) {
         if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, cpi == 0)) {
             throw noClassDefFoundError(opcode, null);
         }
+    }
+
+    @AlwaysInline("Keep resolved type lookup in bytecode-handler stubs")
+    private static InterpreterResolvedJavaType resolveType(InterpreterFrame frame, int opcode, long cpi) {
+        assert opcode == INSTANCEOF || opcode == CHECKCAST || opcode == NEW || opcode == ANEWARRAY || opcode == MULTIANEWARRAY || opcode == LDC || opcode == LDC_W : Bytecodes.nameOf(opcode);
+        checkTypeCpi(opcode, cpi);
+        Object cachedEntry = frame.uncheckedPeekCachedEntry(cpi);
+        /*
+         * InterpreterResolvedObjectType is not final, so instanceof can pull an open-world
+         * subtype check into each handler. These exact-class checks lower to hub comparisons and
+         * cover both current resolved representations: InterpreterResolvedObjectType and
+         * CremaResolvedObjectType. Any other entry, including a future subclass, takes the slow
+         * path.
+         */
+        if (GraalDirectives.injectBranchProbability(GraalDirectives.FASTPATH_PROBABILITY, cachedEntry != null &&
+                        (cachedEntry.getClass() == InterpreterResolvedObjectType.class || cachedEntry.getClass() == CremaResolvedObjectType.class))) {
+            return uncheckedCast(cachedEntry, InterpreterResolvedObjectType.class);
+        }
+        return resolveTypeSlowPath(frame, opcode, cpi);
+    }
+
+    @NeverInline("Type resolution slow path")
+    private static InterpreterResolvedJavaType resolveTypeSlowPath(InterpreterFrame frame, int opcode, long cpi) {
+        assert opcode == INSTANCEOF || opcode == CHECKCAST || opcode == NEW || opcode == ANEWARRAY || opcode == MULTIANEWARRAY || opcode == LDC || opcode == LDC_W : Bytecodes.nameOf(opcode);
+        assert cpi != 0;
         try {
-            return getConstantPool(method).uncheckedResolvedTypeAt(method.getDeclaringClass(), cpi);
+            return frame.constantPoolResolvedTypeAt(cpi);
         } catch (UnsupportedResolutionException e) {
             // CP does not support resolution, try to provide a hint of the non-resolvable entry.
             UnresolvedJavaType missingType = null;
-            if (getConstantPool(method).uncheckedPeekCachedEntry(cpi) instanceof UnresolvedJavaType unresolvedJavaType) {
+            if (frame.uncheckedPeekCachedEntry(cpi) instanceof UnresolvedJavaType unresolvedJavaType) {
                 missingType = unresolvedJavaType;
             }
             throw noClassDefFoundError(opcode, missingType);
@@ -4050,17 +4264,21 @@ public final class Interpreter {
      * @throws SemanticJavaException Any exception thrown during resolution will be rethrown wrapped
      *                               in this exception type.
      */
-    public static InterpreterResolvedJavaType resolveSymbolicHolder(InterpreterResolvedJavaMethod caller, int opcode, char cpi) {
+    public static InterpreterResolvedJavaType resolveSymbolicHolder(InterpreterResolvedJavaMethod caller, int opcode, long cpi) {
+        return resolveSymbolicHolder(null, caller, opcode, cpi);
+    }
+
+    private static InterpreterResolvedJavaType resolveSymbolicHolder(InterpreterFrame frame, InterpreterResolvedJavaMethod caller, int opcode, long cpi) {
         if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, cpi == 0)) {
             return null; // CPI 0 is a marker for unresolvable AND unknown entry
         }
         assert Bytecodes.isInvoke(opcode) : "wrong opcode for resolving symbolic holder: " + Bytecodes.nameOf(opcode);
-        int holderCpi = getConstantPool(caller).memberClassIndex(cpi);
+        long holderCpi = frame != null ? frame.constantPoolMemberClassIndex(cpi) : getConstantPool(caller).memberClassIndex((int) cpi);
         if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, holderCpi == 0)) {
             return null; // CPI 0 is a marker for unresolvable AND unknown entry
         }
         try {
-            return getConstantPool(caller).uncheckedResolvedTypeAt(caller.getDeclaringClass(), holderCpi);
+            return frame != null ? frame.constantPoolResolvedTypeAt(holderCpi) : getConstantPool(caller).resolvedTypeAt(caller.getDeclaringClass(), (int) holderCpi);
         } catch (UnsupportedResolutionException e) {
             return null;
         } catch (Throwable t) {
@@ -4068,17 +4286,22 @@ public final class Interpreter {
         }
     }
 
-    public static InterpreterResolvedJavaMethod resolveMethod(InterpreterResolvedJavaMethod method, int opcode, char cpi) {
+    public static InterpreterResolvedJavaMethod resolveMethod(InterpreterResolvedJavaMethod method, int opcode, long cpi) {
+        return resolveMethod(null, method, opcode, cpi);
+    }
+
+    private static InterpreterResolvedJavaMethod resolveMethod(InterpreterFrame frame, InterpreterResolvedJavaMethod method, int opcode, long cpi) {
         assert Bytecodes.isInvoke(opcode) : Bytecodes.nameOf(opcode);
         if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, cpi == 0)) {
             throw noSuchMethodError(opcode, null);
         }
         try {
-            return getConstantPool(method).uncheckedResolvedMethodAt(method.getDeclaringClass(), cpi);
+            return frame != null ? frame.constantPoolResolvedMethodAt(cpi) : getConstantPool(method).resolvedMethodAt(method.getDeclaringClass(), (int) cpi);
         } catch (UnsupportedResolutionException e) {
             // CP does not support resolution, try to provide a hint of the non-resolvable entry.
             UnresolvedJavaMethod missingMethod = null;
-            if (getConstantPool(method).uncheckedPeekCachedEntry(cpi) instanceof UnresolvedJavaMethod unresolvedJavaMethod) {
+            Object entry = frame != null ? frame.uncheckedPeekCachedEntry(cpi) : getConstantPool(method).peekCachedEntry((int) cpi);
+            if (entry instanceof UnresolvedJavaMethod unresolvedJavaMethod) {
                 missingMethod = unresolvedJavaMethod;
             }
             throw noSuchMethodError(opcode, missingMethod);
@@ -4088,15 +4311,16 @@ public final class Interpreter {
     }
 
     @NeverInline("Not yet quickened slow path")
-    private static InterpreterResolvedJavaField resolveField(InterpreterResolvedJavaMethod method, int opcode, byte[] code, long bci) {
+    private static InterpreterResolvedJavaField resolveField(InterpreterFrame frame, int opcode, byte[] code, long bci) {
+        InterpreterResolvedJavaMethod method = frame.method;
         assert opcode == GETFIELD || opcode == GETSTATIC || opcode == PUTFIELD || opcode == PUTSTATIC : Bytecodes.nameOf(opcode);
-        char cpi = BytecodeStream.uncheckedReadCPI2(code, bci);
+        long cpi = BytecodeStream.uncheckedReadCPI2(code, bci);
         if (GraalDirectives.injectBranchProbability(GraalDirectives.SLOWPATH_PROBABILITY, cpi == 0)) {
             String message = MetadataUtil.fmt("%s: (cpi = 0) unknown field", Bytecodes.nameOf(opcode));
             throw SemanticJavaException.raiseInlined(new NoSuchFieldError(message));
         }
         try {
-            InterpreterResolvedJavaField field = getConstantPool(method).uncheckedResolvedFieldAt(method.getDeclaringClass(), cpi);
+            InterpreterResolvedJavaField field = frame.constantPoolResolvedFieldAt(cpi);
 
             // Apply the opcode-specific field rules after symbolic resolution.
             CremaLinkResolver.checkFieldAccessOrThrow(CremaRuntimeAccess.getInstance(), field, opcode, method.getDeclaringClass(), method);
@@ -4113,7 +4337,7 @@ public final class Interpreter {
         } catch (UnsupportedResolutionException e) {
             // CP does not support resolution, try to provide a hint of the non-resolvable entry.
             String message;
-            if (getConstantPool(method).uncheckedPeekCachedEntry(cpi) instanceof UnresolvedJavaField unresolvedJavaField) {
+            if (frame.uncheckedPeekCachedEntry(cpi) instanceof UnresolvedJavaField unresolvedJavaField) {
                 message = unresolvedJavaField.format("%H.%n");
             } else {
                 message = MetadataUtil.fmt("%s: (cpi = 0) unknown field", Bytecodes.nameOf(opcode));
@@ -4146,20 +4370,11 @@ public final class Interpreter {
     // endregion Class/Field/Method resolution
 
     @NeverInline("Keep multi-array allocation out of bytecode-handler stubs")
-    private static int allocateMultiArray(InterpreterFrame frame, long top, long bci) {
-        ResolvedJavaType multiArrayType = resolveType(frame.method, MULTIANEWARRAY, BytecodeStream.uncheckedReadCPI2(frame.code, bci));
-        int allocatedDimensions = BytecodeStream.uncheckedReadUByte(frame.code, bci + 3);
+    private static Object allocateMultiArray(InterpreterResolvedJavaType multiArrayType, int[] dimensions) {
         assert multiArrayType.isArray() : multiArrayType;
-        assert allocatedDimensions > 0 : allocatedDimensions;
+        assert dimensions.length > 0 : dimensions.length;
         assert multiArrayType.getElementalType().getJavaKind() != JavaKind.Void;
-        int[] dimensions = new int[allocatedDimensions];
-        InterpreterOperandStack materializedStack = new InterpreterOperandStack(top);
-        for (int i = allocatedDimensions - 1; i >= 0; --i) {
-            dimensions[i] = materializedStack.popInt(frame);
-        }
-        Object value = InterpreterToVM.createMultiArray((InterpreterResolvedJavaType) multiArrayType, dimensions);
-        materializedStack.pushObject(frame, value);
-        return materializedStack.slotDeltaFrom(top);
+        return InterpreterToVM.createMultiArray(multiArrayType, dimensions);
     }
 
     private static boolean stackIntToBoolean(int result) {
@@ -4254,7 +4469,7 @@ public final class Interpreter {
 
     @AlwaysInline("Keep static field storage lookup in the bytecode-handler stub")
     private static StaticStorage getStaticStorage(long curBCI, InterpreterFrame frame, int opcode) {
-        InterpreterResolvedJavaField resolvedJavaField = resolveField(frame.method, opcode, frame.code, curBCI);
+        InterpreterResolvedJavaField resolvedJavaField = resolveField(frame, opcode, frame.code, curBCI);
         assert resolvedJavaField.isStatic();
         InterpreterToVM.ensureClassInitialized(resolvedJavaField.getDeclaringClass());
 

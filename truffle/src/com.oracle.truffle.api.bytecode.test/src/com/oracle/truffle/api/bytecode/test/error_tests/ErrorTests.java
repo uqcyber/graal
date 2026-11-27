@@ -53,6 +53,7 @@ import com.oracle.truffle.api.TruffleStackTraceElement;
 import com.oracle.truffle.api.bytecode.BytecodeNode;
 import com.oracle.truffle.api.bytecode.BytecodeRootNode;
 import com.oracle.truffle.api.bytecode.BytecodeRootNodes;
+import com.oracle.truffle.api.bytecode.BytecodeVersion;
 import com.oracle.truffle.api.bytecode.EpilogExceptional;
 import com.oracle.truffle.api.bytecode.EpilogReturn;
 import com.oracle.truffle.api.bytecode.GenerateBytecode;
@@ -90,8 +91,28 @@ public class ErrorTests {
     private static final String INVALID_OPERATION_NAME = "Operation name must be a valid Java identifier and must not contain '_' or '$'.";
     private static final String INVALID_PROXYABLE_OPERATION_NAME = INVALID_OPERATION_NAME + " Specify an explicit operation name using @OperationProxy(name = \"...\").";
 
+    @ExpectError("ThreadDeath and its subtypes are reserved for instrumentation unwinds and cannot be configured as unwind exceptions.")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, unwindExceptions = ThreadDeath.class)
+    public abstract static class ReservedThreadDeath extends RootNode implements BytecodeRootNode {
+        protected ReservedThreadDeath(ErrorLanguage language, FrameDescriptor frameDescriptor) {
+            super(language, frameDescriptor);
+        }
+    }
+
+    public static final class CustomThreadDeath extends ThreadDeath {
+        private static final long serialVersionUID = 1L;
+    }
+
+    @ExpectError("ThreadDeath and its subtypes are reserved for instrumentation unwinds and cannot be configured as unwind exceptions.")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, unwindExceptions = CustomThreadDeath.class)
+    public abstract static class ReservedThreadDeathSubtype extends RootNode implements BytecodeRootNode {
+        protected ReservedThreadDeathSubtype(ErrorLanguage language, FrameDescriptor frameDescriptor) {
+            super(language, frameDescriptor);
+        }
+    }
+
     @ExpectError("Bytecode DSL class must be declared abstract.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public static class MustBeDeclaredAbstract extends RootNode implements BytecodeRootNode {
         protected MustBeDeclaredAbstract(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -117,14 +138,14 @@ public class ErrorTests {
     }
 
     @ExpectError("Bytecode DSL class must directly or indirectly subclass RootNode.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class MustBeSubclassOfRootNode implements BytecodeRootNode {
         protected MustBeSubclassOfRootNode(ErrorLanguage language, FrameDescriptor frameDescriptor) {
         }
     }
 
     @ExpectError("Bytecode DSL class must directly or indirectly implement BytecodeRootNode.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class MustImplementBytecodeRootNode extends RootNode {
         protected MustImplementBytecodeRootNode(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -132,7 +153,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Bytecode DSL class must be public or package-private.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     private abstract static class MustBePublic extends RootNode implements BytecodeRootNode {
         protected MustBePublic(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -140,7 +161,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Bytecode DSL class must be static if it is a nested class.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract class MustBeStatic extends RootNode implements BytecodeRootNode {
         protected MustBeStatic(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -148,14 +169,14 @@ public class ErrorTests {
     }
 
     @ExpectError("An uncached interpreter is not enabled, so the uncached threshold has no effect.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, defaultUncachedThreshold = "32")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, defaultUncachedThreshold = "32")
     public abstract static class UnusedUncachedThreshold extends RootNode implements BytecodeRootNode {
         protected UnusedUncachedThreshold(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class InterceptionWithoutTagInstrumentation extends RootNode implements BytecodeRootNode {
         protected InterceptionWithoutTagInstrumentation(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -175,14 +196,14 @@ public class ErrorTests {
     }
 
     @ExpectError("Error parsing expression%")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableUncachedInterpreter = true, defaultUncachedThreshold = "-1")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableUncachedInterpreter = true, defaultUncachedThreshold = "-1")
     public abstract static class BadUncachedThreshold extends RootNode implements BytecodeRootNode {
         protected BadUncachedThreshold(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableUncachedInterpreter = true, defaultUncachedThreshold = "0")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableUncachedInterpreter = true, defaultUncachedThreshold = "0")
     public abstract static class AcceptableUncachedThreshold extends RootNode implements BytecodeRootNode {
         protected AcceptableUncachedThreshold(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -197,7 +218,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableUncachedInterpreter = true, defaultUncachedThreshold = "42")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableUncachedInterpreter = true, defaultUncachedThreshold = "42")
     public abstract static class AcceptableUncachedThreshold2 extends RootNode implements BytecodeRootNode {
         protected AcceptableUncachedThreshold2(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -212,7 +233,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableUncachedInterpreter = true)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableUncachedInterpreter = true)
     @ExpectError("Setting forceCached to false has no effect. Remove the forceCached attribute or set it to true to resolve this error.")
     @OperationProxy(value = AddProxy.class, forceCached = false)
     public abstract static class ForceCachedFalse extends RootNode implements BytecodeRootNode {
@@ -238,7 +259,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @ExpectError("The uncached interpreter is not enabled, so forceCached has no effect. Remove the forceCached attribute to resolve this error.")
     @OperationProxy(value = AddProxy.class, forceCached = true)
     public abstract static class ForceCachedNotUncached extends RootNode implements BytecodeRootNode {
@@ -265,7 +286,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableUncachedInterpreter = true)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableUncachedInterpreter = true)
     @ExpectWarning("This operation supports uncached execution, so forcing cached is not necessary. Remove the forceCached attribute to resolve this warning.%")
     @OperationProxy(value = AddProxy.class, forceCached = true)
     public abstract static class ForceCachedUnnecessary extends RootNode implements BytecodeRootNode {
@@ -310,7 +331,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableUncachedInterpreter = true)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableUncachedInterpreter = true)
     // The forceCached is necessary here, even though the node is uncachable, because the Proxyable
     // annotation disallows uncached. There should be no warnings.
     @OperationProxy(value = NonUncachableAddProxy.class, forceCached = true)
@@ -336,7 +357,7 @@ public class ErrorTests {
                     "Bytecode DSL interpreters do not support the GenerateAOT annotation.",
                     "Bytecode DSL interpreters do not support the GenerateInline annotation."
     })
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @GenerateCached
     @GenerateUncached
     @GenerateAOT
@@ -348,7 +369,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Bytecode DSL class should declare a constructor that has signature (ErrorLanguage, FrameDescriptor) or (ErrorLanguage, FrameDescriptor.Builder). The constructor should be visible to subclasses.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class HiddenConstructor extends RootNode implements BytecodeRootNode {
         private HiddenConstructor(TruffleLanguage<?> language, FrameDescriptor descriptor) {
             super(language, descriptor);
@@ -356,7 +377,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Bytecode DSL class should declare a constructor that has signature (ErrorLanguage, FrameDescriptor) or (ErrorLanguage, FrameDescriptor.Builder). The constructor should be visible to subclasses.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class InvalidConstructor extends RootNode implements BytecodeRootNode {
         protected InvalidConstructor() {
             super(null);
@@ -383,7 +404,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class BadOverrides extends RootNode implements BytecodeRootNode {
         protected BadOverrides(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -483,7 +504,7 @@ public class ErrorTests {
      * methods. The generated code should delegate where supported, report unreachable overrides
      * where not supported, and respect widened method visibility.
      */
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableTagInstrumentation = true)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableTagInstrumentation = true)
     public abstract static class ConcreteDelegatedOverrides extends RootNodeWithMoreOverrides implements BytecodeRootNode {
         protected ConcreteDelegatedOverrides(ErrorLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -514,7 +535,7 @@ public class ErrorTests {
      * This class redeclares delegated root methods as abstract. The parser accepts abstract
      * overrides, and the generator must not try to delegate to them.
      */
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableTagInstrumentation = true)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableTagInstrumentation = true)
     public abstract static class AbstractDelegatedOverrides extends RootNodeWithMoreOverrides implements BytecodeRootNode {
 
         protected AbstractDelegatedOverrides(ErrorLanguage language, FrameDescriptor frameDescriptor) {
@@ -586,7 +607,7 @@ public class ErrorTests {
 
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableTagInstrumentation = true)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableTagInstrumentation = true)
     @ExpectError({
                     "Method findInstrumentableCallNode(Node, Frame, int) in supertype com.oracle.truffle.api.bytecode.test.error_tests.ErrorTests.RootNodeWithFinalOverrides is overridden by the generated Bytecode DSL class" +
                                     ", so it cannot be declared final. Remove the final modifier to resolve this issue. The generated implementation will delegate to this method after performing its own checks.",
@@ -639,7 +660,7 @@ public class ErrorTests {
     }
 
     @ExpectError("The used type system is invalid. Fix errors in the type system first.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @TypeSystemReference(ErroredTypeSystem.class)
     public abstract static class BadTypeSystem extends RootNode implements BytecodeRootNode {
         protected BadTypeSystem(ErrorLanguage language, FrameDescriptor builder) {
@@ -648,7 +669,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Cannot perform boxing elimination on java.lang.String. Remove this type from the boxing eliminated types list. Only primitive types boolean, byte, int, float, long, and double are supported.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, boxingEliminationTypes = {String.class})
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, boxingEliminationTypes = {String.class})
     public abstract static class BadBoxingElimination extends RootNode implements BytecodeRootNode {
         protected BadBoxingElimination(ErrorLanguage language, FrameDescriptor builder) {
             super(language, builder);
@@ -656,7 +677,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Cannot perform boxing elimination on short. Remove this type from the boxing eliminated types list. Only primitive types boolean, byte, int, float, long, and double are supported.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, boxingEliminationTypes = {short.class})
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, boxingEliminationTypes = {short.class})
     public abstract static class BadBoxingElimination2 extends RootNode implements BytecodeRootNode {
         protected BadBoxingElimination2(ErrorLanguage language, FrameDescriptor builder) {
             super(language, builder);
@@ -664,7 +685,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Could not proxy operation: the proxied type must be a class, not int.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @OperationProxy(int.class)
     public abstract static class PrimitiveProxyType extends RootNode implements BytecodeRootNode {
         protected PrimitiveProxyType(ErrorLanguage language, FrameDescriptor builder) {
@@ -672,7 +693,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @ExpectError("Encountered errors using com.oracle.truffle.api.bytecode.test.error_tests.ErrorTests.NoCachedProxyType.NodeWithNoCache as an OperationProxy. These errors must be resolved before the DSL can proceed.")
     @OperationProxy(NoCachedProxyType.NodeWithNoCache.class)
     public abstract static class NoCachedProxyType extends RootNode implements BytecodeRootNode {
@@ -693,7 +714,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class OperationErrorTests extends RootNode implements BytecodeRootNode {
         protected OperationErrorTests(ErrorLanguage language, FrameDescriptor builder) {
             super(language, builder);
@@ -821,7 +842,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @ExpectError({
                     "Encountered errors using com.oracle.truffle.api.bytecode.test.error_tests.ErrorTests.NonFinalOperationProxy as an OperationProxy. These errors must be resolved before the DSL can proceed.",
                     "Encountered errors using com.oracle.truffle.api.bytecode.test.error_tests.ErrorTests.NonStaticInnerOperationProxy as an OperationProxy. These errors must be resolved before the DSL can proceed.",
@@ -846,7 +867,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class BadSpecializationTests extends RootNode implements BytecodeRootNode {
 
         protected BadSpecializationTests(ErrorLanguage language, FrameDescriptor frameDescriptor) {
@@ -896,7 +917,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @ExpectError({
                     "Operation NonPublicSpecializationOperationProxy's specialization \"add\" must be visible from this node.",
                     "Operation NonPublicSpecializationOperationProxy's specialization \"fallback\" must be visible from this node."})
@@ -1003,7 +1024,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, enableUncachedInterpreter = true)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, enableUncachedInterpreter = true)
     @OperationProxy(UncachedOperationProxy.class)
     @ExpectError("Could not use com.oracle.truffle.api.bytecode.test.error_tests.ErrorTests.NoUncachedOperationProxy as an operation proxy: " +
                     "the class must be annotated with @OperationProxy.Proxyable(allowUncached=true) when an uncached interpreter is requested " +
@@ -1031,7 +1052,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @ExpectError({"Multiple operations declared with name MyOperation. Operation names must be distinct."})
     @OperationProxy(value = AddOperation.class, name = "MyOperation")
     @OperationProxy(value = SubOperation.class, name = "MyOperation")
@@ -1041,7 +1062,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @ExpectError({INVALID_OPERATION_NAME, INVALID_OPERATION_NAME, INVALID_OPERATION_NAME})
     @OperationProxy(value = AddOperation.class, name = "Bad_Name")
     @OperationProxy(value = AddOperation.class, name = "Bad$Name")
@@ -1052,7 +1073,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @ExpectError(INVALID_OPERATION_NAME)
     @ShortCircuitOperation(name = "Bad$Name", operator = Operator.AND_RETURN_VALUE)
     public abstract static class InvalidShortCircuitOperationNameTest extends RootNode implements BytecodeRootNode {
@@ -1077,7 +1098,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @ExpectWarning("No custom operations were declared. Custom operations can be declared using @Operation, @OperationProxy, or @ShortCircuitOperation.")
     public abstract static class NoOperationsTest extends RootNode implements BytecodeRootNode {
         protected NoOperationsTest(ErrorLanguage language, FrameDescriptor builder) {
@@ -1085,7 +1106,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     @ExpectError({
                     "Specializations for boolean converter ToBooleanBadReturn must only take one dynamic operand and return boolean.",
                     "Encountered errors using ToBooleanBadOperation as a boolean converter. These errors must be resolved before the DSL can proceed.",
@@ -1126,7 +1147,7 @@ public class ErrorTests {
     }
 
     @ExpectError("An operation with @Variadic return value was specified but no operation takes @Variadic operands. Specify at least one operation that allows a @Variadic number of operands or remove the annotation.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class InvalidVarargsReturnTest1 extends RootNode implements BytecodeRootNode {
         protected InvalidVarargsReturnTest1(ErrorLanguage language, FrameDescriptor builder) {
             super(language, builder);
@@ -1142,7 +1163,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class InvalidVarargsReturnTest2 extends RootNode implements BytecodeRootNode {
         protected InvalidVarargsReturnTest2(ErrorLanguage language, FrameDescriptor builder) {
             super(language, builder);
@@ -1166,7 +1187,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class InvalidVarargsReturnTest3 extends RootNode implements BytecodeRootNode {
         protected InvalidVarargsReturnTest3(ErrorLanguage language, FrameDescriptor builder) {
             super(language, builder);
@@ -1183,7 +1204,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class)
     public abstract static class InvalidVarargsOffsetTest1 extends RootNode implements BytecodeRootNode {
         protected InvalidVarargsOffsetTest1(ErrorLanguage language, FrameDescriptor builder) {
             super(language, builder);
@@ -1202,7 +1223,7 @@ public class ErrorTests {
     }
 
     @ExpectError("The variadic stack limit must be greater than 1.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, variadicStackLimit = "1")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, variadicStackLimit = "1")
     public abstract static class InvalidVarargsLimitTest1 extends RootNode implements BytecodeRootNode {
         protected InvalidVarargsLimitTest1(ErrorLanguage language, FrameDescriptor builder) {
             super(language, builder);
@@ -1218,7 +1239,7 @@ public class ErrorTests {
     }
 
     @ExpectError("The variadic stack limit must be a power of 2.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, variadicStackLimit = "3")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, variadicStackLimit = "3")
     public abstract static class InvalidVarargsLimitTest2 extends RootNode implements BytecodeRootNode {
         protected InvalidVarargsLimitTest2(ErrorLanguage language, FrameDescriptor builder) {
             super(language, builder);
@@ -1234,7 +1255,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Invalid variadic stack limit specified. Must return 'int' but returned 'String'")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, variadicStackLimit = "INVALID")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, variadicStackLimit = "INVALID")
     public abstract static class InvalidVarargsLimitTest3 extends RootNode implements BytecodeRootNode {
         static final String INVALID = "";
 
@@ -1252,7 +1273,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Invalid variadic stack limit specified. Must return 'int' but returned 'String'")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, variadicStackLimit = "invalid()")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, variadicStackLimit = "invalid()")
     public abstract static class InvalidVarargsLimitTest4 extends RootNode implements BytecodeRootNode {
         static final String invalid() {
             return "";
@@ -1272,7 +1293,7 @@ public class ErrorTests {
     }
 
     @ExpectError("Error parsing expression 'invalid()': The method invalid is undefined for the enclosing scope.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, variadicStackLimit = "invalid()")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, variadicStackLimit = "invalid()")
     public abstract static class InvalidVarargsLimitTest5 extends RootNode implements BytecodeRootNode {
         final int invalid() {
             return 42;
@@ -1292,7 +1313,7 @@ public class ErrorTests {
     }
 
     @ExpectError("The variadic stack limit must be smaller or equal to Short.MAX_VALUE.")
-    @GenerateBytecode(languageClass = ErrorLanguage.class, variadicStackLimit = "32768")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, variadicStackLimit = "32768")
     public abstract static class InvalidVarargsLimitTest9 extends RootNode implements BytecodeRootNode {
 
         protected InvalidVarargsLimitTest9(ErrorLanguage language, FrameDescriptor builder) {
@@ -1308,7 +1329,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, variadicStackLimit = "invalidDynamicValue()")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, variadicStackLimit = "invalidDynamicValue()")
     public abstract static class InvalidVarargsLimitTest6 extends RootNode implements BytecodeRootNode {
         static final int invalidDynamicValue() {
             return 41;
@@ -1342,7 +1363,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, variadicStackLimit = "invalidDynamicValue()")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, variadicStackLimit = "invalidDynamicValue()")
     public abstract static class InvalidVarargsLimitTest7 extends RootNode implements BytecodeRootNode {
         static final int invalidDynamicValue() {
             return -1;
@@ -1376,7 +1397,7 @@ public class ErrorTests {
         }
     }
 
-    @GenerateBytecode(languageClass = ErrorLanguage.class, variadicStackLimit = "invalidDynamicValue()")
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = ErrorLanguage.class, variadicStackLimit = "invalidDynamicValue()")
     public abstract static class InvalidVarargsLimitTest8 extends RootNode implements BytecodeRootNode {
         static final int invalidDynamicValue() {
             return Short.MAX_VALUE + 1;

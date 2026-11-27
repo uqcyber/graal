@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,19 @@ namespace svm_gc {
 
 // forward declarations
 typedef struct CodeInfo CodeInfo;
+
+struct MetaspaceStatistics {
+  size_t dynamic_hub_count;
+  size_t dynamic_hub_size;
+  size_t byte_array_count;
+  size_t byte_array_size;
+  size_t int_array_count;
+  size_t int_array_size;
+  size_t long_array_count;
+  size_t long_array_size;
+  size_t object_count;
+  size_t object_size;
+};
 
 // data structures for frames that are currently on the stack
 struct StackFrame {

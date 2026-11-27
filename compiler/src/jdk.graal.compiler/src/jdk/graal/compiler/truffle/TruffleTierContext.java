@@ -34,7 +34,7 @@ import jdk.graal.compiler.core.common.CompilationIdentifier;
 import jdk.graal.compiler.core.common.RetryableBailoutException;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.GraalError;
-import jdk.graal.compiler.nodes.Cancellable;
+import jdk.graal.compiler.graph.Cancellable;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.OptimisticOptimizations;
@@ -109,7 +109,8 @@ public final class TruffleTierContext extends HighTierContext {
                     DebugContext debug,
                     TruffleCompilable compilable,
                     CompilationIdentifier compilationId, SpeculationLog log,
-                    TruffleCompilationTask task, PerformanceInformationHandler handler) {
+                    TruffleCompilationTask task,
+                    PerformanceInformationHandler handler) {
 
         boolean readyForCompilation = compilable.prepareForCompilation(true, task.tier(), !task.hasNextTier());
         if (!readyForCompilation) {

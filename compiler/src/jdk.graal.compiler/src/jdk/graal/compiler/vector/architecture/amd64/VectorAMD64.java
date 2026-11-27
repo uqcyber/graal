@@ -76,7 +76,6 @@ public final class VectorAMD64 extends VectorArchitecture {
     public final AMD64 arch;
     private final boolean enabled;
     private final int objectAlignment;
-    private final boolean enableObjectVectorization;
 
     private int maxVectorSize;
 
@@ -89,17 +88,20 @@ public final class VectorAMD64 extends VectorArchitecture {
             return false;
         }
         VectorAMD64 that = (VectorAMD64) o;
-        return enabled == that.enabled && objectAlignment == that.objectAlignment && enableObjectVectorization == that.enableObjectVectorization && maxVectorSize == that.maxVectorSize &&
-                        Objects.equals(arch, that.arch);
+        return enabled == that.enabled && objectAlignment == that.objectAlignment && maxVectorSize == that.maxVectorSize && Objects.equals(arch, that.arch);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), arch, enabled, objectAlignment, enableObjectVectorization, maxVectorSize);
+        return Objects.hash(super.hashCode(), arch, enabled, objectAlignment, maxVectorSize);
     }
 
     public VectorAMD64(AMD64 arch, boolean enabled, int oopVectorStride, boolean useCompressedOops, int objectAlignment) {
-        this(arch, enabled, oopVectorStride, useCompressedOops, objectAlignment, arch.getLargestStorableKind(AMD64.XMM).getSizeInBytes(), true);
+        this(arch, enabled, oopVectorStride, useCompressedOops, objectAlignment, true);
+    }
+
+    public VectorAMD64(AMD64 arch, boolean enabled, int oopVectorStride, boolean useCompressedOops, int objectAlignment, boolean enableObjectVectorization) {
+        this(arch, enabled, oopVectorStride, useCompressedOops, objectAlignment, arch.getLargestStorableKind(AMD64.XMM).getSizeInBytes(), enableObjectVectorization);
     }
 
     public VectorAMD64(AMD64 arch, int oopVectorStride, boolean useCompressedOops, int objectAlignment, int maxVectorSize, boolean enableObjectVectorization) {
@@ -107,12 +109,11 @@ public final class VectorAMD64 extends VectorArchitecture {
     }
 
     private VectorAMD64(AMD64 arch, boolean enabled, int oopVectorStride, boolean useCompressedOops, int objectAlignment, int maxVectorSize, boolean enableObjectVectorization) {
-        super(oopVectorStride, useCompressedOops);
+        super(oopVectorStride, useCompressedOops, enableObjectVectorization);
         this.arch = arch;
         this.enabled = enabled;
         this.objectAlignment = objectAlignment;
         this.maxVectorSize = Math.min(maxVectorSize, maxVectorSizeForArchitecture(arch));
-        this.enableObjectVectorization = enableObjectVectorization;
     }
 
     @Override
@@ -437,8 +438,8 @@ public final class VectorAMD64 extends VectorArchitecture {
     /**
      * Returns a stamp describing a representative input of the logic node. The bit width of this
      * stamp describes the width of the logic bitmasks produced by the vectorized version of the
-     * logic operation. Returns {@code null} short-circuiting operations that don't produce a simple
-     * result.
+     * logic operation. Returns {@code null} for operations without a representative vector element
+     * stamp.
      */
     private Stamp logicOperationStamp(LogicNode logicNode) {
         /* These cases should remain in sync with getSupportedVectorLogicLengthHelper. */
@@ -446,10 +447,9 @@ public final class VectorAMD64 extends VectorArchitecture {
             return compareNode.getX().stamp(NodeView.DEFAULT);
         } else if (logicNode instanceof IsNullNode) {
             return oopMaskStamp;
-        } else if (logicNode instanceof ShortCircuitOrNode) {
+        } else if (logicNode instanceof ShortCircuitOrNode || logicNode instanceof LogicConstantNode) {
+            /* Logic constants have a VoidStamp, which cannot describe vector elements. */
             return null;
-        } else if (logicNode instanceof LogicConstantNode) {
-            return logicNode.stamp(NodeView.DEFAULT);
         } else if (logicNode instanceof IntegerTestNode testNode) {
             return testNode.getX().stamp(NodeView.DEFAULT);
         } else {
@@ -517,6 +517,8 @@ public final class VectorAMD64 extends VectorArchitecture {
 
     @Override
     public int getSupportedVectorPermuteLength(Stamp elementStamp, int maxLength) {
+        /* We round the length upwards to a power of two, which must not overflow. */
+        GraalError.guarantee(maxLength <= (1 << 30), "Maximum vector length exceeds 1 << 30 elements: %s", maxLength);
         if (!hasMinimumVectorizationRequirements(maxLength)) {
             return 1;
         }
@@ -544,6 +546,8 @@ public final class VectorAMD64 extends VectorArchitecture {
 
     @Override
     public int getSupportedVectorBlendLength(Stamp elementStamp, int maxLength) {
+        /* We round the length upwards to a power of two, which must not overflow. */
+        GraalError.guarantee(maxLength <= (1 << 30), "Maximum vector length exceeds 1 << 30 elements: %s", maxLength);
         if (!hasMinimumVectorizationRequirements(maxLength)) {
             return 1;
         }
@@ -586,7 +590,7 @@ public final class VectorAMD64 extends VectorArchitecture {
      * </ul>
      */
     private int getSupportedVectorLength(Stamp stamp, int maxLength, AVXSize avxSize) {
-        if (stamp instanceof AbstractObjectStamp && !enableObjectVectorization) {
+        if (!supportsObjectVectorization() && stamp instanceof AbstractObjectStamp) {
             /* Only handling primitive values. */
             return 1;
         }

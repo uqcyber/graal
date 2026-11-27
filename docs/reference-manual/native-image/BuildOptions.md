@@ -19,6 +19,10 @@ Options to configure Native Image are provided in the following categories:
 - Table of available options: run `native-image --print-options` (table), `native-image --print-options=md` (Markdown), or `native-image --print-options=json` (machine-readable JSON).
 
 Depending on the GraalVM version, the options to the `native-image` builder may differ.
+An unrecognized option starting with `-` or `--` produces an error instead of being treated as a main class or an output filename.
+To use an output filename beginning with a dash, specify it with `-o`, for example `native-image -jar hello.jar -o --my-image`, or prefix it with `./`.
+Use `native-image --help` to check which build options your installed distribution supports.
+
 Native Image options can also be categorized as **hosted** or **runtime** options:
 
 - **Hosted options**: to configure the build process and set default values for run-time behavior. These options use the prefix `-H:`. For example, `-H:MaxHeapSize=2g` sets the default maximum heap size for the native executable.
@@ -80,7 +84,7 @@ These deprecated URL protocol options are omitted from the generated table; see 
 | `-ea` | String | also -ea[:[packagename]...\|:classname] or -enableassertions[:[packagename]...\|:classname]. Enable assertions with specified granularity at run time. |  | `-ea=-ea` |
 | `-esa` | String | also -enablesystemassertions. Enables assertions in all system classes at run time. | None | `-esa=-esa` |
 | `-g` | String | generate debugging information | 2 | `-g=-g` |
-| `-march` | String | generate instructions for a specific machine type. Defaults to 'x86-64-v3' on AMD64 and 'armv8.1-a' on AArch64. Use -march=compatibility for best compatibility, or -march=native for best performance if the native executable is deployed on the same machine or on a machine with the same CPU features. To list all available machine types, use -march=list. | None | `-march=-march` |
+| `-march` | String | generate instructions for a specific machine type. Defaults to 'x86-64-v3' on AMD64, 'armv8.1-a' on Linux AArch64, and 'apple-m1' on macOS AArch64. Use -march=compatibility for best compatibility, or -march=native for best performance if the native executable is deployed on the same machine or on a machine with the same CPU features. To list all available machine types, use -march=list. | None | `-march=-march` |
 | `-o` | String | name of the output file to be generated | None | `-o=-o` |
 | `--gc` | Enum | select native-image garbage collector implementation. Allowed values: 'epsilon', 'serial', 'G1'. | serial | `--gc=<value>` |
 | `--add-modules` | String | root modules to resolve in addition to the initial module. &lt;module name&gt; can also be ALL-DEFAULT, ALL-SYSTEM, ALL-MODULE-PATH. |  | `--add-modules <module name>[,<module name>...]` |
@@ -112,6 +116,88 @@ These deprecated URL protocol options are omitted from the generated table; see 
 | `@argument` | String | one or more argument files containing options |  | `@argument files` |
 
 <!-- END: build-options-table -->
+
+## Argument Files
+
+Native Image argument files use UTF-8 and follow the [Java launcher argument-file specification](https://docs.oracle.com/en/java/javase/25/docs/specs/man/java.html#java-command-line-argument-files).
+All of its syntax rules apply.
+Command-line argument-file paths follow the Java launcher's filesystem lookup rules, including symbolic links and `..`.
+For compatibility with the Java launcher, Native Image does not restrict these paths to a containing directory.
+Recursive includes from those files use the same lookup rules.
+A standalone `# native-image:` directive must start the first line; unknown or duplicate settings and misplaced directives are errors.
+Separate settings with one or more spaces.
+Whitespace after the colon and at the end of the directive is optional.
+Use `value-continuations` to enable option-value continuations, and `recursive-argument-files` to let the file include other argument files.
+You can enable both settings on the same line.
+
+An option ending in `=...` starts an option-value continuation.
+Subsequent arguments within the file are joined with commas until an empty or whitespace-only line, another option ending in `=...`, or the end of the file.
+Comment-only lines do not end the continuation.
+Indentation does not affect continuation boundaries; options that do not end in `=...` are also consumed as continuation values.
+A continuation with no entries produces an empty option value.
+
+Continuation headers are recognized after Java-style tokenization removes quotes, so `-H:IncludeResources="..."` also starts a continuation.
+To pass `...` as a literal option value, specify the option directly on the command line or in an argument file without the marker.
+
+To include another argument file, put its `@file` reference in an argument file whose first line includes the `recursive-argument-files` setting.
+The included file's arguments are inlined at the location of the `@file` reference.
+Resolve nested references relative to the file that contains them.
+Each file controls its own recursion setting, so an unmarked file is a leaf and its `@file` tokens remain literal.
+When a file enables both `value-continuations` and `recursive-argument-files`, Native Image joins its option-value continuations before expanding includes.
+An `@file` token consumed as a continuation value remains a value, and continuations do not cross file boundaries.
+Use `@@file` to pass a literal `@file` token from a file that enables recursive argument files.
+The `--disable-@files` option prevents later argument-file references from being expanded and disables `@@` unescaping.
+When used in an included file, it also affects the remaining arguments in the including files and subsequent command-line arguments in the same preprocessing stream.
+Each _native-image.properties_ file and macro option is processed in a separate stream with its own disable state.
+Native Image reports include cycles with their include chain and rejects nesting deeper than 64 files, including the top-level argument file.
+If the top-level file enables `recursive-argument-files`, its expansion has a cumulative budget of 16,777,216 input characters, measured in Java UTF-16 code units.
+The budget counts the complete contents of the root and every included file before parsing, including comments and whitespace.
+Each inclusion counts again, even when it refers to a previously included file; each top-level file starts with a fresh budget.
+Recursion can turn small files into a huge expansion, so enabling it also selects this more conservative limit.
+Without recursion enabled on the top-level file, the Java launcher's existing per-file ceiling of 2,147,483,647 bytes applies.
+
+For example, _layer.args_ can include _common.args_ before its own options:
+
+```text
+# native-image: value-continuations recursive-argument-files
+
+@common.args
+
+-H:IncludeResources=...
+    my/application/.*
+```
+
+The following _preserve.args_ file groups `-H:Preserve` and `-H:IncludeResources` values using option-value continuations:
+
+```text
+# native-image: value-continuations
+
+# Library scope
+-H:Preserve=...
+    package=my.library.*
+    module=java.logging
+
+-H:IncludeResources=...
+    my/library/.*
+    my/application/.*
+```
+
+Running `native-image @preserve.args -cp classes Main` expands the file into:
+
+```text
+-H:Preserve=package=my.library.*,module=java.logging
+-H:IncludeResources=my/library/.*,my/application/.*
+```
+
+You can also use `@file` in the `Args` property of _native-image.properties_.
+The top-level file path is relative to the directory containing the properties file; nested references are relative to the including file.
+For properties embedded in a JAR, all referenced files are read from that JAR.
+For macro options, paths are relative to the macro option directory.
+Embedded references must be relative paths that, after normalization of `.` and `..`, stay within the containing class-path or module-path entry, or macro option directory.
+This containment check is lexical: it does not resolve symbolic links.
+For files read from the filesystem, symbolic links are followed and can lead outside that entry or directory.
+These Native Image containment rules apply to both top-level embedded references and their recursive includes.
+Expanded options retain the origin of the properties file and its restrictions.
 
 ## List of Useful Options
 
@@ -204,11 +290,20 @@ The following system properties are automatically copied into the generated exec
 | java.vm.specification.version | Java Virtual Machine specification version                        |
 | line.separator                | Line separator                                                    |
 | native.encoding               | Specifies the host environment's character encoding               |
+| org.graalvm.nativeimage.graalos | Specifies whether the image is built for GraalOS                   |
 | org.graalvm.nativeimage.kind  | Specifies if the image is built as a shared library or executable |
 | path.separator                | Path separator                                                    |
 | stdin.encoding                | Specifies the encoding for `System.in`                            |
 | stdout.encoding               | Specifies the encoding for `System.out` and `System.err`          |
 | sun.jnu.encoding              | Specifies encoding when parsing values passed via the commandline |
+
+### Identify Images Built for GraalOS
+
+Read the `org.graalvm.nativeimage.graalos` Java system property to determine whether an image was built for GraalOS, for example with `Boolean.getBoolean("org.graalvm.nativeimage.graalos")`.
+The `native-image` builder initializes it to `true` when you build with `-H:+GraalOS`, or `false` otherwise; you do not need to set an additional system property.
+The property is available during language resource inclusion and polyglot context preinitialization, and is preserved in the generated image at runtime.
+It describes the image build target, not the current execution environment, so a GraalOS-targeted image retains `true` even when you execute it outside GraalOS.
+Like other Java system properties, you can override it at runtime.
 
 ## Related Documentation
 

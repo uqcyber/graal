@@ -41,6 +41,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.espresso.classfile.ConstantPool;
 import com.oracle.svm.espresso.classfile.ParserConstantPool;
@@ -52,6 +53,7 @@ import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.espresso.classfile.descriptors.Validation;
 import com.oracle.svm.interpreter.metadata.InterpreterConstantPool;
+import com.oracle.svm.interpreter.metadata.InterpreterConstantPoolPrimitiveEntry;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaField;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaType;
@@ -171,9 +173,33 @@ public final class ConstantPoolBuilder {
         return appendCachedEntry(ConstantPool.Tag.FIELD_REF, field);
     }
 
+    public int appendCachedField(JavaField field, JavaType symbolicHolder) {
+        assert field instanceof UnresolvedJavaField || field instanceof InterpreterResolvedJavaField;
+        return appendCachedMember(ConstantPool.Tag.FIELD_REF, field, symbolicHolder);
+    }
+
     public int appendCachedMethod(boolean interfaceMethod, JavaMethod method) {
         assert method instanceof UnresolvedJavaMethod || method instanceof InterpreterResolvedJavaMethod;
         return appendCachedEntry(interfaceMethod ? ConstantPool.Tag.INTERFACE_METHOD_REF : ConstantPool.Tag.METHOD_REF, method);
+    }
+
+    public int appendCachedMethod(boolean interfaceMethod, JavaMethod method, JavaType symbolicHolder, String symbolicName, String symbolicSignature) {
+        assert method == null || method instanceof UnresolvedJavaMethod || method instanceof InterpreterResolvedJavaMethod;
+        ConstantPool.Tag tag = interfaceMethod ? ConstantPool.Tag.INTERFACE_METHOD_REF : ConstantPool.Tag.METHOD_REF;
+        Symbol<Name> name = SymbolsSupport.getNames().getOrCreate(symbolicName);
+        Symbol<Signature> signature = SymbolsSupport.getSignatures().getOrCreateValidSignature(symbolicSignature);
+        return appendCachedMember(tag, method, symbolicHolder, name, signature);
+    }
+
+    private int appendCachedMember(ConstantPool.Tag tag, Object member, JavaType symbolicHolder) {
+        int symbolicHolderIndex = appendCachedType(symbolicHolder);
+        return appendEntry(tag, cat(symbolicHolderIndex, 0), member);
+    }
+
+    private int appendCachedMember(ConstantPool.Tag tag, Object member, JavaType symbolicHolder, Symbol<Name> symbolicName, Symbol<Signature> symbolicSignature) {
+        int symbolicHolderIndex = appendCachedType(symbolicHolder);
+        int nameAndTypeIndex = appendSymbolicNameAndType(symbolicName, symbolicSignature);
+        return appendEntry(tag, cat(symbolicHolderIndex, nameAndTypeIndex), member);
     }
 
     public int appendCachedType(JavaType type) {
@@ -196,18 +222,24 @@ public final class ConstantPoolBuilder {
         return appendCachedEntry(ConstantPool.Tag.METHODHANDLE, methodHandle);
     }
 
+    /**
+     * Adds an int, float, long, or double constant and prepopulates its interpreter cache entry with
+     * a {@link InterpreterConstantPoolPrimitiveEntry}, rather than the supplied JVMCI constant.
+     *
+     * @return the constant-pool index, reusing an equivalent entry if present
+     */
     public int appendPrimitiveConstant(PrimitiveConstant primitiveConstant) {
         JavaKind javaKind = primitiveConstant.getJavaKind();
         switch (javaKind) {
             case Int, Float -> {
                 ConstantPool.Tag tag = javaKind == JavaKind.Int ? ConstantPool.Tag.INTEGER : ConstantPool.Tag.FLOAT;
                 int value = javaKind == JavaKind.Int ? primitiveConstant.asInt() : Float.floatToRawIntBits(primitiveConstant.asFloat());
-                return appendSymbolicEntry(tag, value, primitiveConstant);
+                return appendSymbolicEntry(tag, value, new InterpreterConstantPoolPrimitiveEntry(tag.getValue(), value));
             }
             case Long, Double -> {
                 ConstantPool.Tag tag = javaKind == JavaKind.Long ? ConstantPool.Tag.LONG : ConstantPool.Tag.DOUBLE;
                 long rawBits = javaKind == JavaKind.Long ? primitiveConstant.asLong() : Double.doubleToRawLongBits(primitiveConstant.asDouble());
-                return appendRawEntry(tag, rawBits, primitiveConstant);
+                return appendRawEntry(tag, rawBits, new InterpreterConstantPoolPrimitiveEntry(tag.getValue(), rawBits));
             }
             default -> throw new IllegalArgumentException("Invalid primitive constant " + primitiveConstant);
         }
@@ -314,8 +346,8 @@ public final class ConstantPoolBuilder {
     }
 
     private static int cat(int hi, int lo) {
-        assert (short) hi == hi;
-        assert (short) lo == lo;
+        assert (char) hi == hi;
+        assert (char) lo == lo;
         return (hi << 16) | (lo & 0xFFFF);
     }
 

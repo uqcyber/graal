@@ -30,7 +30,7 @@ import com.oracle.graal.pointsto.heap.ImageHeapArray;
 import com.oracle.graal.pointsto.heap.ImageHeapConstant;
 import com.oracle.graal.pointsto.heap.ImageHeapRelocatableConstant;
 import com.oracle.svm.core.StaticFieldsSupport;
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
 import com.oracle.svm.core.graal.meta.SubstrateMemoryAccessProvider;
 import com.oracle.svm.core.meta.CompressedNullConstant;
 import com.oracle.svm.shared.util.VMError;
@@ -163,7 +163,7 @@ public class HostedMemoryAccessProvider implements SubstrateMemoryAccessProvider
             throw VMError.shouldNotReachHere("May only be called for arrays.");
         }
 
-        JavaKind arrayKind = JavaKind.fromJavaClass(type.getComponentType().getJavaClass());
+        JavaKind arrayKind = type.getComponentType().getJavaKind();
         int runtimeBaseOffset = hMetaAccess.getArrayBaseOffset(arrayKind);
         int runtimeIndexScale = hMetaAccess.getArrayIndexScale(arrayKind);
 

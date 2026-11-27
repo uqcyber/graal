@@ -36,16 +36,16 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.SubstrateOptions;
-import com.oracle.svm.core.code.CodeInfo;
+import com.oracle.svm.guest.staging.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoQueryResult;
 import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.FrameSourceInfo;
 import com.oracle.svm.core.code.RuntimeCodeInstallation;
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
 import com.oracle.svm.core.deopt.DeoptimizedFrame;
 import com.oracle.svm.core.deopt.VirtualFrame;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.interpreter.InterpreterSupport;
 import com.oracle.svm.core.stack.JavaStackFrameVisitor;
@@ -89,13 +89,13 @@ final class BacktraceVisitor extends JavaStackFrameVisitor {
      * skipped because they represent a {@link Throwable} constructor, or are otherwise special
      * ({@link StackTraceUtils#shouldShowFrame}). To mitigate this, we always decode
      * {@linkplain #NATIVE_FRAME_LIMIT_MARGIN a few more} native frames than the
-     * {@linkplain SubstrateOptions#maxJavaStackTraceDepth() Java frame limit} and hope that we can
+     * {@linkplain SubstrateOptions#MaxJavaStackTraceDepth Java frame limit} and hope that we can
      * decode enough Java frames later on.
      *
-     * @see SubstrateOptions#maxJavaStackTraceDepth()
+     * @see SubstrateOptions#MaxJavaStackTraceDepth
      */
     private static int computeNativeLimit() {
-        int maxJavaStackTraceDepth = SubstrateOptions.maxJavaStackTraceDepth();
+        int maxJavaStackTraceDepth = SubstrateOptions.MaxJavaStackTraceDepth.getValue();
         if (maxJavaStackTraceDepth <= 0) {
             /* Unlimited backtrace. */
             return Integer.MAX_VALUE;

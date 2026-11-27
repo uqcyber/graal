@@ -27,7 +27,9 @@ package com.oracle.svm.core.graal.code;
 
 import com.oracle.svm.jvmci.shared.meta.SharedMethod;
 import com.oracle.svm.jvmci.shared.meta.SharedType;
-import com.oracle.svm.core.hub.DynamicHubProvider;
+import com.oracle.svm.core.hub.DynamicHubUtils;
+import com.oracle.svm.shared.util.VMError;
+import com.oracle.svm.core.graal.meta.TypeCheckInfoProvider;
 
 import jdk.graal.compiler.core.common.spi.MetaAccessExtensionProvider;
 import jdk.vm.ci.meta.JavaConstant;
@@ -38,6 +40,34 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 public class SubstrateMetaAccessExtensionProvider implements MetaAccessExtensionProvider {
+    /**
+     * Returns this compilation's Native Image type-check policy. It belongs in this extension
+     * because generic compiler lowering does not consume Native Image hub metadata.
+     */
+    public TypeCheckInfoProvider getTypeCheckInfoProvider() {
+        return TypeCheckInfoProvider.DEFAULT;
+    }
+
+    /** Returns a positive byte offset within the static storage used by this compilation. */
+    @Override
+    public final int getStaticFieldOffset(ResolvedJavaField field, int physicalOffset) {
+        assert field.isStatic();
+        int offset = selectStaticFieldOffset(field, physicalOffset);
+        if (offset <= 0) {
+            throw VMError.shouldNotReachHere("Invalid static field offset " + offset + " for " + field);
+        }
+        return offset;
+    }
+
+    /**
+     * Selects the offset relative to the static-field base used by this compilation. The default
+     * uses the physical offset. Overrides must retain storage for accessed fields and keep the
+     * selection stable while compiled graphs are reused. Ordinary lowering requires a physical
+     * location before selection. Raw static-offset lookup is disabled by {@link #getStaticFieldForAccess}.
+     */
+    protected int selectStaticFieldOffset(@SuppressWarnings("unused") ResolvedJavaField field, int physicalOffset) {
+        return physicalOffset;
+    }
 
     /**
      * Runtime-loaded bytecode may ask for a storage kind before its referenced type has been
@@ -54,7 +84,7 @@ public class SubstrateMetaAccessExtensionProvider implements MetaAccessExtension
 
     @Override
     public boolean canConstantFoldDynamicAllocation(ResolvedJavaType type) {
-        return type != null && DynamicHubProvider.getHub((SharedType) type).isInstantiated();
+        return type != null && DynamicHubUtils.getHub((SharedType) type).isInstantiated();
     }
 
     @Override

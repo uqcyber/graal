@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@ import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.guest.staging.core.graal.stackvalue.UnsafeStackValue;
@@ -52,7 +53,7 @@ public class LinuxThreadCpuTimeSupport implements ThreadCpuTimeSupport {
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public long getCurrentThreadCpuTime(boolean includeSystemTime) {
-        if (!includeSystemTime) {
+        if (!includeSystemTime && !SubstrateOptions.GraalOS.getValue()) {
             int tid = (int) VMThreads.getOSThreadId(CurrentIsolate.getCurrentThread()).rawValue();
             assert tid != 0 : "OS thread id must be initialized before querying thread CPU time";
             return LinuxLibCHelper.getThreadUserTimeSlow(tid);
@@ -63,7 +64,7 @@ public class LinuxThreadCpuTimeSupport implements ThreadCpuTimeSupport {
     @Override
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public long getThreadCpuTime(IsolateThread isolateThread, boolean includeSystemTime) {
-        if (!includeSystemTime) {
+        if (!includeSystemTime && !SubstrateOptions.GraalOS.getValue()) {
             int tid = (int) VMThreads.getOSThreadId(isolateThread).rawValue();
             assert tid != 0 : "OS thread id must be initialized before querying thread CPU time";
             return LinuxLibCHelper.getThreadUserTimeSlow(tid);
@@ -74,7 +75,8 @@ public class LinuxThreadCpuTimeSupport implements ThreadCpuTimeSupport {
         return fastCpuTime(pthread);
     }
 
-    @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-23+10/src/hotspot/os/linux/os_linux.cpp#L5113-L5125")
+    // GR-80784 tracks adoption of JDK-8372584; the original upstream helper was removed.
+    // @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-23+10/src/hotspot/os/linux/os_linux.cpp#L5113-L5125")
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static long fastCpuTime(pthread_t pthread) {
         CIntPointer threadsClockId = StackValue.get(Integer.BYTES);
@@ -85,7 +87,7 @@ public class LinuxThreadCpuTimeSupport implements ThreadCpuTimeSupport {
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jdk-23+10/src/hotspot/os/linux/os_linux.cpp#L4317-L4322")
+    @BasedOnJDKFile("https://github.com/graalvm/labs-openjdk/blob/jvmci-25.5-b25/src/hotspot/os/linux/os_linux.cpp#L4443-L4448")
     private static long fastThreadCpuTime(int clockId) {
         timespec time = UnsafeStackValue.get(timespec.class);
         if (LinuxTime.NoTransitions.clock_gettime(clockId, time) != 0) {

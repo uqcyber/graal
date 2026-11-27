@@ -28,6 +28,7 @@ import java.lang.invoke.MethodHandle;
 import java.util.List;
 
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.DynamicHubUtils;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.core.meta.SubstrateObjectConstant;
 import com.oracle.svm.interpreter.CallSiteLink;
@@ -35,6 +36,7 @@ import com.oracle.svm.interpreter.CremaLinkResolver;
 import com.oracle.svm.interpreter.CremaRuntimeAccess;
 import com.oracle.svm.interpreter.FailedCallSiteLink;
 import com.oracle.svm.interpreter.ResolvedInvokeDynamicConstant;
+import com.oracle.svm.interpreter.RuntimeInterpreterConstantPool;
 import com.oracle.svm.interpreter.SuccessfulCallSiteLink;
 import com.oracle.svm.interpreter.metadata.Bytecodes;
 import com.oracle.svm.interpreter.metadata.CremaMethodAccess;
@@ -137,7 +139,7 @@ public final class RistrettoConstantPool implements ConstantPool {
                 String name = interpreterConstantPool.invokeDynamicName(indyCpi).toString();
                 Signature signature = new RistrettoUnresolvedSignature(CremaMethodAccess.toJVMCI(interpreterConstantPool.invokeDynamicSignature(indyCpi),
                                 SymbolsSupport.getTypes()));
-                JavaType holder = RistrettoType.getOrCreate((InterpreterResolvedJavaType) DynamicHub.fromClass(MethodHandle.class).getInterpreterType());
+                JavaType holder = RistrettoType.getOrCreate((InterpreterResolvedJavaType) DynamicHubUtils.getInterpreterType(DynamicHub.fromClass(MethodHandle.class)));
                 return new UnresolvedJavaMethod(name, signature, holder);
             }
             return res;
@@ -157,6 +159,18 @@ public final class RistrettoConstantPool implements ConstantPool {
             return RistrettoMethod.getOrCreate(linkedInvoke.seedMethod);
         }
         Object cachedEntry = interpreterConstantPool.peekCachedEntry(cpi);
+        if (cachedEntry instanceof InterpreterResolvedJavaMethod resolvedJavaMethod) {
+            if (interpreterConstantPool instanceof RuntimeInterpreterConstantPool) {
+                // Symbolic resolution alone does not authorize any opcode-specific runtime call.
+                return createUnresolvedMethod(cpi);
+            }
+            /*
+             * Hydrated preserved AOT bytecodes cache image-built targets directly. Keep their
+             * existing interpreter metadata instead of decoding the cached entry's intentionally
+             * empty symbolic payload or triggering runtime resolution.
+             */
+            return RistrettoMethod.getOrCreate(resolvedJavaMethod);
+        }
         if (cachedEntry instanceof UnresolvedJavaMethod unresolvedJavaMethod) {
             return unresolvedJavaMethod;
         }
@@ -198,6 +212,14 @@ public final class RistrettoConstantPool implements ConstantPool {
         Object indyEntry = interpreterConstantPool.peekCachedEntry(indyCpi);
         if (indyEntry == null) {
             return null;
+        }
+        if (indyEntry instanceof InterpreterResolvedJavaMethod hostedInvoker) {
+            /*
+             * Hosted preservation stores the pre-linked invoker directly in the high CPI and its
+             * appendix in the low CPI. This form is distinct from runtime-loaded call sites, whose
+             * high CPI contains ResolvedInvokeDynamicConstant and whose low bits encode the BCI.
+             */
+            return RistrettoMethod.getOrCreate(hostedInvoker);
         }
         if (indyEntry instanceof ResolvedInvokeDynamicConstant invokeDynamicConstant) {
             SuccessfulCallSiteLink successfulCallSiteLink = getSuccessfulInvokeDynamicLink(rawIndex, invokeDynamicConstant);
@@ -319,6 +341,11 @@ public final class RistrettoConstantPool implements ConstantPool {
         }
 
         Object indyEntry = interpreterConstantPool.peekCachedEntry(indyCpi);
+        if (indyEntry instanceof InterpreterResolvedJavaMethod) {
+            int appendixCpi = rawIndex & 0xFFFF;
+            VMError.guarantee(appendixCpi != 0, "Hosted invokedynamic raw index is missing its appendix CPI");
+            return interpreterConstantPool.lookupAppendix(appendixCpi, Bytecodes.INVOKEDYNAMIC);
+        }
         if (indyEntry instanceof ResolvedInvokeDynamicConstant invokeDynamicConstant) {
             SuccessfulCallSiteLink successfulCallSiteLink = getSuccessfulInvokeDynamicLink(rawIndex, invokeDynamicConstant);
             return successfulCallSiteLink == null ? null : SubstrateObjectConstant.forObject(successfulCallSiteLink.getUnboxedAppendix());

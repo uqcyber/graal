@@ -108,6 +108,20 @@ were only valid because the code previously lived with hosted or compiler depend
 | Moving `com.oracle.svm.core...` code to guest staging | Insert `guest.staging` after `com.oracle.svm`, e.g., `com.oracle.svm.core.memory` to `com.oracle.svm.guest.staging.core.memory` | Preserve the original package suffix so moves stay mechanical and match prior Terminus refactorings. |
 | Javadoc `{@link ...}` to a target that is no longer visible after the move | Use `{@code ...}` | Preserve the referenced name in Javadoc without adding guest/shared dependencies only to keep documentation links resolvable. |
 
+### Add Guest Modules
+
+Guest visibility alone does not make a module part of the Native Image runtime.
+When adding a module to the guest, check three things:
+
+- **Packaging.** For a shipped JAR, add it to guest `jar_distributions` and keep it in `builder_jar_distributions` if the builder also needs it.
+  Qualify internal package exports and update the affected distribution structure manifests.
+- **Initialization.** Check whether the existing build-time initialization rule for `com.oracle.svm` applies and is appropriate.
+  Registering a guest module does not change its initialization policy.
+- **Linking and core types.** Register always-present Native Image runtime modules in [`HostedModuleSupport.STANDARD_GUEST_MODULES`](../src/com.oracle.svm.util/src/com/oracle/svm/util/HostedModuleSupport.java); keep optional modules conditional.
+  Registration gives the module default link-at-build-time treatment in fully isolated builds and includes it in core-type classification, which affects runtime class loaders and open-world and layered-image analysis.
+
+Verify module resolution and the intended policies under both non-isolated Host and fully isolated Espresso VMAccess.
+
 ### Builder-To-Guest API Adaptations
 
 Moving code from the builder into guest staging is not only a package rename.
@@ -121,6 +135,37 @@ Code must stop depending on builder-only helpers and compiler-only annotations u
 | Guest code must call a builder-owned service, such as `UserError.abort(...)` | Shared service interface plus a builder implementation installed in the guest as a host proxy | Register the builder implementation in the builder `ImageSingletons`; for a fully isolated guest, use `GuestAccess.createHostProxy(...)` and `GuestImageSingletonSupport.add(...)` under the shared interface key. Host proxies cannot pass a guest `Object[]` directly to a host `Object[]`; accept it as a `JavaConstant` in the host proxy target and convert it with `GuestAccess.asHostObject(...)`. |
 | Static builder helper such as `ImageLayerBuildingSupport` | Guest helper such as `GuestImageLayerBuildingSupport` | Use the guest helper from moved code so the moved code does not depend on builder-only packages. |
 | Builder read of a guest-owned static `RuntimeOptionKey` field | `GuestOptionKey.forField(...)` | Every `getValue()` reads in the guest context, avoiding a stale builder-side copy. |
+| `jdk.vm.ci.meta.JavaKind` | `com.oracle.svm.espresso.classfile.JavaKind` | Use the shaded `ESPRESSO_SVM` enum. Convert JVMCI kinds in the builder, as in [`ObjectLayoutCompilerSupport`](../src/com.oracle.svm.core/src/com/oracle/svm/core/config/ObjectLayoutCompilerSupport.java). |
+
+### Document Extracted Support Classes And Bridges
+
+When you extract functionality into a support class or bridge during migration, document its architectural role in the class Javadoc:
+
+- Explain who calls the class, what it provides or adapts, and which dependency constraint requires the separation.
+- Use the established [context and lifecycle terminology](terminus-terminology.md).
+  Describe builder-side or guest-side roles rather than inventing architectural labels such as "core-side" from package names.
+- Record the verified origin of extracted functionality and why it remains separate from the migrated code.
+  Preserve relevant rationale so future changes can reassess the boundary without reconstructing its history.
+- Describe known conditions for reconsidering the split without promising removal.
+  Call the class temporary only when that lifecycle is established; otherwise explain that it may remain a builder/guest bridge.
+
+### Document Guest-to-Builder Proxy Contracts
+
+[`@GuestInvoked`](../src/com.oracle.svm.util/src/com/oracle/svm/util/GuestInvoked.java) marks a builder-side method called by the guest through a host proxy.
+Use [`@GuestType`](../src/com.oracle.svm.util/src/com/oracle/svm/util/GuestType.java) on guest values represented by builder-side parameters or return values when the expected type is useful.
+`@GuestType` is informational and also applies outside proxy callbacks.
+
+If a class literal becomes inaccessible, use `typeName` rather than adding a dependency just for the hint, for example `@GuestType(typeName = "com.example.guest.Node[]")`.
+Use `Class.getTypeName()` format: dots for packages, `$` for nested classes, and `[]` for arrays.
+
+### Document Temporary Declaration Types
+
+Use [`@ShouldBe`](../src/com.oracle.svm.shared/src/com/oracle/svm/shared/ShouldBe.java) when a declaration temporarily uses a less precise Java type because its intended type is not visible from the migrated module.
+Specify `typeName` using `Class.getTypeName()` format, for example `@ShouldBe(typeName = "com.example.runtime.Node") Object node`, and keep the migration condition and tracking issue nearby.
+Unlike `@GuestType`, which describes the guest type represented by a builder-side value, `@ShouldBe` describes the future source type of the annotated declaration.
+
+Use `@ShouldBe` only when the current value is still an instance of the intended type.
+Do not use it when a temporary API changes the value representation, such as replacing an object with an offset, or combines multiple eventual types or overloads; preserve a precise migration comment instead.
 
 ### Preserve Guest Module Encapsulation
 

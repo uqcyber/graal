@@ -202,6 +202,14 @@
     }
   },
 
+  crema_xint_with_profiles:: self.crema + {
+    local edition = config.graalvm_edition,
+    platform:: "crema-xint-with-profiles-" + edition,
+    environment+: {
+      "JVM_CONFIG": "xint-with-profiles-" + edition
+    }
+  },
+
   crema_pgo:: self.crema + {
     local edition = config.graalvm_edition,
     local mx_env_path = "crema-" + edition + "-pgo",
@@ -239,6 +247,16 @@
       // Build lib:jvm with Ristretto disabled. The interpreter profiling branches are guarded by
       // SubstrateOptions.useRistretto(), so this removes profiling at image build time.
       "JVM_CONFIG": "no-profiling-" + edition,
+      "MX_ENV_PATH": mx_env_path,
+    },
+  },
+
+  crema_preserve_java_base:: self.crema + {
+    local edition = config.graalvm_edition,
+    local mx_env_path = if edition == "ce" then "ce-next-preserve-java-base" else "crema-" + edition + "-preserve-java-base",
+    platform+:: "-preserve-java-base",
+    environment+: {
+      "JVM_CONFIG": "default-" + edition + "-preserve-java-base",
       "MX_ENV_PATH": mx_env_path,
     },
   },

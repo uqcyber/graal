@@ -36,6 +36,7 @@ import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.ClassValueSupport;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.util.OriginalClassProvider;
 import org.graalvm.collections.EconomicSet;
 
 /**
@@ -52,7 +53,7 @@ public final class ClassValueFeature implements InternalFeature {
          * hosted environment into the substrate world.
          */
         Map<ClassValue<?>, Map<Class<?>, Object>> values = ClassValueSupport.getValues();
-        ((FeatureImpl.DuringSetupAccessImpl) access).registerObjectReachableCallback(ClassValue.class, (_, obj, _) -> values.computeIfAbsent(obj, _ -> new ConcurrentHashMap<>()));
+        access.registerObjectReachabilityHandler(obj -> values.computeIfAbsent(obj, _ -> new ConcurrentHashMap<>()), ClassValue.class);
     }
 
     private static final java.lang.reflect.Field IDENTITY = ReflectionUtil.lookupField(ClassValue.class, "identity");
@@ -86,7 +87,7 @@ public final class ClassValueFeature implements InternalFeature {
                  * classValueMap will contain a map of all user ClassValue objects which have a
                  * value for the class.
                  */
-                var clazz = t.getJavaClass();
+                var clazz = OriginalClassProvider.getJavaClass(t);
                 var classValueMap = (Map<?, ?>) CLASS_VALUE_MAP.get(clazz);
                 if (classValueMap == null) {
                     continue;

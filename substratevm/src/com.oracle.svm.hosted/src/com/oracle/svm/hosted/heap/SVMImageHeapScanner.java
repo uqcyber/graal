@@ -24,11 +24,8 @@
  */
 package com.oracle.svm.hosted.heap;
 
-import java.lang.reflect.Executable;
-import java.lang.reflect.Field;
 import java.util.function.Consumer;
 
-import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.graal.pointsto.BigBang;
@@ -48,6 +45,7 @@ import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
 import com.oracle.svm.hosted.reflect.ReflectionHostedSupport;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
+import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
@@ -100,28 +98,33 @@ public class SVMImageHeapScanner extends ImageHeapScanner {
     }
 
     @Override
-    protected void rescanEconomicMap(EconomicMap<?, ?> map, ScanReason reason) {
+    protected void rescanEconomicMap(JavaConstant map, ScanReason reason) {
         super.rescanEconomicMap(map, reason);
         /* Make sure any EconomicMapImpl$CollisionLink objects are scanned. */
-        ResolvedJavaType mapType = GuestAccess.get().lookupType(map.getClass());
+        ResolvedJavaType mapType = GuestAccess.get().getProviders().getMetaAccess().lookupJavaType(map);
         if (economicMapImplType.equals(mapType)) {
-            rescanField(map, economicMapImplEntriesField, reason);
-            rescanField(map, economicMapImplHashArrayField, reason);
-            rescanField(map, economicMapImplTotalEntriesField, reason);
-            rescanField(map, economicMapImplDeletedEntriesField, reason);
+            rescanFieldConstant(map, economicMapImplEntriesField, reason);
+            rescanFieldConstant(map, economicMapImplHashArrayField, reason);
+            rescanFieldConstant(map, economicMapImplTotalEntriesField, reason);
+            rescanFieldConstant(map, economicMapImplDeletedEntriesField, reason);
         }
-
     }
 
     @Override
     protected void onObjectReachable(ImageHeapConstant imageHeapConstant, ScanReason reason, Consumer<ScanReason> onAnalysisModified) {
         super.onObjectReachable(imageHeapConstant, reason, onAnalysisModified);
-        Object object = snippetReflection.asObject(Object.class, imageHeapConstant);
-        if (object instanceof Field field) {
-            reflectionSupport.registerHeapReflectionField(field, reason);
-        } else if (object instanceof Executable executable) {
-            reflectionSupport.registerHeapReflectionExecutable(executable, reason);
-        } else if (object instanceof DynamicHub hub) {
+        JavaConstant hostedObject = imageHeapConstant.getHostedObject();
+        if (hostedObject == null) {
+            return;
+        }
+        ResolvedJavaType type = OriginalClassProvider.getOriginalType(imageHeapConstant.getType());
+        var elements = GuestAccess.elements();
+        if (elements.java_lang_reflect_Field.isAssignableFrom(type)) {
+            reflectionSupport.registerHeapReflectionField(hostedObject, reason);
+        } else if (elements.java_lang_reflect_Executable.isAssignableFrom(type)) {
+            reflectionSupport.registerHeapReflectionExecutable(hostedObject, reason);
+        } else if (snippetReflection.asObject(Object.class, imageHeapConstant) instanceof DynamicHub hub) {
+            // GR-78110: avoid unwrapping the constant once DynamicHub is guest-visible.
             reflectionSupport.registerHeapDynamicHub(hub, reason);
         }
     }

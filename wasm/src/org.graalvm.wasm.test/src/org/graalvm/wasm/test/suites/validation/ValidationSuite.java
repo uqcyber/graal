@@ -128,7 +128,15 @@ public class ValidationSuite extends WasmFileSuite {
                         // # Validation
 
                         // ## Types
-                        // types are universally valid.
+                        // ### Recursive Types
+                        binaryCase(
+                                        "Subtype - forward supertype",
+                                        "Supertypes must be defined before subtypes",
+                                        // (type $root (sub (struct (field (mut i32)))))
+                                        // (type $child (sub $parent (struct (field (mut i32)) (field (mut anyref)) (field (mut i64)))))
+                                        // (type $parent (sub $root (struct (field (mut i32)) (field (mut anyref)))))
+                                        "00 61 73 6D 01 00 00 00 01 1D 01 4E 03 50 00 5F 01 7F 01 50 01 02 5F 03 7F 01 6E 01 7E 01 50 01 00 5F 02 7F 01 6E 01",
+                                        Failure.Type.INVALID),
 
                         // ### Limits
                         // checked individually on memories and tables
@@ -585,6 +593,21 @@ public class ValidationSuite extends WasmFileSuite {
                                         // )
                                         // )
                                         "00 61 73 6D 01 00 00 00 01 04 01 60 00 00 03 02 01 00 0A 04 01 02 00 05 0B 0B",
+                                        Failure.Type.INVALID),
+
+                        // If - multiple else branches
+                        binaryCase("If - multiple else branches",
+                                        "Else branch can only occur once in an if.",
+                                        // (module
+                                        // (func (export "_main")
+                                        // i32.const 1
+                                        // if
+                                        // else
+                                        // else
+                                        // end
+                                        // )
+                                        // )
+                                        "00 61 73 6D 01 00 00 00 01 04 01 60 00 00 03 02 01 00 07 09 01 05 5F 6D 61 69 6E 00 00 0A 0B 01 09 00 41 01 04 40 05 05 0B 0B",
                                         Failure.Type.INVALID),
 
                         // Correct if else

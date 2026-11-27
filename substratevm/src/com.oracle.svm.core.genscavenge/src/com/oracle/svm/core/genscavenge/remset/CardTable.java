@@ -38,7 +38,7 @@ import com.oracle.svm.core.genscavenge.HeapChunk;
 import com.oracle.svm.core.genscavenge.HeapImpl;
 import com.oracle.svm.core.genscavenge.SerialGCOptions;
 import com.oracle.svm.core.genscavenge.graal.BarrierSnippets;
-import com.oracle.svm.core.heap.ObjectReferenceVisitor;
+import com.oracle.svm.guest.staging.core.heap.ObjectReferenceVisitor;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.heap.ReferenceInternals;
 import com.oracle.svm.core.hub.DynamicHub;
@@ -77,7 +77,7 @@ import jdk.graal.compiler.replacements.ReplacementsUtil;
  * with a non-zero value takes more instruction space.</li>
  * </ul>
  */
-final class CardTable {
+public final class CardTable {
     public static final int BYTES_COVERED_BY_ENTRY = 512;
 
     static final byte DIRTY_ENTRY = 0;

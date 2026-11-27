@@ -56,8 +56,10 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
 
+import com.oracle.truffle.api.bytecode.BytecodeVersion;
 import com.oracle.truffle.api.bytecode.test.IllegalLocalExceptionRootNodeBuilder.BytecodeVariant;
 import com.oracle.truffle.api.bytecode.BytecodeConfig;
+import com.oracle.truffle.api.bytecode.BytecodeIndexMode;
 import com.oracle.truffle.api.bytecode.BytecodeLocal;
 import com.oracle.truffle.api.bytecode.BytecodeLocation;
 import com.oracle.truffle.api.bytecode.BytecodeNode;
@@ -725,7 +727,75 @@ public class IllegalLocalExceptionTest extends AbstractInstructionTest {
             b.endReturn();
             b.endRoot();
         });
-        assertNull(root.getCallTarget().call());
+        assertSame(BytecodeNode.INVALID, root.getCallTarget().call());
+    }
+
+    @RunWith(Parameterized.class)
+    public static class BytecodeIndexTests {
+        @Parameters(name = "{0}")
+        public static List<IllegalLocalExceptionWithBytecodeIndexRootNodeBuilder.BytecodeVariant> getVariants() {
+            return IllegalLocalExceptionWithBytecodeIndexRootNodeBuilder.variants();
+        }
+
+        private final IllegalLocalExceptionWithBytecodeIndexRootNodeBuilder.BytecodeVariant variant;
+
+        public BytecodeIndexTests(IllegalLocalExceptionWithBytecodeIndexRootNodeBuilder.BytecodeVariant variant) {
+            this.variant = variant;
+        }
+
+        private IllegalLocalExceptionWithBytecodeIndexRootNode parse(BytecodeParser<IllegalLocalExceptionWithBytecodeIndexRootNodeBuilder> builder) {
+            return variant.create(null, BytecodeConfig.DEFAULT, builder).getNode(0);
+        }
+
+        private static BytecodeIndexIllegalLocalException assertThrowsIllegalLocalException(IllegalLocalExceptionWithBytecodeIndexRootNode root, Object... args) {
+            try {
+                root.getCallTarget().call(args);
+            } catch (BytecodeIndexIllegalLocalException ex) {
+                return ex;
+            }
+            throw new AssertionError("No exception was thrown.");
+        }
+
+        @Test
+        public void testBuiltInLoadBytecodeIndex() {
+            IllegalLocalExceptionWithBytecodeIndexRootNode root = parse(b -> {
+                b.beginRoot();
+                BytecodeLocal x = b.createLocal("x", null);
+                b.beginIfThen();
+                b.emitLoadArgument(0);
+                b.beginStoreLocal(x);
+                b.emitLoadArgument(1);
+                b.endStoreLocal();
+                b.endIfThen();
+                b.beginReturn();
+                b.emitLoadLocal(x);
+                b.endReturn();
+                b.endRoot();
+            });
+            assertEquals(42, root.getCallTarget().call(true, 42));
+            int loadBci = -1;
+            for (Instruction instruction : root.getBytecodeNode().getInstructions()) {
+                if (instruction.getName().startsWith("load.local")) {
+                    loadBci = instruction.getBytecodeIndex();
+                    break;
+                }
+            }
+            assertTrue(loadBci >= 0);
+            assertEquals(loadBci, assertThrowsIllegalLocalException(root, false, 42).getBytecodeIndex());
+        }
+
+        @Test
+        public void testLocalAccessorBytecodeIndexUnavailable() {
+            IllegalLocalExceptionWithBytecodeIndexRootNode root = parse(b -> {
+                b.beginRoot();
+                BytecodeLocal x = b.createLocal("x", null);
+                b.beginReturn();
+                b.emitLocalAccessorGet(x);
+                b.endReturn();
+                b.endRoot();
+            });
+            assertEquals(-1, assertThrowsIllegalLocalException(root).getBytecodeIndex());
+        }
     }
 
     /**
@@ -800,48 +870,50 @@ public class IllegalLocalExceptionTest extends AbstractInstructionTest {
 }
 
 @GenerateBytecodeTestVariants({
-                @Variant(suffix = "Base", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "Base", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 enableMaterializedLocalAccesses = true, //
                                 enableQuickening = false //
                 )),
-                @Variant(suffix = "CustomFactoryMethod", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "CustomFactoryMethod", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyOtherIllegalLocalException.class, //
                                 illegalLocalExceptionFactory = "factoryMethod", //
                                 enableMaterializedLocalAccesses = true, //
                                 enableQuickening = false //
                 )),
-                @Variant(suffix = "Uncached", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "Uncached", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 enableMaterializedLocalAccesses = true, //
                                 enableQuickening = false, //
                                 enableUncachedInterpreter = true //
                 )),
-                @Variant(suffix = "Quickened", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "Quickened", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 enableMaterializedLocalAccesses = true //
                 )),
-                @Variant(suffix = "BE", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "BE", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 enableMaterializedLocalAccesses = true, //
                                 boxingEliminationTypes = {int.class})),
-                @Variant(suffix = "BEWithStoreBci", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "BEWithStoreBci", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 enableMaterializedLocalAccesses = true, //
                                 boxingEliminationTypes = {int.class}, //
-                                storeBytecodeIndexInFrame = true)),
-                @Variant(suffix = "BEUncached", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                                bytecodeIndexMode = BytecodeIndexMode.FRAME)),
+                @Variant(suffix = "BEUncached", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 enableMaterializedLocalAccesses = true, //
                                 enableUncachedInterpreter = true, //
                                 boxingEliminationTypes = {int.class})),
-                @Variant(suffix = "BEUncachedTailCall", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "BEUncachedTailCall", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 enableMaterializedLocalAccesses = true, //
                                 enableUncachedInterpreter = true, //
                                 enableTailCallHandlers = true, //
                                 boxingEliminationTypes = {int.class})),
 })
+// The shared operations also serve variants without a bytecode index frame slot.
+@SuppressWarnings("truffle-interpreted-performance")
 abstract class IllegalLocalExceptionRootNode extends DebugBytecodeRootNode {
     protected IllegalLocalExceptionRootNode(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -968,30 +1040,67 @@ abstract class IllegalLocalExceptionRootNode extends DebugBytecodeRootNode {
 }
 
 @GenerateBytecodeTestVariants({
-                @Variant(suffix = "Base", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "Cached", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
+                                bytecodeIndexMode = BytecodeIndexMode.MANUAL, //
+                                illegalLocalException = BytecodeIndexIllegalLocalException.class, //
+                                enableQuickening = false //
+                )),
+                @Variant(suffix = "Uncached", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
+                                bytecodeIndexMode = BytecodeIndexMode.MANUAL, //
+                                illegalLocalException = BytecodeIndexIllegalLocalException.class, //
+                                enableQuickening = false, //
+                                enableUncachedInterpreter = true //
+                )),
+                @Variant(suffix = "BE", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
+                                bytecodeIndexMode = BytecodeIndexMode.MANUAL, //
+                                illegalLocalException = BytecodeIndexIllegalLocalException.class, //
+                                boxingEliminationTypes = {int.class} //
+                )),
+})
+abstract class IllegalLocalExceptionWithBytecodeIndexRootNode extends DebugBytecodeRootNode {
+    protected IllegalLocalExceptionWithBytecodeIndexRootNode(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
+        super(language, fd);
+    }
+
+    @Operation(storeBytecodeIndex = false)
+    @ConstantOperand(type = LocalAccessor.class)
+    static final class LocalAccessorGet {
+        @Specialization
+        static Object perform(VirtualFrame frame,
+                        LocalAccessor accessor,
+                        @Bind BytecodeNode bytecodeNode) {
+            return accessor.getObject(bytecodeNode, frame);
+        }
+    }
+}
+
+@GenerateBytecodeTestVariants({
+                @Variant(suffix = "Base", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 illegalLocalExceptionFactory = "createWithLocation", //
                                 enableMaterializedLocalAccesses = true, //
                                 enableQuickening = false //
                 )),
-                @Variant(suffix = "Uncached", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "Uncached", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 illegalLocalExceptionFactory = "createWithLocation", //
                                 enableMaterializedLocalAccesses = true, //
                                 enableQuickening = false, //
                                 enableUncachedInterpreter = true //
                 )),
-                @Variant(suffix = "Quickened", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "Quickened", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 illegalLocalExceptionFactory = "createWithLocation", //
                                 enableMaterializedLocalAccesses = true //
                 )),
-                @Variant(suffix = "BE", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "BE", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 illegalLocalException = MyIllegalLocalException.class, //
                                 illegalLocalExceptionFactory = "createWithLocation", //
                                 enableMaterializedLocalAccesses = true, //
                                 boxingEliminationTypes = {int.class})),
 })
+// The shared operations also serve variants without a bytecode index frame slot.
+@SuppressWarnings("truffle-interpreted-performance")
 abstract class IllegalLocalExceptionWithLocationRootNode extends DebugBytecodeRootNode {
     protected IllegalLocalExceptionWithLocationRootNode(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1006,6 +1115,17 @@ abstract class IllegalLocalExceptionWithLocationRootNode extends DebugBytecodeRo
                         @Bind Node location) {
             return interpreter.getCallTarget().call(location, frame);
         }
+    }
+}
+
+@SuppressWarnings("serial")
+final class BytecodeIndexIllegalLocalException extends AbstractTruffleException {
+    private BytecodeIndexIllegalLocalException(int bytecodeIndex) {
+        super(null, null, UNLIMITED_STACK_TRACE, null, bytecodeIndex);
+    }
+
+    public static BytecodeIndexIllegalLocalException create(int bytecodeIndex) {
+        return new BytecodeIndexIllegalLocalException(bytecodeIndex);
     }
 }
 
@@ -1044,7 +1164,7 @@ final class MyOtherIllegalLocalException extends MyIllegalLocalException {
 }
 
 @ExpectError("The defaultLocalValue and illegalLocalException attributes are mutually exclusive.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, defaultLocalValue = "null", illegalLocalException = MyIllegalLocalException.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, defaultLocalValue = "null", illegalLocalException = MyIllegalLocalException.class)
 abstract class MutuallyExclusiveLocalSettings extends RootNode implements BytecodeRootNode {
     protected MutuallyExclusiveLocalSettings(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1052,7 +1172,7 @@ abstract class MutuallyExclusiveLocalSettings extends RootNode implements Byteco
 }
 
 @ExpectError("The defaultLocalValue and illegalLocalException attributes are mutually exclusive.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, defaultLocalValue = "null", illegalLocalException = MyOtherIllegalLocalException.class, illegalLocalExceptionFactory = "factoryMethod")
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, defaultLocalValue = "null", illegalLocalException = MyOtherIllegalLocalException.class, illegalLocalExceptionFactory = "factoryMethod")
 abstract class MutuallyExclusiveLocalSettings2 extends RootNode implements BytecodeRootNode {
     protected MutuallyExclusiveLocalSettings2(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1060,7 +1180,7 @@ abstract class MutuallyExclusiveLocalSettings2 extends RootNode implements Bytec
 }
 
 @ExpectError("NoCreateException must declare exactly one static 'create' method for instantiating exceptions.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = NoCreateException.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = NoCreateException.class)
 abstract class ExceptionTypeNoCreate extends RootNode implements BytecodeRootNode {
     protected ExceptionTypeNoCreate(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1073,7 +1193,7 @@ class NoCreateException extends AbstractTruffleException {
 }
 
 @ExpectError("AmbiguousCreateException must declare exactly one static 'create' method for instantiating exceptions.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = AmbiguousCreateException.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = AmbiguousCreateException.class)
 abstract class ExceptionTypeAmbiguousCreate extends RootNode implements BytecodeRootNode {
     protected ExceptionTypeAmbiguousCreate(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1092,7 +1212,7 @@ class AmbiguousCreateException extends AbstractTruffleException {
 }
 
 @ExpectError("PrivateCreateException's static 'create' method must be visible from this node.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = PrivateCreateException.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = PrivateCreateException.class)
 abstract class ExceptionTypePrivateCreate extends RootNode implements BytecodeRootNode {
     protected ExceptionTypePrivateCreate(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1108,7 +1228,7 @@ class PrivateCreateException extends AbstractTruffleException {
 }
 
 @ExpectError("BadCreateReturnTypeException's static 'create' method must return an instance of type BadCreateReturnTypeException.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = BadCreateReturnTypeException.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = BadCreateReturnTypeException.class)
 abstract class ExceptionTypeBadCreateReturnType extends RootNode implements BytecodeRootNode {
     protected ExceptionTypeBadCreateReturnType(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1123,7 +1243,7 @@ class BadCreateReturnTypeException extends AbstractTruffleException {
 }
 
 @ExpectError("UnsupportedCreateParameterException's static 'create' method declares an unsupported String parameter. Supported parameter types: %")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = UnsupportedCreateParameterException.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = UnsupportedCreateParameterException.class)
 abstract class ExceptionTypeUnsupportedCreateParameter extends RootNode implements BytecodeRootNode {
     protected ExceptionTypeUnsupportedCreateParameter(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1138,7 +1258,7 @@ class UnsupportedCreateParameterException extends AbstractTruffleException {
 }
 
 @ExpectError("RepeatedCreateParameterException's static 'create' method cannot declare more than one Node parameter.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = RepeatedCreateParameterException.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = RepeatedCreateParameterException.class)
 abstract class ExceptionTypeRepeatedCreateParameter extends RootNode implements BytecodeRootNode {
     protected ExceptionTypeRepeatedCreateParameter(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1152,8 +1272,23 @@ class RepeatedCreateParameterException extends AbstractTruffleException {
     }
 }
 
+@ExpectError("RepeatedBytecodeIndexParameterException's static 'create' method cannot declare more than one int parameter.%")
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = RepeatedBytecodeIndexParameterException.class)
+abstract class ExceptionTypeRepeatedBytecodeIndexParameter extends RootNode implements BytecodeRootNode {
+    protected ExceptionTypeRepeatedBytecodeIndexParameter(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
+        super(language, fd);
+    }
+}
+
+@SuppressWarnings("serial")
+class RepeatedBytecodeIndexParameterException extends AbstractTruffleException {
+    public static RepeatedBytecodeIndexParameterException create(@SuppressWarnings("unused") int bci1, @SuppressWarnings("unused") int bci2) {
+        return null;
+    }
+}
+
 @ExpectError("BindsLocationException's static 'create' method cannot declare a BytecodeLocation parameter because some custom operation uses a local accessor%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = BindsLocationException.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = BindsLocationException.class)
 abstract class ExceptionBindsLocationLocalAccessor extends RootNode implements BytecodeRootNode {
     protected ExceptionBindsLocationLocalAccessor(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1169,7 +1304,7 @@ abstract class ExceptionBindsLocationLocalAccessor extends RootNode implements B
 }
 
 @ExpectError("BindsLocationException's static 'create' method cannot declare a BytecodeLocation parameter because some custom operation uses a local accessor%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = BindsLocationException.class)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = BindsLocationException.class)
 abstract class ExceptionBindsLocationLocalRangeAccessor extends RootNode implements BytecodeRootNode {
     protected ExceptionBindsLocationLocalRangeAccessor(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1185,7 +1320,7 @@ abstract class ExceptionBindsLocationLocalRangeAccessor extends RootNode impleme
 }
 
 @ExpectError("Illegal local exceptions cannot be used because some custom operation uses a MaterializedLocalAccessor%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = BindsLocationException.class, illegalLocalExceptionFactory = "create", enableMaterializedLocalAccesses = true)
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = BindsLocationException.class, illegalLocalExceptionFactory = "create", enableMaterializedLocalAccesses = true)
 abstract class RootNodeUsesMaterializedLocalAccessor extends RootNode implements BytecodeRootNode {
     protected RootNodeUsesMaterializedLocalAccessor(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1208,7 +1343,7 @@ class BindsLocationException extends AbstractTruffleException {
 }
 
 @ExpectError("The illegalLocalExceptionFactory attribute can only be used if illegalLocalException is specified.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalExceptionFactory = "factoryMethod")
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalExceptionFactory = "factoryMethod")
 abstract class BadFactoryMethodUsage extends RootNode implements BytecodeRootNode {
     protected BadFactoryMethodUsage(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1216,7 +1351,7 @@ abstract class BadFactoryMethodUsage extends RootNode implements BytecodeRootNod
 }
 
 @ExpectError("The illegalLocalExceptionFactory attribute cannot be empty.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = InvalidFactoryMethodException.class, illegalLocalExceptionFactory = "")
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = InvalidFactoryMethodException.class, illegalLocalExceptionFactory = "")
 abstract class EmptyFactoryMethod extends RootNode implements BytecodeRootNode {
     protected EmptyFactoryMethod(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1224,7 +1359,7 @@ abstract class EmptyFactoryMethod extends RootNode implements BytecodeRootNode {
 }
 
 @ExpectError("The illegalLocalExceptionFactory attribute must be a valid method name.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = InvalidFactoryMethodException.class, illegalLocalExceptionFactory = "123foo")
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = InvalidFactoryMethodException.class, illegalLocalExceptionFactory = "123foo")
 abstract class InvalidFactoryMethodName extends RootNode implements BytecodeRootNode {
     protected InvalidFactoryMethodName(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);
@@ -1232,7 +1367,7 @@ abstract class InvalidFactoryMethodName extends RootNode implements BytecodeRoot
 }
 
 @ExpectError("InvalidFactoryMethodException must declare exactly one static 'factoryMethod' method for instantiating exceptions.%")
-@GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = InvalidFactoryMethodException.class, illegalLocalExceptionFactory = "factoryMethod")
+@GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, illegalLocalException = InvalidFactoryMethodException.class, illegalLocalExceptionFactory = "factoryMethod")
 abstract class NotFoundFactoryMethod extends RootNode implements BytecodeRootNode {
     protected NotFoundFactoryMethod(BytecodeDSLTestLanguage language, FrameDescriptor fd) {
         super(language, fd);

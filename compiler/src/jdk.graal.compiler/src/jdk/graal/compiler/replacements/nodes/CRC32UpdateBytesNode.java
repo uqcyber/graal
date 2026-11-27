@@ -101,13 +101,18 @@ public final class CRC32UpdateBytesNode extends PureFunctionStubIntrinsicNode {
     }
 
     @Override
+    public boolean needsExplicitZeroExtension(Architecture arch) {
+        return !(arch instanceof AMD64);
+    }
+
+    @Override
     public void emitIntrinsic(NodeLIRBuilderTool gen) {
         var result = gen.getLIRGeneratorTool().emitCRC32UpdateBytes(getRuntimeCheckedCPUFeatures(), gen.operand(crc), gen.operand(bufferAddress), gen.operand(length));
         gen.setResult(this, result);
     }
 
     @NodeIntrinsic
-    @GenerateStub(name = "updateBytesCRC32", minimumCPUFeaturesAMD64 = "minFeaturesAMD64")
+    @GenerateStub(name = "updateBytesCRC32", minimumCPUFeaturesAMD64 = "minFeaturesAMD64", runtimeCPUFeaturesAMD64 = "maxFeaturesAMD64")
     public static native int update(int crc, Pointer bufferAddress, int length);
 
     @NodeIntrinsic

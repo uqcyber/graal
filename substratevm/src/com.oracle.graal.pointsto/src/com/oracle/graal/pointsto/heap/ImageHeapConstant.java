@@ -38,6 +38,7 @@ import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.util.AnalysisError;
 import com.oracle.graal.pointsto.util.AnalysisFuture;
 import com.oracle.svm.shared.util.ReflectionUtil;
+import com.oracle.svm.util.GuestAccess;
 
 import jdk.graal.compiler.core.common.type.CompressibleConstant;
 import jdk.vm.ci.meta.JavaConstant;
@@ -54,9 +55,9 @@ import jdk.vm.ci.meta.VMConstant;
  * {@link #ensureReaderInstalled()}, and be traversed by {@link HeapSnapshotVerifier} without being
  * marked reachable by {@link ImageHeapScanner#markReachable}. Marking it reachable causes
  * {@link ImageHeapScanner#onObjectReachable} to validate the hosted object, execute its reachability
- * callbacks, register its type with the analysis, and follow its contents.
- * Consequently, a materialized snapshot for which {@link #isReachable()} is {@code false} can still
- * be linked from the verified object graph and included in the image heap.
+ * callbacks, register its type with the analysis, and follow its contents. Speculative snapshots may
+ * remain unreachable, but every object retained by a final runtime-heap edge must be marked
+ * reachable.
  */
 @Platforms(Platform.HOSTED_ONLY.class)
 public abstract class ImageHeapConstant implements JavaConstant, TypedConstant, CompressibleConstant, VMConstant {
@@ -316,7 +317,7 @@ public abstract class ImageHeapConstant implements JavaConstant, TypedConstant, 
 
     @Override
     public String toValueString() {
-        if (constantData.type.getJavaClass() == String.class && constantData.hostedObject != null) {
+        if (constantData.type.getWrapped().equals(GuestAccess.elements().java_lang_String) && constantData.hostedObject != null) {
             String valueString = constantData.hostedObject.toValueString();
             /* HotSpotObjectConstantImpl.toValueString() puts the string between quotes. */
             return valueString.substring(1, valueString.length() - 1);

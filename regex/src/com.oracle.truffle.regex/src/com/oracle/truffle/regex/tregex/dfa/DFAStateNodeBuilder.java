@@ -53,7 +53,7 @@ import com.oracle.truffle.regex.tregex.nfa.NFA;
 import com.oracle.truffle.regex.tregex.nfa.NFAState;
 import com.oracle.truffle.regex.tregex.nfa.NFAStateTransition;
 import com.oracle.truffle.regex.tregex.nodes.dfa.DFACaptureGroupLazyTransition;
-import com.oracle.truffle.regex.tregex.nodes.dfa.TraceFinderDFAStateNode;
+import com.oracle.truffle.regex.tregex.nodes.dfa.TraceFinderDFAState;
 import com.oracle.truffle.regex.tregex.string.Encoding;
 import com.oracle.truffle.regex.tregex.util.DebugUtil;
 import com.oracle.truffle.regex.tregex.util.json.Json;
@@ -78,9 +78,10 @@ public final class DFAStateNodeBuilder extends BasicState<DFAStateNodeBuilder, D
     private NFAStateTransition unAnchoredFinalStateTransition;
     private long[][] anchoredFinalConstraints = null;
     private long[][] unAnchoredFinalConstraints = null;
-    private byte preCalculatedUnAnchoredResult = TraceFinderDFAStateNode.NO_PRE_CALC_RESULT;
-    private byte preCalculatedAnchoredResult = TraceFinderDFAStateNode.NO_PRE_CALC_RESULT;
-    private DFACaptureGroupLazyTransition[] lazyTransitions;
+    private byte preCalculatedUnAnchoredResult = TraceFinderDFAState.NO_PRE_CALC_RESULT;
+    private byte preCalculatedAnchoredResult = TraceFinderDFAState.NO_PRE_CALC_RESULT;
+    /** Array of references to {@link DFACaptureGroupLazyTransition} records. */
+    private int[] lazyTransitionRefs;
 
     DFAStateNodeBuilder(int id, TransitionSet<NFA, NFAState, NFAStateTransition> nfaStateSet, boolean isBackwardPrefixState, boolean isInitialState, boolean forward, boolean prioritySensitive) {
         super(id, EMPTY_TRANSITIONS);
@@ -153,12 +154,12 @@ public final class DFAStateNodeBuilder extends BasicState<DFAStateNodeBuilder, D
         return getFlag(FLAG_REACHABLE);
     }
 
-    public void setLazyTransitions(DFACaptureGroupLazyTransition[] lazyTransitions) {
-        this.lazyTransitions = lazyTransitions;
+    public void setLazyTransitionRefs(int[] lazyTransitionRefs) {
+        this.lazyTransitionRefs = lazyTransitionRefs;
     }
 
-    public DFACaptureGroupLazyTransition[] getLazyTransitions() {
-        return lazyTransitions;
+    public int[] getLazyTransitionRefs() {
+        return lazyTransitionRefs;
     }
 
     @Override
@@ -241,7 +242,7 @@ public final class DFAStateNodeBuilder extends BasicState<DFAStateNodeBuilder, D
 
     void updatePreCalcUnAnchoredResult(int newResult) {
         if (newResult >= 0) {
-            if (preCalculatedUnAnchoredResult == TraceFinderDFAStateNode.NO_PRE_CALC_RESULT || Byte.toUnsignedInt(preCalculatedUnAnchoredResult) > newResult) {
+            if (preCalculatedUnAnchoredResult == TraceFinderDFAState.NO_PRE_CALC_RESULT || Byte.toUnsignedInt(preCalculatedUnAnchoredResult) > newResult) {
                 preCalculatedUnAnchoredResult = (byte) newResult;
             }
         }
@@ -249,15 +250,15 @@ public final class DFAStateNodeBuilder extends BasicState<DFAStateNodeBuilder, D
 
     private void updatePreCalcAnchoredResult(int newResult) {
         if (newResult >= 0) {
-            if (preCalculatedAnchoredResult == TraceFinderDFAStateNode.NO_PRE_CALC_RESULT || Byte.toUnsignedInt(preCalculatedAnchoredResult) > newResult) {
+            if (preCalculatedAnchoredResult == TraceFinderDFAState.NO_PRE_CALC_RESULT || Byte.toUnsignedInt(preCalculatedAnchoredResult) > newResult) {
                 preCalculatedAnchoredResult = (byte) newResult;
             }
         }
     }
 
     public void clearPreCalculatedResults() {
-        preCalculatedUnAnchoredResult = TraceFinderDFAStateNode.NO_PRE_CALC_RESULT;
-        preCalculatedAnchoredResult = TraceFinderDFAStateNode.NO_PRE_CALC_RESULT;
+        preCalculatedUnAnchoredResult = TraceFinderDFAState.NO_PRE_CALC_RESULT;
+        preCalculatedAnchoredResult = TraceFinderDFAState.NO_PRE_CALC_RESULT;
     }
 
     public DFAStateNodeBuilder updateFinalStateData(DFAGenerator dfaGenerator) {
@@ -361,10 +362,10 @@ public final class DFAStateNodeBuilder extends BasicState<DFAStateNodeBuilder, D
 
     public String stateSetToString() {
         StringBuilder sb = new StringBuilder(nfaTransitionSet.toString());
-        if (preCalculatedUnAnchoredResult != TraceFinderDFAStateNode.NO_PRE_CALC_RESULT) {
+        if (preCalculatedUnAnchoredResult != TraceFinderDFAState.NO_PRE_CALC_RESULT) {
             sb.append("_r").append(preCalculatedUnAnchoredResult);
         }
-        if (preCalculatedAnchoredResult != TraceFinderDFAStateNode.NO_PRE_CALC_RESULT) {
+        if (preCalculatedAnchoredResult != TraceFinderDFAState.NO_PRE_CALC_RESULT) {
             sb.append("_rA").append(preCalculatedAnchoredResult);
         }
         return sb.toString();

@@ -34,12 +34,13 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.impl.Word;
 
-import com.oracle.svm.core.IsolateArgumentAccess;
-import com.oracle.svm.core.IsolateArgumentParser;
-import com.oracle.svm.core.IsolateArguments;
+import com.oracle.svm.guest.staging.IsolateArgumentAccess;
+import com.oracle.svm.guest.staging.IsolateArgumentParser;
+import com.oracle.svm.guest.staging.IsolateArguments;
+import com.oracle.svm.guest.staging.SubstrateGuestOptions;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.VMInspectionOptions;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.nmt.NativeMemoryTracking;
 import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.os.AuxiliaryImageProvider;
@@ -61,10 +62,10 @@ public abstract class AbstractAuxiliaryImageProvider implements AuxiliaryImagePr
     public int initializeHeapAddressRange(IsolateArguments arguments, Pointer reservedBegin, UnsignedWord reservedSize, Pointer imageHeapEnd, WordPointer collectedHeapBeginOut) {
         UnsignedWord pageSize = VirtualMemoryProvider.get().getGranularity();
 
-        CCharPointer auxImagePath = IsolateArgumentAccess.readCCharPointer(arguments, IsolateArgumentParser.getOptionIndex(SubstrateOptions.AuxiliaryImagePathIsolateArgument));
+        CCharPointer auxImagePath = IsolateArgumentAccess.readCCharPointer(arguments, IsolateArgumentParser.getOptionIndex(SubstrateGuestOptions.AuxiliaryImagePathIsolateArgument));
 
         /* Determine how much of the address space should be reserved for auxiliary images. */
-        UnsignedWord auxImageReserved = unsigned(IsolateArgumentAccess.readLong(arguments, IsolateArgumentParser.getOptionIndex(SubstrateOptions.AuxiliaryImageBytesIsolateArgument)));
+        UnsignedWord auxImageReserved = unsigned(IsolateArgumentAccess.readLong(arguments, IsolateArgumentParser.getOptionIndex(SubstrateGuestOptions.AuxiliaryImageBytesIsolateArgument)));
         if (auxImageReserved.equal(Word.zero())) {
             auxImageReserved = Word.unsigned(SubstrateOptions.ReservedAuxiliaryImageBytes.getValue());
         }

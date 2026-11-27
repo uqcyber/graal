@@ -57,13 +57,11 @@ import com.oracle.svm.hosted.c.NativeLibraries;
 import com.oracle.svm.hosted.c.codegen.CCompilerInvoker;
 import com.oracle.svm.hosted.c.libc.HostedLibCBase;
 import com.oracle.svm.hosted.imagelayer.HostedDynamicLayerInfo;
-import com.oracle.svm.hosted.jdk.JNIRegistrationSupport;
-import com.oracle.svm.shared.option.AccumulatingLocatableMultiOptionValue;
+import com.oracle.svm.hosted.jni.JNILibraryLinkagePlan;
 import com.oracle.svm.shared.option.HostedOptionKey;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.options.Option;
-import jdk.graal.compiler.options.OptionStability;
 import jdk.graal.compiler.options.OptionType;
 
 public abstract class CCLinkerInvocation implements LinkerInvocation {
@@ -76,10 +74,6 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
 
     public static class Options {
         private static final Pattern ELF_SYMBOL_VERSION_PATTERN = Pattern.compile("[A-Za-z_][A-Za-z0-9_.]*");
-
-        @Option(help = "Pass the provided raw option that will be appended to the linker command to produce the final binary. The possible options are platform specific and passed through without any validation.", //
-                        stability = OptionStability.STABLE)//
-        public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> NativeLinkerOption = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.build());
 
         @Option(help = "Assign the specified ELF symbol version to all exported image symbols.", type = OptionType.Expert)//
         public static final HostedOptionKey<String> ExportedSymbolsVersion = new HostedOptionKey<>(null, Options::validateExportedSymbolsVersion);
@@ -267,7 +261,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
     }
 
     protected List<String> getNativeLinkerOptions() {
-        return Stream.of(nativeLinkerOptions, Options.NativeLinkerOption.getValue().values())
+        return Stream.of(nativeLinkerOptions, SubstrateOptions.NativeLinkerOption.getValue().values())
                         .flatMap(Collection::stream)
                         .collect(Collectors.toList());
     }
@@ -352,7 +346,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
                 }
                 exportedSymbols.append("{\n");
                 /* Only exported symbols are global ... */
-                Set<String> globalSymbols = Stream.concat(getImageSymbols(true).stream(), JNIRegistrationSupport.getShimLibrarySymbols()).collect(Collectors.toSet());
+                Set<String> globalSymbols = Stream.concat(getImageSymbols(true).stream(), JNILibraryLinkagePlan.getShimLibrarySymbols()).collect(Collectors.toSet());
                 if (!globalSymbols.isEmpty()) {
                     exportedSymbols.append("global:\n");
                     globalSymbols.forEach(symbol -> exportedSymbols.append('\"').append(symbol).append("\";\n"));
@@ -485,7 +479,7 @@ public abstract class CCLinkerInvocation implements LinkerInvocation {
              */
             try {
                 Path exportedSymbolsPath = nativeLibs.tempDirectory.resolve("exported_symbols.list");
-                Set<String> globalSymbols = Stream.concat(getImageSymbols(true).stream(), JNIRegistrationSupport.getShimLibrarySymbols().map("_"::concat)).collect(Collectors.toSet());
+                Set<String> globalSymbols = Stream.concat(getImageSymbols(true).stream(), JNILibraryLinkagePlan.getShimLibrarySymbols().map("_"::concat)).collect(Collectors.toSet());
                 Files.write(exportedSymbolsPath, globalSymbols);
                 additionalPreOptions.add("-Wl,-exported_symbols_list");
                 additionalPreOptions.add("-Wl," + exportedSymbolsPath.toAbsolutePath());

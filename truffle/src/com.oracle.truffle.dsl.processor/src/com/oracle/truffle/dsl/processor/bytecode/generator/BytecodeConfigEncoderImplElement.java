@@ -49,8 +49,8 @@ import java.util.Set;
 
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.type.TypeMirror;
 
-import com.oracle.truffle.dsl.processor.SuppressFBWarnings;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeConfigEncoding;
 import com.oracle.truffle.dsl.processor.bytecode.model.CustomOperationModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.OperationModel;
@@ -79,25 +79,34 @@ final class BytecodeConfigEncoderImplElement extends AbstractElement {
         configEncoderVar.createInitBuilder().startNew(this.asType()).end();
 
         this.add(createEncodeInstrumentation());
-        this.add(createDecode1());
-        this.add(createDecode2());
-        this.add(createEncodeTags());
+        this.add(createNormalizeEncoding1());
+        this.add(createNormalizeEncoding2());
+        this.add(createNormalizeEncoding());
+        this.add(createDecode());
+        this.addOptional(createGetTagMask());
+        this.addOptional(createEncodeTags());
         this.add(createEncodeTag());
+
     }
 
-    private CodeExecutableElement createDecode1() {
-        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, Modifier.STATIC), type(long.class), "decode");
+    /**
+     * Static method to normalize a BytecodeConfig to long.
+     */
+    private CodeExecutableElement createNormalizeEncoding1() {
+        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, Modifier.STATIC), type(long.class), "normalizeEncoding");
         ex.addParameter(new CodeVariableElement(types.BytecodeConfig, "config"));
         CodeTreeBuilder b = ex.createBuilder();
         b.startReturn();
-        b.startCall("decode").string("getEncoder(config)").string("getEncoding(config)").end();
+        b.startCall("normalizeEncoding").string("getEncoder(config)").string("getEncoding(config)").end();
         b.end();
         return ex;
     }
 
-    @SuppressFBWarnings(value = "BSHIFT_WRONG_ADD_PRIORITY", justification = "the shift priority is expected. FindBugs false positive.")
-    private CodeExecutableElement createDecode2() {
-        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, Modifier.STATIC), type(long.class), "decode");
+    /**
+     * Static method to normalize an (encoder, encoding) pair to long.
+     */
+    private CodeExecutableElement createNormalizeEncoding2() {
+        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, Modifier.STATIC), type(long.class), "normalizeEncoding");
         ex.addParameter(new CodeVariableElement(types.BytecodeConfigEncoder, "encoder"));
         ex.addParameter(new CodeVariableElement(type(long.class), "encoding"));
         CodeTreeBuilder b = ex.createBuilder();
@@ -107,7 +116,25 @@ final class BytecodeConfigEncoderImplElement extends AbstractElement {
         b.startThrow().startNew(type(IllegalArgumentException.class)).doubleQuote("Encoded config is not compatible with this bytecode node.").end().end();
         b.end();
 
+        b.startReturn().startCall("INSTANCE", "normalizeEncoding").string("encoding").end(2);
+        return ex;
+    }
+
+    /**
+     * Instance method override to normalize the given encoding by masking off unused bits.
+     */
+    private CodeExecutableElement createNormalizeEncoding() {
+        CodeExecutableElement ex = GeneratorUtils.override(types.BytecodeConfigEncoder, "normalizeEncoding", new String[]{"encoding"});
+        CodeTreeBuilder b = ex.createBuilder();
         b.startReturn().string("(encoding & 0x" + Long.toHexString(encoding.completeBitsMask()) + "L)").end();
+        return ex;
+    }
+
+    private CodeExecutableElement createDecode() {
+        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, STATIC), types.BytecodeConfig, "decode");
+        ex.addParameter(new CodeVariableElement(type(long.class), "encoding"));
+        CodeTreeBuilder b = ex.createBuilder();
+        b.startReturn().startCall("decode").staticReference(asType(), "INSTANCE").string("encoding").end(2);
         return ex;
     }
 
@@ -145,19 +172,38 @@ final class BytecodeConfigEncoderImplElement extends AbstractElement {
         return encodeInstrumentation;
     }
 
-    private CodeExecutableElement createEncodeTag() {
-        CodeExecutableElement encodeTag = GeneratorUtils.override(types.BytecodeConfigEncoder, "encodeTag", new String[]{"c"});
-        CodeTreeBuilder b = encodeTag.createBuilder();
+    private CodeExecutableElement createGetTagMask() {
+        if (!model().enableTagInstrumentation) {
+            return null;
+        }
+        CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, STATIC), type(int.class), "getTagMask");
+        ex.addParameter(new CodeVariableElement(type(Class.class), "c"));
 
+        CodeTreeBuilder b = ex.createBuilder();
         if (parent.model.getProvidedTags().isEmpty()) {
             parent.createFailInvalidTag(b, "c");
         } else {
-            b.startReturn().string("((long) CLASS_TO_TAG_MASK.get(c)) << " + encoding.tagShift()).end().build();
+            boolean elseIf = false;
+            int index = 0;
+            for (TypeMirror tag : parent.model.getProvidedTags()) {
+                elseIf = b.startIf(elseIf);
+                b.string("c == ").typeLiteral(tag);
+                b.end().startBlock();
+                b.startReturn().string("1 << ").string(Integer.toString(index)).end();
+                b.end();
+                index++;
+            }
+            b.startElseBlock();
+            parent.createFailInvalidTag(b, "c");
+            b.end();
         }
-        return encodeTag;
+        return ex;
     }
 
     private CodeExecutableElement createEncodeTags() {
+        if (!model().enableTagInstrumentation) {
+            return null;
+        }
         CodeExecutableElement ex = new CodeExecutableElement(Set.of(PRIVATE, STATIC), type(int.class), "encodeTags");
         ex.addParameter(new CodeVariableElement(arrayOf(type(Class.class)), "tags"));
         ex.setVarArgs(true);
@@ -174,11 +220,28 @@ final class BytecodeConfigEncoderImplElement extends AbstractElement {
         } else {
             b.statement("int tagMask = 0");
             b.startFor().string("Class<?> tag : tags").end().startBlock();
-            b.statement("tagMask |= CLASS_TO_TAG_MASK.get(tag)");
+            b.statement("tagMask |= getTagMask(tag)");
             b.end();
             b.startReturn().string("tagMask").end();
         }
 
+        return ex;
+    }
+
+    private CodeExecutableElement createEncodeTag() {
+        CodeExecutableElement ex = GeneratorUtils.override(types.BytecodeConfigEncoder, "encodeTag", new String[]{"c"});
+        CodeTreeBuilder b = ex.createBuilder();
+
+        if (!model().enableTagInstrumentation) {
+            b.startThrow().startNew(type(IllegalArgumentException.class)).doubleQuote(
+                            "Tag instrumentation is not enabled.").end().end();
+            return ex;
+        }
+
+        b.startReturn();
+        b.startParentheses().startCall("getTagMask").string("c").end().string(" & 0xffffffffL").end();
+        b.string(" << ").string(Integer.toString(encoding.tagShift()));
+        b.end();
         return ex;
     }
 
@@ -224,6 +287,14 @@ final class BytecodeConfigEncoderImplElement extends AbstractElement {
             throw new AssertionError("Tried to generate code to check instruction tracing bit, but instruction tracing is not enabled.");
         }
         return String.format("(%s & 0x%s) != 0", instrumentations, Integer.toHexString(encoding.traceInstructionMask()));
+    }
+
+    public String checkInstructionTracingBit(String encoded) {
+        if (!parent.model.enableInstructionTracing) {
+            throw new AssertionError("Tried to generate code to check instruction tracing bit, but instruction tracing is not enabled.");
+        }
+        long mask = (long) encoding.traceInstructionMask() << encoding.instrumentationShift();
+        return String.format("(%s & 0x%sL) != 0", encoded, Long.toHexString(mask));
     }
 
     public String checkInstrumentationEnabled(String instrumentations, OperationModel instrumentation) {

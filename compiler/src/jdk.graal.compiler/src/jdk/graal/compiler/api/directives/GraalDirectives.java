@@ -254,6 +254,39 @@ public final class GraalDirectives {
     }
 
     /**
+     * Declares an impossible execution path. The compiler may propagate this marker backward and
+     * discard preceding operations, including operations that could throw or deoptimize. Exceptions
+     * and side effects from discarded operations are not guaranteed to occur. Unlike deoptimization,
+     * this directive does not resume Java execution or reconstruct execution state.
+     * For example:
+     *
+     * <pre>{@code
+     * possiblyThrowingCall();
+     * GraalDirectives.unreachable();
+     * }</pre>
+     *
+     * The compiler may eliminate {@code possiblyThrowingCall()}, including any exception it would
+     * have thrown and any side effects it would have performed.
+     * <p>
+     * This is not a runtime error check. It must not be used to express a normal continuation that
+     * is unreachable only because a preceding operation always throws. When executed without
+     * intrinsification, this method throws an {@link AssertionError} to diagnose the unreachable
+     * path. An intrinsified invocation emits a hardware halt if it survives compilation.
+     */
+    public static void unreachable() {
+        throw new AssertionError("Unreachable execution path");
+    }
+
+    /**
+     * Returns a {@code long} whose value must not be observed. When used as an additional return
+     * value, the compiler may leave the corresponding fixed return register unchanged. The
+     * result has no input dependency. In interpreted execution this method returns zero.
+     */
+    public static long unconstrainedValue() {
+        return 0;
+    }
+
+    /**
      * Injects a probability for the given condition into the profiling information of a branch
      * instruction. The probability must be a value between 0.0 and 1.0 (inclusive). This directive
      * should only be used for the condition of an if statement. The parameter condition should also
@@ -956,5 +989,22 @@ public final class GraalDirectives {
      */
     public static int markThreadedSwitch(int input) {
         return input;
+    }
+
+    /**
+     * Directive for the compiler to fall back to the bytecode interpreter at this point.
+     *
+     * Deoptimizes and invalidates the compiled code at this bytecode location only while the
+     * associated speculation has not failed. The first deoptimization records a failed speculation
+     * in the compiled method's speculation log; subsequent compilations using that log omit the
+     * deoptimization at this location. The speculation identifies the method and bytecode position,
+     * so distinct bytecode locations fail independently. Inline copies of the same location share
+     * failures within the compilation root's speculation log. In interpreted code, this directive has
+     * no effect.
+     *
+     * Unlike {@link #deoptimizeAndInvalidate()}, this directive requires a speculation log during
+     * compilation.
+     */
+    public static void speculativeDeoptimizeAndInvalidate() {
     }
 }

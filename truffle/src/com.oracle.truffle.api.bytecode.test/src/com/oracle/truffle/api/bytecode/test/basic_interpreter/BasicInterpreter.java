@@ -54,11 +54,13 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.bytecode.BytecodeConfig;
+import com.oracle.truffle.api.bytecode.BytecodeIndexMode;
 import com.oracle.truffle.api.bytecode.BytecodeFrame;
 import com.oracle.truffle.api.bytecode.BytecodeLocation;
 import com.oracle.truffle.api.bytecode.BytecodeNode;
 import com.oracle.truffle.api.bytecode.BytecodeRootNode;
 import com.oracle.truffle.api.bytecode.BytecodeTier;
+import com.oracle.truffle.api.bytecode.BytecodeVersion;
 import com.oracle.truffle.api.bytecode.ConstantOperand;
 import com.oracle.truffle.api.bytecode.ContinuationResult;
 import com.oracle.truffle.api.bytecode.ContinuationRootNode;
@@ -72,6 +74,7 @@ import com.oracle.truffle.api.bytecode.LocalAccessor;
 import com.oracle.truffle.api.bytecode.LocalRangeAccessor;
 import com.oracle.truffle.api.bytecode.MaterializedLocalAccessor;
 import com.oracle.truffle.api.bytecode.Operation;
+import com.oracle.truffle.api.bytecode.OperationProxy;
 import com.oracle.truffle.api.bytecode.ShortCircuitOperation;
 import com.oracle.truffle.api.bytecode.ShortCircuitOperation.Operator;
 import com.oracle.truffle.api.bytecode.Variadic;
@@ -108,7 +111,7 @@ import com.oracle.truffle.api.source.SourceSection;
  * test coverage.
  */
 @GenerateBytecodeTestVariants({
-                @Variant(suffix = "Base", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "Base", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -118,7 +121,7 @@ import com.oracle.truffle.api.source.SourceSection;
                                 enableInstructionRewriting = false, //
                                 allowUnsafe = false, //
                                 variadicStackLimit = "4")),
-                @Variant(suffix = "Unsafe", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "Unsafe", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -126,7 +129,7 @@ import com.oracle.truffle.api.source.SourceSection;
                                 enableTagInstrumentation = true, //
                                 enableSpecializationIntrospection = true, //
                                 variadicStackLimit = "8")),
-                @Variant(suffix = "WithUncached", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "WithUncached", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -136,7 +139,7 @@ import com.oracle.truffle.api.source.SourceSection;
                                 defaultUncachedThreshold = "defaultUncachedThreshold", //
                                 enableSpecializationIntrospection = true, //
                                 variadicStackLimit = "16")),
-                @Variant(suffix = "WithBE", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "WithBE", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -145,7 +148,7 @@ import com.oracle.truffle.api.source.SourceSection;
                                 enableSpecializationIntrospection = true, //
                                 boxingEliminationTypes = {boolean.class, long.class}, //
                                 variadicStackLimit = "4")),
-                @Variant(suffix = "WithOptimizations", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "WithOptimizations", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -154,7 +157,7 @@ import com.oracle.truffle.api.source.SourceSection;
                                 enableTagInstrumentation = true, //
                                 defaultLocalValue = "LOCAL_DEFAULT_VALUE", //
                                 variadicStackLimit = "8")),
-                @Variant(suffix = "WithRootScoping", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "WithRootScoping", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -164,7 +167,7 @@ import com.oracle.truffle.api.source.SourceSection;
                                 enableSpecializationIntrospection = true, //
                                 defaultLocalValue = "LOCAL_DEFAULT_VALUE", //
                                 variadicStackLimit = "16")),
-                @Variant(suffix = "WithStoreBytecodeIndexInFrame", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "WithStoreBytecodeIndexInFrame", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -173,11 +176,11 @@ import com.oracle.truffle.api.source.SourceSection;
                                 defaultUncachedThreshold = "defaultUncachedThreshold", //
                                 enableSpecializationIntrospection = true, //
                                 boxingEliminationTypes = {boolean.class, long.class}, //
-                                storeBytecodeIndexInFrame = true, //
+                                bytecodeIndexMode = BytecodeIndexMode.FRAME, //
                                 enableTagInstrumentation = true, //
                                 variadicStackLimit = "4")),
                 // A typical "production" configuration with all of the bells and whistles.
-                @Variant(suffix = "ProductionBlockScoping", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "ProductionBlockScoping", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -188,7 +191,7 @@ import com.oracle.truffle.api.source.SourceSection;
                                 enableSpecializationIntrospection = true, //
                                 boxingEliminationTypes = {boolean.class, long.class}, //
                                 variadicStackLimit = "8")),
-                @Variant(suffix = "ProductionRootScoping", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "ProductionRootScoping", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -200,7 +203,7 @@ import com.oracle.truffle.api.source.SourceSection;
                                 enableSpecializationIntrospection = true, //
                                 boxingEliminationTypes = {boolean.class, long.class}, //
                                 variadicStackLimit = "16")),
-                @Variant(suffix = "ProductionRootScopingTailCall", configuration = @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, //
+                @Variant(suffix = "ProductionRootScopingTailCall", configuration = @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, //
                                 additionalAssertions = true, //
                                 enableYield = true, //
                                 enableMaterializedLocalAccesses = true, //
@@ -213,8 +216,11 @@ import com.oracle.truffle.api.source.SourceSection;
                                 boxingEliminationTypes = {boolean.class, long.class}, //
                                 enableTailCallHandlers = true, variadicStackLimit = "16")),
 })
+@OperationProxy(BytecodeDescriptorTest.AddProxy.class)
 @ShortCircuitOperation(booleanConverter = BasicInterpreter.ToBoolean.class, name = "ScAnd", operator = Operator.AND_RETURN_VALUE)
 @ShortCircuitOperation(booleanConverter = BasicInterpreter.ToBoolean.class, name = "ScOr", operator = Operator.OR_RETURN_VALUE, javadoc = "ScOr returns the first truthy operand value.")
+// Variants without a bci frame slot warn about operations that request explicit bci storage.
+@SuppressWarnings("truffle-interpreted-performance")
 public abstract class BasicInterpreter extends DebugBytecodeRootNode implements BytecodeRootNode {
 
     static int defaultUncachedThreshold = 16;
@@ -229,6 +235,7 @@ public abstract class BasicInterpreter extends DebugBytecodeRootNode implements 
     }
 
     protected String name;
+    protected BasicInterpreter referencedRoot;
 
     public void setName(String name) {
         this.name = name;

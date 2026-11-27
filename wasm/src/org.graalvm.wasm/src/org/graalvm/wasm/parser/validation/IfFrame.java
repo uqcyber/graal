@@ -56,10 +56,10 @@ class IfFrame extends ControlFrame {
 
     private final ArrayList<BytecodeFixup> labelFixups;
     private final ControlFrame parentFrame;
-    private int falseJumpLocation;
+    private BytecodeFixup falseJumpLocation;
     private boolean elseBranch;
 
-    IfFrame(int[] paramTypes, int[] resultTypes, int initialStackSize, ControlFrame parentFrame, int falseJumpLocation) {
+    IfFrame(int[] paramTypes, int[] resultTypes, int initialStackSize, ControlFrame parentFrame, BytecodeFixup falseJumpLocation) {
         super(paramTypes, resultTypes, parentFrame.getSymbolTable(), initialStackSize, (BitSet) parentFrame.initializedLocals.clone(), parentFrame.legacyCatchDepth());
         this.labelFixups = new ArrayList<>();
         this.parentFrame = parentFrame;
@@ -73,9 +73,12 @@ class IfFrame extends ControlFrame {
     }
 
     void enterElse(ParserState state, RuntimeBytecodeGen bytecode) {
+        if (elseBranch) {
+            throw WasmException.create(Failure.TYPE_MISMATCH, "Else branch can only occur once in an if.");
+        }
         initializedLocals = (BitSet) parentFrame.initializedLocals.clone();
-        final int location = bytecode.addBranchLocation(RuntimeBytecodeGen.BranchOp.BR);
-        bytecode.patchLocation(falseJumpLocation, bytecode.location());
+        final BytecodeFixup location = bytecode.addForwardBranch(RuntimeBytecodeGen.BranchOp.BR);
+        falseJumpLocation.patch(bytecode.location());
         falseJumpLocation = location;
         elseBranch = true;
         state.checkStackAfterFrameExit(this);
@@ -89,19 +92,18 @@ class IfFrame extends ControlFrame {
             if (resultTypes().length != paramTypes().length) {
                 throw WasmException.create(Failure.TYPE_MISMATCH, "Expected else branch. If with incompatible param and result types requires else branch.");
             }
-            if (!isUnreachable()) {
-                for (int i = 0; i < resultTypes().length; i++) {
-                    if (!getSymbolTable().matchesType(resultTypes()[i], paramTypes()[i])) {
-                        throw WasmException.create(Failure.TYPE_MISMATCH, "Expected else branch. If with incompatible param and result types requires else branch.");
-                    }
+            for (int i = 0; i < resultTypes().length; i++) {
+                if (!getSymbolTable().matchesType(resultTypes()[i], paramTypes()[i])) {
+                    throw WasmException.create(Failure.TYPE_MISMATCH, "Expected else branch. If with incompatible param and result types requires else branch.");
                 }
             }
         }
-        if (labelFixups.isEmpty()) {
-            bytecode.patchLocation(falseJumpLocation, bytecode.location());
+        // The jump over the else branch also needs a label, even without explicit branches.
+        if (labelFixups.isEmpty() && !elseBranch) {
+            falseJumpLocation.patch(bytecode.location());
         } else {
-            final int location = bytecode.addLabel(resultTypeLength(), initialStackSize(), commonResultType(), legacyCatchDepth());
-            bytecode.patchLocation(falseJumpLocation, location);
+            final int location = addBranchLabel(bytecode);
+            falseJumpLocation.patch(location);
             for (BytecodeFixup labelFixup : labelFixups) {
                 labelFixup.patch(location);
             }

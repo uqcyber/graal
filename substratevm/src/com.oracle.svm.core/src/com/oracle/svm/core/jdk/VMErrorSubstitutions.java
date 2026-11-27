@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,7 +41,7 @@ import com.oracle.svm.guest.staging.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.log.CoreLogSupport;
 import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
-import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.guest.staging.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.VMThreads.SafepointBehavior;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.util.VMError;
@@ -82,6 +82,13 @@ final class Target_com_oracle_svm_shared_util_VMError {
     @Uninterruptible(reason = "Allow VMError to be used in uninterruptible code.")
     @Substitute
     private static RuntimeException shouldNotReachHereUnexpectedInput(@SuppressWarnings("unused") Object input) {
+        throw VMErrorSubstitutions.shouldNotReachHere(KnownIntrinsics.readReturnAddress(), VMError.msgShouldNotReachHereUnexpectedInput, null);
+    }
+
+    @NeverInline("Accessing instruction pointer of the caller frame")
+    @Uninterruptible(reason = "Allow VMError to be used in uninterruptible code.")
+    @Substitute
+    private static RuntimeException shouldNotReachHereUnexpectedInput(@SuppressWarnings("unused") long input) {
         throw VMErrorSubstitutions.shouldNotReachHere(KnownIntrinsics.readReturnAddress(), VMError.msgShouldNotReachHereUnexpectedInput, null);
     }
 

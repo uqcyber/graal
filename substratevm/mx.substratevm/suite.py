@@ -351,7 +351,6 @@ suite = {
                 "SVM_GUEST_STAGING",
                 "SVM_SHARED",
                 "SVM_JVMCI_SHARED",
-                "espresso-shared:ESPRESSO_SVM",
             ],
             "requires" : [
                 "java.compiler",
@@ -751,6 +750,7 @@ suite = {
         },
 
         "com.oracle.graal.pointsto.standalone.test": {
+            "description": "Tests for the standalone points-to analysis, run with mx standalone-pointsto-unittest.",
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
@@ -1192,30 +1192,15 @@ suite = {
             "jacoco" : "exclude",
         },
 
-        "com.oracle.svm.driver.test": {
-            "subDir": "src",
-            "sourceDirs": ["src"],
-            "dependencies": [
-                "mx:JUNIT_TOOL",
-                "com.oracle.svm.driver",
-            ],
-            "checkstyle": "com.oracle.svm.test",
-            "workingSets": "SVM",
-            "annotationProcessors": [
-                "compiler:GRAAL_PROCESSOR",
-                "SVM_PROCESSOR",
-            ],
-            "javaCompliance": "24+",
-            "jacoco": "exclude",
-            "testProject": True,
-        },
-
-        "com.oracle.svm.hosted.test": {
+        "com.oracle.svm.test.junit.hosted": {
+            "description": "JUnit tests that run on HotSpot with mx unittest, including tests for the Native Image builder and driver.",
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
                 "mx:JUNIT_TOOL",
                 "SVM",
+                "SVM_DRIVER",
+                "SVM_CONFIGURE",
                 "compiler:GRAAL_TEST",
             ],
             "requiresConcealed" : {
@@ -1285,12 +1270,48 @@ suite = {
         },
 
         "com.oracle.svm.test": {
+            "description": "Standalone Java agent and class-initialization tests, run with mx javaagenttest and mx clinittest.",
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "mx:JUNIT",
+                "sdk:NATIVEIMAGE",
+                "SVM",
+            ],
+            "requires": [
+                "java.instrument",
+            ],
+            "requiresConcealed": {
+                "java.base": ["jdk.internal.misc"],
+            },
+            "checkstyle": "com.oracle.svm.test",
+            "checkstyleVersion" : "10.21.0",
+            "javaCompliance": "24+",
+            "workingSets": "SVM,Test",
+            "testProject": True,
+            "jacoco": "exclude",
+        },
+
+        "com.oracle.svm.test.api": {
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [],
+            "checkstyle": "com.oracle.svm.test",
+            "javaCompliance": "24+",
+            "workingSets": "SVM,Test",
+            "testProject": True,
+            "jacoco": "exclude",
+        },
+
+        "com.oracle.svm.test.junit.nativeimage": {
+            "description": "Native Image-specific JUnit tests that run with mx native-unittest.",
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
                 "mx:JUNIT_TOOL",
                 "sdk:NATIVEIMAGE",
                 "SVM",
+                "SVM_TEST_API",
             ],
             "requires": [
                 "java.compiler",
@@ -1299,7 +1320,6 @@ suite = {
                 "java.xml",
                 "java.management",
                 "jdk.management.jfr",
-                "java.instrument",
                 "java.rmi",
             ],
             "requiresConcealed" : {
@@ -1316,8 +1336,8 @@ suite = {
                 ]
             },
             "checkstyle": "com.oracle.svm.test",
-            "checkstyleVersion" : "10.21.0",
             "workingSets": "SVM",
+            "testProject": True,
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
@@ -1326,20 +1346,53 @@ suite = {
             "jacoco" : "exclude",
         },
 
-        "com.oracle.svm.test.terminus": {
+        "com.oracle.svm.test.junit.shared": {
+            "description": "JUnit tests that run on HotSpot with mx unittest and in Native Image with mx native-unittest.",
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
-                "sdk:NATIVEIMAGE",
+                "mx:JUNIT",
+                "SVM",
+                "SVM_CONFIGURE",
+                "SVM_TEST_API",
             ],
+            "requires": [
+                "java.management",
+            ],
+            "requiresConcealed": {
+                "jdk.internal.vm.ci": ["jdk.vm.ci.meta"],
+            },
             "checkstyle": "com.oracle.svm.test",
             "javaCompliance": "24+",
-            "workingSets": "SVM",
+            "workingSets": "SVM,Test",
             "testProject": True,
             "jacoco": "exclude",
         },
 
+        "com.oracle.svm.test.junit.desktop": {
+            "description": "JUnit tests for java.desktop and native library linkage. Run them with mx gate --tags java_desktop_integration.",
+            "subDir": "src",
+            "sourceDirs": ["src"],
+            "dependencies": [
+                "mx:JUNIT",
+                "sdk:NATIVEIMAGE",
+                "SVM",
+                "SVM_TEST_API",
+            ],
+            "requires": ["java.desktop"],
+            "checkstyle": "com.oracle.svm.test",
+            "workingSets": "SVM,Test",
+            "testProject": True,
+            "annotationProcessors": [
+                "compiler:GRAAL_PROCESSOR",
+                "SVM_PROCESSOR",
+            ],
+            "javaCompliance": "24+",
+            "jacoco": "exclude",
+        },
+
         "com.oracle.svm.test.debug": {
+            "description": "Standalone tests for Native Image debug information and GDB support.",
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
@@ -1404,13 +1457,8 @@ suite = {
                 "mx:JUNIT_TOOL",
                 "sdk:NATIVEIMAGE",
                 "com.oracle.svm.configure",
+                "SVM_TEST_API",
             ],
-            "requiresConcealed": {
-                "jdk.internal.vm.ci": [
-                    "jdk.vm.ci.meta",
-                    "jdk.vm.ci.meta.annotation",
-                ],
-            },
             "checkstyle": "com.oracle.svm.test",
             "workingSets": "SVM",
             "annotationProcessors": [
@@ -1498,30 +1546,25 @@ suite = {
             ],
         },
 
-        "com.oracle.svm.graal.test": {
+        "com.oracle.svm.graalos": {
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
-                "mx:JUNIT_TOOL",
-                "sdk:NATIVEIMAGE",
-                "com.oracle.svm.graal",
+                "SVM",
             ],
-            "requiresConcealed" : {
-                "jdk.internal.vm.ci" : [
-                    "jdk.vm.ci.code.stack",
-                    "jdk.vm.ci.meta",
-                    "jdk.vm.ci.meta.annotation",
+            "requiresConcealed": {
+                "java.base": [
+                    "jdk.internal.misc",
+                    "jdk.internal.util",
+                    "sun.nio.fs",
                 ],
             },
-            "checkstyle": "com.oracle.svm.test",
-            "workingSets": "SVM",
+            "javaCompliance": "24+",
+            "workingSets": "graalos-support",
             "annotationProcessors": [
-                "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
             ],
-            "javaCompliance" : "24+",
-            "testProject": True,
-            "jacoco" : "exclude",
+            "checkPackagePrefix": False,
         },
 
         # This is a transitional project that can be referenced from both the guest module and the builder
@@ -1539,10 +1582,10 @@ suite = {
             "requiresConcealed" : {
                 "java.base" : [
                     "jdk.internal.misc",
-                ],
-                "jdk.internal.vm.ci" : [
-                    "jdk.vm.ci.meta",
-                    "jdk.vm.ci.meta.annotation",
+                    "jdk.internal.reflect",
+                    "sun.reflect.annotation",
+                    "sun.reflect.generics.repository",
+                    "sun.security.util",
                 ],
             },
             "checkstyle": "com.oracle.svm.core",
@@ -1575,6 +1618,7 @@ suite = {
                 "sdk:NATIVEIMAGE",
                 "sdk:COLLECTIONS",
                 "compiler:GRAAL_OPTIONS",
+                "espresso-shared:ESPRESSO_SVM",
             ],
             "requiresConcealed" : {
                 "java.base" : [
@@ -1666,6 +1710,7 @@ suite = {
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
+                "com.oracle.svm.core.auximage",
                 "com.oracle.svm.graal",
                 "truffle:TRUFFLE_API",
                 "truffle:TRUFFLE_RUNTIME",
@@ -1688,6 +1733,7 @@ suite = {
             "annotationProcessors": [
                 "compiler:GRAAL_PROCESSOR",
                 "SVM_PROCESSOR",
+                "truffle:TRUFFLE_DSL_PROCESSOR",
             ],
             "workingSets": "SVM",
             "jacoco" : "exclude",
@@ -1993,6 +2039,7 @@ suite = {
             "subDir": "src",
             "sourceDirs": ["src"],
             "dependencies": [
+                "SVM_GUEST_STAGING",
                 "SVM_SHARED",
             ],
             "requiresConcealed" : {
@@ -2111,7 +2158,6 @@ suite = {
                 "SVM_JVMCI_GUEST_STAGING",
                 "SVM_JVMCI_SHARED",
                 "compiler:HOSTVMACCESS",
-                "espresso-shared:ESPRESSO_SVM",
             ],
             "moduleInfo" : {
                 "name" : "org.graalvm.nativeimage.builder",
@@ -2145,6 +2191,7 @@ suite = {
                     "com.oracle.svm.jdwp.bridge.jniutils               to com.oracle.svm.jdwp.server",
                     "com.oracle.svm.interpreter.metadata               to com.oracle.svm.jdwp.server",
                     "com.oracle.svm.interpreter.metadata.serialization to com.oracle.svm.jdwp.server",
+                    "com.oracle.svm.core.graalos to svm.graalos.support",
                 ],
                 "opens" : [
                     "com.oracle.svm.core                          to jdk.graal.compiler",
@@ -2224,6 +2271,17 @@ suite = {
             "maven": False,
         },
 
+        "SVM_GRAALOS_SUPPORT": {
+            "subDir": "src",
+            "dependencies": [
+                "com.oracle.svm.graalos",
+            ],
+            "distDependencies": [
+                "SVM",
+            ],
+            "maven": False,
+        },
+
         "SVM_SHARED": {
             "subDir": "src",
             "description" : "Module for sharing code that is used in both, the builder and the guest context",
@@ -2234,10 +2292,12 @@ suite = {
                 "sdk:NATIVEIMAGE",
                 "sdk:COLLECTIONS",
                 "compiler:GRAAL_OPTIONS",
+                "espresso-shared:ESPRESSO_SVM",
             ],
             "moduleInfo" : {
                 "name" : "org.graalvm.nativeimage.shared",
                 "exports" : [
+                    "com.oracle.svm.shared.util to svm.graalos.support",
                     """* to
                             com.oracle.svm.extraimage_enterprise,
                             com.oracle.svm.jdwp.server,
@@ -2268,6 +2328,7 @@ suite = {
                 "opens" : [],
                 "requires": [
                     "transitive org.graalvm.nativeimage",
+                    "transitive org.graalvm.espresso.shared.svm",
                 ],
                 "uses" : [
                     "org.graalvm.nativeimage.Platform",
@@ -2293,7 +2354,7 @@ suite = {
                     """com.oracle.svm.jvmci.shared.code to
                             jdk.graal.compiler,
                             com.oracle.svm.svm_enterprise,
-                            com.oracle.truffle.enterprise.svm,
+                            org.graalvm.truffle.runtime.svm,
                             org.graalvm.extraimage.builder,
                             org.graalvm.nativeimage.builder,
                             org.graalvm.nativeimage.foreign,
@@ -2302,7 +2363,7 @@ suite = {
                             org.graalvm.nativeimage.llvm""",
                     """com.oracle.svm.jvmci.shared.meta to
                             com.oracle.svm.svm_enterprise,
-                            com.oracle.truffle.enterprise.svm,
+                            org.graalvm.truffle.runtime.svm,
                             org.graalvm.extraimage.builder,
                             org.graalvm.nativeimage.builder,
                             org.graalvm.nativeimage.jvmci.guest,
@@ -2405,6 +2466,11 @@ suite = {
                     "transitive org.graalvm.nativeimage",
                     "transitive org.graalvm.nativeimage.guest.staging",
                 ],
+                "requiresConcealed": {
+                    "java.base": [
+                        "jdk.internal.misc",
+                    ],
+                },
                 "uses" : [
                     "org.graalvm.nativeimage.Platform",
                 ],
@@ -2674,6 +2740,7 @@ suite = {
                         "./": [
                             "dependency:com.oracle.svm.native.libchelper/*",
                             "dependency:com.oracle.svm.native.jvm.posix/*",
+                            "dependency:svm-static-library-symbols/*",
                             "dependency:com.oracle.svm.native.libcontainer/*",
                             "file:debug/include",
                             "file:src/com.oracle.svm.core/src/com/oracle/svm/core/gc/shared/include",
@@ -2693,6 +2760,7 @@ suite = {
                         "<os>-<arch>/": [
                             "dependency:com.oracle.svm.native.libchelper/<os>-<arch>/default/*",
                             "dependency:com.oracle.svm.native.jvm.posix/<os>-<arch>/default/*",
+                            "dependency:svm-static-library-symbols/<os>-<arch>/default/*",
                             "dependency:com.oracle.svm.native.darwin/*",
                             "dependency:com.oracle.svm.native.jvm.windows/*",
                         ],
@@ -2871,9 +2939,11 @@ suite = {
             "moduleInfo" : {
                 "name" : "org.graalvm.nativeimage.base",
                 "requires" : [
-                    # workaround for GR-47773 on the module-path which requires java.sql (like truffle) or java.xml
-                    "java.sql",
-                    "java.xml",
+                    # workaround for GR-47773 on the module-path which requires java.sql (like truffle) or java.xml.
+                    # They are only needed if something else needs them: a small JDK without them must be able to
+                    # run the image builder (see `mx smalljdktest`).
+                    "static java.sql",
+                    "static java.xml",
                     "org.graalvm.collections",
                 ],
                 "exports" : [
@@ -2895,7 +2965,8 @@ suite = {
                            org.graalvm.extraimage.librarysupport,
                            org.graalvm.nativeimage.foreign,
                            org.graalvm.truffle.runtime.svm,
-                           com.oracle.truffle.enterprise.svm""",
+                           com.oracle.truffle.enterprise.svm,
+                           org.graalvm.nativeimage.enterprise.testrunner""",
                     """com.oracle.svm.common.meta to org.graalvm.nativeimage.pointsto,
                            org.graalvm.nativeimage.builder,
                            org.graalvm.nativeimage.llvm,
@@ -3036,45 +3107,48 @@ suite = {
             "testDistribution" : True,
         },
 
-        "SVM_DRIVER_TESTS" : {
-          "subDir": "src",
-          "relpath" : True,
-          "dependencies" : [
-            "com.oracle.svm.driver.test",
-          ],
-          "unittestConfig" : "svm-driver-unittest",
-          "distDependencies": [
-            "mx:JUNIT_TOOL",
-            "sdk:NATIVEIMAGE",
-            "SVM_DRIVER",
-          ],
-          "testDistribution" : True,
-        },
-
         "SVM_HOSTED_TESTS" : {
           "subDir": "src",
           "relpath" : True,
           "dependencies" : [
-            "com.oracle.svm.hosted.test",
+            "com.oracle.svm.test.junit.hosted",
+            "com.oracle.svm.configure.test",
           ],
-          "unittestConfig" : "svm-invariants-tests",
+          "unittestConfig" : "svm-hosted-tests",
           "distDependencies": [
             "mx:JUNIT_TOOL",
             "SVM",
+            "SVM_DRIVER",
+            "SVM_CONFIGURE",
+            "SVM_TEST_API",
             "compiler:GRAAL_TEST",
           ],
           "testDistribution" : True,
         },
 
-        "SVM_TESTS" : {
+        "SVM_TEST_API": {
+            "subDir": "src",
+            "description": "Shared declarations for Native Image tests",
+            "dependencies": [
+                "com.oracle.svm.test.api",
+            ],
+            "moduleInfo": {
+                "name": "org.graalvm.nativeimage.test.api",
+                "exports": [
+                    "com.oracle.svm.test.api",
+                ],
+            },
+            "maven": False,
+            "testDistribution": True,
+        },
+
+        "SVM_NATIVE_UNITTESTS" : {
           "subDir": "src",
           "relpath" : True,
           "dependencies" : [
-            "com.oracle.svm.test",
-            "com.oracle.svm.configure.test",
-            "com.oracle.svm.graal.test",
-            "com.oracle.svm.test.debug",
-            "com.oracle.svm.test.debug.missing.classes",
+            "com.oracle.svm.test.junit.desktop",
+            "com.oracle.svm.test.junit.nativeimage",
+            "com.oracle.svm.test.junit.shared",
             "SVM_TEST_RESOURCE_WITH_SPACE",
           ],
           "distDependencies": [
@@ -3082,19 +3156,9 @@ suite = {
             "sdk:NATIVEIMAGE",
             "SVM",
             "SVM_CONFIGURE",
+            "SVM_TEST_API",
           ],
           "testDistribution" : True,
-        },
-
-        "SVM_TEST_TERMINUS": {
-          "subDir": "src",
-          "dependencies": [
-            "com.oracle.svm.test.terminus",
-          ],
-          "distDependencies": [
-            "sdk:NATIVEIMAGE",
-          ],
-          "testDistribution": True,
         },
 
         # Special test distribution used for testing inclusion of resources from jar files with a space in their name.

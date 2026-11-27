@@ -141,7 +141,7 @@ public final class RightShiftNode extends ShiftNode<Shr> {
             if (forX instanceof ShiftNode) {
                 ShiftNode<?> other = (ShiftNode<?>) forX;
                 if (other.getY().isConstant()) {
-                    int otherAmount = other.getY().asJavaConstant().asInt() & mask;
+                    int otherAmount = other.getConstantShiftAmount();
                     if (other instanceof RightShiftNode) {
                         int total = amount + otherAmount;
                         // veriopt-alias: total: ((shift_amount b zv) + (shift_amount b yv))

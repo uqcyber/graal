@@ -40,10 +40,12 @@
  */
 package com.oracle.truffle.api.bytecode;
 
+import java.io.DataInput;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.function.Supplier;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.HostCompilerDirectives;
@@ -51,6 +53,8 @@ import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterHandlerC
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleStackTraceElement;
 import com.oracle.truffle.api.bytecode.debug.BytecodeDebugListener;
+import com.oracle.truffle.api.bytecode.serialization.BytecodeDeserializer;
+import com.oracle.truffle.api.bytecode.serialization.BytecodeSerializer;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameSlotTypeException;
 import com.oracle.truffle.api.instrumentation.ProbeNode;
@@ -58,6 +62,7 @@ import com.oracle.truffle.api.instrumentation.ProvidedTags;
 import com.oracle.truffle.api.instrumentation.StandardTags.RootBodyTag;
 import com.oracle.truffle.api.instrumentation.StandardTags.RootTag;
 import com.oracle.truffle.api.interop.NodeLibrary;
+import com.oracle.truffle.api.nodes.ControlFlowException;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
@@ -111,6 +116,52 @@ public @interface GenerateBytecode {
      * @since 24.2
      */
     Class<? extends TruffleLanguage<?>> languageClass();
+
+    /**
+     * Selects the Bytecode DSL behaviour version. Versions distinguish breaking behaviour changes
+     * that require migration of language implementations. They do not identify Truffle releases
+     * or version internal implementation details, optimizations, or performance changes. Breaking
+     * changes are rare and avoided whenever possible. For details, refer to
+     * {@link BytecodeVersion}.
+     * <p>
+     * This field allows you to pin the version so that updating Truffle does not automatically
+     * adopt breaking changes. Instead, when new breaking changes are introduced, the compiler will
+     * emit a warning referring to the {@link BytecodeVersion} Javadoc for migration instructions.
+     * It is recommended to always migrate to the newest version, since old versions are deprecated
+     * and will eventually be unsupported in future releases.
+     * <p>
+     * You can specify {@link BytecodeVersion#LATEST} to always opt in to the newest behaviour.
+     * Your interpreter will be recompiled with the latest behaviour every time Truffle is updated.
+     * This option should not be used in production language implementations; select an explicit
+     * version instead.
+     * <p>
+     * For compatibility, this field defaults to version 1, with a compiler warning to explicitly
+     * specify it. An explicit version will be required in subsequent releases.
+     *
+     * @see BytecodeVersion
+     * @since 25.7
+     */
+    BytecodeVersion version() default BytecodeVersion.V1;
+
+    /**
+     * Specifies exception types that unwind the bytecode interpreter through guest {@code finally}
+     * handlers.
+     * <p>
+     * An exception that is an instance of one of the specified types bypasses exception
+     * interception hooks, guest exception handlers, and {@link EpilogExceptional}. Instrumentation
+     * is still notified, and {@code finally} handlers are executed before the original exception
+     * instance is rethrown. If a {@code finally} handler yields, the continuation preserves the
+     * pending exception and continues unwinding after the handler resumes. A return or exception
+     * from a {@code finally} handler supersedes the pending exception.
+     * <p>
+     * It is recommended to use {@link ControlFlowException} subtypes
+     * for unwind exceptions, but any {@link Throwable} subtype is permitted. {@link ThreadDeath}
+     * and its subtypes are reserved for instrumentation unwinds and cannot be specified explicitly.
+     * They retain their existing behavior even when a configured supertype would match them.
+     *
+     * @since 25.5
+     */
+    Class<? extends Throwable>[] unwindExceptions() default {};
 
     /**
      * Whether to generate an uncached interpreter.
@@ -177,22 +228,29 @@ public @interface GenerateBytecode {
      * and from a serialized byte array representation. The code effectively serializes the node's
      * execution data (bytecode, constants, etc.) and all of its non-transient fields.
      * <p>
-     * The serialization logic is defined in static {@code serialize} and {@code deserialize}
-     * methods of the generated root class. The generated {@link BytecodeRootNodes} class also
-     * overrides {@link BytecodeRootNodes#serialize}.
+     * The serialization logic is available through
+     * {@link BytecodeDescriptor#serializeBuilderBytecode},
+     * {@link BytecodeDescriptor#serializeExecutionBytecode},
+     * {@link BytecodeDescriptor#deserializeBuilderBytecode}, and
+     * {@link BytecodeDescriptor#deserializeExecutionBytecode}. Equivalent static methods are also
+     * generated on the root class. The generated {@link BytecodeRootNodes} class overrides
+     * {@link BytecodeRootNodes#serializeBuilderBytecode} and
+     * {@link BytecodeRootNodes#serializeExecutionBytecode}.
      * <p>
-     * This feature can be used to avoid the overhead of parsing source code on start up. Note that
-     * serialization still incurs some overhead, as it does not trivially copy bytecode directly: in
-     * order to validate the bytecode (balanced stack pointers, valid branches, etc.), serialization
-     * encodes builder method calls and deserialization replays those calls.
+     * This feature can be used to avoid the overhead of parsing source code on start up. Builder
+     * bytecode encodes builder method calls, which are replayed and validated during deserialization
+     * (balanced stack pointers, valid branches, etc.). When the serialized bytes are trusted,
+     * execution bytecode can be loaded directly to avoid builder replay for a particular
+     * configuration.
      * <p>
-     * Note that the generated {@code deserialize} method takes a {@link java.util.function.Supplier
-     * Supplier<DataInput>} rather than a {@link java.io.DataInput} directly. The supplier should
-     * produce a fresh {@link java.io.DataInput} each time because the input may be processed
-     * multiple times (due to {@link BytecodeRootNodes#update(BytecodeConfig) reparsing}).
+     * The deserialization methods take {@link Supplier}s of {@link DataInput} rather than inputs
+     * directly. The builder bytecode supplier should produce a fresh {@link DataInput} each time
+     * because the input may be processed multiple times (due to
+     * {@link BytecodeRootNodes#update(BytecodeConfig) reparsing}). The execution bytecode supplier
+     * is invoked at most once during initial deserialization.
      *
-     * @see com.oracle.truffle.api.bytecode.serialization.BytecodeSerializer
-     * @see com.oracle.truffle.api.bytecode.serialization.BytecodeDeserializer
+     * @see BytecodeSerializer
+     * @see BytecodeDeserializer
      * @see <a href=
      *      "https://github.com/oracle/graal/blob/master/truffle/src/com.oracle.truffle.api.bytecode.test/src/com/oracle/truffle/api/bytecode/test/examples/SerializationTutorial.java">Serialization
      *      tutorial</a>
@@ -333,11 +391,11 @@ public @interface GenerateBytecode {
      * materialized access's local is in scope at the static location of the access, but since root
      * nodes can be called at any time, it is still possible to execute the root node (and thus
      * perform the access) when the local is out of scope, leading to unexpected behaviour (e.g.,
-     * reading an incorrect local value). When the bytecode index is
-     * {@link #storeBytecodeIndexInFrame() stored in the frame}, the interpreter will dynamically
-     * validate each materialized access, throwing a runtime exception when the local is not in
-     * scope. Thus, to diagnose issues with invalid materialized accesses, it is recommended to
-     * enable storing the bytecode index in the frame.
+     * reading an incorrect local value). When {@link #bytecodeIndexMode()} is
+     * {@link BytecodeIndexMode#FRAME}, the interpreter will dynamically validate each materialized
+     * access, throwing a runtime exception when the local is not in scope. Thus, to diagnose issues
+     * with invalid materialized accesses, it is recommended to use
+     * {@link BytecodeIndexMode#FRAME}.
      *
      * @since 24.2
      */
@@ -403,22 +461,27 @@ public @interface GenerateBytecode {
     boolean enableQuickening() default true;
 
     /**
-     * Whether the generated interpreter should store the bytecode index (bci) in the frame.
+     * Configures how the generated interpreter makes its current bytecode index available for
+     * stack walking and frame introspection.
      * <p>
-     * By default, methods that compute location-dependent information (like
-     * {@link BytecodeNode#getBytecodeLocation(com.oracle.truffle.api.frame.Frame, Node)}) must
-     * follow {@link Node#getParent() Node parent} pointers and scan the bytecode to compute the
-     * current bci, which is not suitable for the fast path. When this feature is enabled, an
-     * implementation can use
-     * {@link BytecodeNode#getBytecodeIndex(com.oracle.truffle.api.frame.Frame)} to obtain the bci
-     * efficiently on the fast path and use it for location-dependent computations (e.g.,
-     * {@link BytecodeNode#getBytecodeLocation(int)}).
+     * Operations can always bind {@code @Bind("$bytecodeIndex") int bci} for explicit propagation.
+     *
+     * @return the lookup mode; defaults to {@link BytecodeIndexMode#CACHED_NODE}
+     * @since 25.6
+     */
+    BytecodeIndexMode bytecodeIndexMode() default BytecodeIndexMode.CACHED_NODE;
+
+    /**
+     * Whether the generated interpreter should automatically store the bytecode index in the frame
+     * in all interpreter tiers.
      * <p>
-     * Note that operations always have fast-path access to the bci using a bind parameter (e.g.,
-     * {@code @Bind("$bytecodeIndex") int bci}); this feature should only be enabled for fast-path
-     * bci access outside of the current operation (e.g., for closures or frame introspection).
-     * Storing the bci in the frame increases frame size and requires additional frame writes, so it
-     * can negatively affect performance.
+     * Setting this attribute to {@code true} is equivalent to setting
+     * {@link #bytecodeIndexMode()} to {@link BytecodeIndexMode#FRAME}. It cannot be combined with a
+     * non-default bytecode index mode. Setting it to {@code false} does not override
+     * {@link #bytecodeIndexMode()}.
+     * <p>
+     * For new interpreters, prefer {@link #bytecodeIndexMode()} with
+     * {@link BytecodeIndexMode#FRAME}.
      *
      * @since 24.2
      */
@@ -562,7 +625,7 @@ public @interface GenerateBytecode {
      * }
      *
      * class MyIllegalLocalException extends AbstractTruffleException {
-     *     public static MyIllegalLocalException create(Node location, BytecodeNode bytecode, BytecodeLocation location, LocalVariable variable) {
+     *     public static MyIllegalLocalException create(Node location, BytecodeNode bytecode, BytecodeLocation bytecodeLocation, LocalVariable variable) {
      *         // ...
      *     }
      * }
@@ -578,6 +641,7 @@ public @interface GenerateBytecode {
      * <li>{@link Node}: the current location (equivalent to {@code @Bind("$node")})</li>
      * <li>{@link BytecodeNode}: the current bytecode node</li>
      * <li>{@link BytecodeLocation}: the current bytecode location</li>
+     * <li>{@code int}: the current bytecode index, or {@code -1} when the index is unavailable</li>
      * <li>{@link LocalVariable}: an introspection object modeling the local's metadata (name, info,
      * etc.)</li>
      * </ul>

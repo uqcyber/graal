@@ -178,6 +178,7 @@ public class ArrayCopyWithConversionsNode extends MemoryKillStubIntrinsicNode im
     }
 
     @NodeIntrinsic
+    @GenerateStub.Default(runtimeCPUFeaturesAMD64 = "amd64FeaturesAVX2")
     @GenerateStub(name = "arrayCopyWithConversionsS1S1", parameters = {"S1", "S1"})
     @GenerateStub(name = "arrayCopyWithConversionsS1S2", parameters = {"S1", "S2"})
     @GenerateStub(name = "arrayCopyWithConversionsS1S4", parameters = {"S1", "S4"})
@@ -198,6 +199,7 @@ public class ArrayCopyWithConversionsNode extends MemoryKillStubIntrinsicNode im
                     @ConstantNodeParameter EnumSet<?> runtimeCheckedCPUFeatures);
 
     @NodeIntrinsic
+    @GenerateStub.Default(runtimeCPUFeaturesAMD64 = "amd64FeaturesAVX2")
     @GenerateStub(name = "arrayCopyWithReverseBytesS2", parameters = {"S2", "true"})
     @GenerateStub(name = "arrayCopyWithReverseBytesS4", parameters = {"S4", "true"})
     public static native void arrayCopyWithReverseBytes(Object arraySrc, long offsetSrc, Object arrayDst, long offsetDst, int length,
@@ -211,6 +213,7 @@ public class ArrayCopyWithConversionsNode extends MemoryKillStubIntrinsicNode im
                     @ConstantNodeParameter EnumSet<?> runtimeCheckedCPUFeatures);
 
     @NodeIntrinsic
+    @GenerateStub.Default(runtimeCPUFeaturesAMD64 = "amd64FeaturesAVX2")
     @GenerateStub(name = "arrayCopyWithConversionsDynamicStrides")
     public static native void arrayCopy(Object arraySrc, long offsetSrc, Object arrayDst, long offsetDst, int length, int stride);
 
@@ -357,8 +360,8 @@ public class ArrayCopyWithConversionsNode extends MemoryKillStubIntrinsicNode im
 
     static Stamp accessStamp(int chunkSize) {
         return switch (chunkSize) {
-            case 1 -> StampFactory.forKind(JavaKind.Byte);
-            case 2 -> StampFactory.forKind(JavaKind.Short);
+            case 1 -> IntegerStamp.create(Byte.SIZE);
+            case 2 -> IntegerStamp.create(Short.SIZE);
             case 4 -> StampFactory.forKind(JavaKind.Int);
             case 8 -> StampFactory.forKind(JavaKind.Long);
             case 16, 32, 64 -> SimdStamp.broadcast(IntegerStamp.create(Byte.SIZE), chunkSize);

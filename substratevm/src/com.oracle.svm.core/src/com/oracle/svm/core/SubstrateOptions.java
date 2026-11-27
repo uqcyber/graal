@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.core;
 
+import static com.oracle.svm.core.SubstrateControlFlowIntegrity.Options.CFI;
 import static com.oracle.svm.core.SubstrateOptions.OptimizationLevel.O2;
 import static com.oracle.svm.core.SubstrateOptions.OptimizationLevel.O3;
 import static com.oracle.svm.guest.staging.option.RuntimeOptionKey.RuntimeOptionKeyFlag.Immutable;
@@ -39,11 +40,18 @@ import static jdk.graal.compiler.options.OptionType.User;
 import static org.graalvm.nativeimage.impl.InternalPlatform.NATIVE_ONLY;
 import static org.graalvm.nativeimage.impl.InternalPlatform.PLATFORM_JNI;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageInfo;
@@ -57,12 +65,14 @@ import com.oracle.svm.core.c.libc.LibCBase;
 import com.oracle.svm.core.c.libc.MuslLibC;
 import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.heap.ReferenceHandler;
+import com.oracle.svm.core.hub.DynamicHubUtils;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.jdk.VectorAPIEnabled;
 import com.oracle.svm.core.option.GCOptionValue;
 import com.oracle.svm.core.thread.VMOperationControl;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.guest.staging.IsolateArgumentParser;
 import com.oracle.svm.guest.staging.SubstrateGuestOptions;
 import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
 import com.oracle.svm.shared.Uninterruptible;
@@ -89,7 +99,6 @@ import com.oracle.svm.shared.util.VMError;
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.asm.amd64.AMD64Assembler;
 import jdk.graal.compiler.core.common.GraalOptions;
-import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.phases.LowTier;
 import jdk.graal.compiler.core.phases.MidTier;
 import jdk.graal.compiler.duplication.phases.PullThroughPhiPhase;
@@ -124,6 +133,8 @@ public class SubstrateOptions {
     static final HostedOptionKey<Boolean> ParseOnce = new HostedOptionKey<>(true);
     @Option(help = "Deprecated, option no longer has any effect.", deprecated = true, deprecationMessage = "It no longer has any effect, and no replacement is available")//
     static final HostedOptionKey<Boolean> ParseOnceJIT = new HostedOptionKey<>(true);
+    public static final String OPTIMIZE_DEFAULT_VALUE = "2";
+
     @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error)//
     @Option(help = "Preserve the local variable information for every Java source line to allow line-by-line stepping in the debugger. Allow the lookup of Java-level method information, e.g., in stack traces.")//
     public static final HostedOptionKey<Boolean> SourceLevelDebug = new HostedOptionKey<>(false);
@@ -303,7 +314,7 @@ public class SubstrateOptions {
     @APIOption(name = "-O", valueSeparator = APIOption.NO_SEPARATOR)//
     @Option(help = "Control code optimizations: b - optimize for fastest build time, s - optimize for size, " +
                     "0 - no optimizations, 1 - basic optimizations, 2 - advanced optimizations, 3 - all optimizations for best performance.", type = OptionType.User)//
-    public static final HostedOptionKey<String> Optimize = new HostedOptionKey<>("2") {
+    public static final HostedOptionKey<String> Optimize = new HostedOptionKey<>(OPTIMIZE_DEFAULT_VALUE) {
 
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, String oldValue, String newValue) {
@@ -560,6 +571,10 @@ public class SubstrateOptions {
     @BundleMember(role = BundleMember.Role.Input)//
     public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Paths> CLibraryPath = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Paths.buildWithCommaDelimiter());
 
+    @Option(help = "Pass the provided raw option that will be appended to the linker command to produce the final binary. The possible options are platform specific and passed through without any validation.", //
+                    stability = OptionStability.STABLE)//
+    public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> NativeLinkerOption = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.build());
+
     @Option(help = "Path passed to the linker as the -rpath (list of comma-separated directories)")//
     public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> LinkerRPath = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
 
@@ -685,17 +700,8 @@ public class SubstrateOptions {
     @Option(help = "Deprecated, has no effect.", deprecated = true) //
     public static final HostedOptionKey<Long> InternalThreadStackSize = new HostedOptionKey<>(0L);
 
-    /**
-     * Cached value of {@link ConcealedOptions#MaxJavaStackTraceDepth}. Also used as default value.
-     */
-    private static int maxJavaStackTraceDepth = 1024;
-
-    /**
-     * Cached accessor for {@link ConcealedOptions#MaxJavaStackTraceDepth}.
-     */
-    public static int maxJavaStackTraceDepth() {
-        return maxJavaStackTraceDepth;
-    }
+    @Option(help = "The maximum number of lines in the stack trace for Java exceptions (0 means all)", type = OptionType.User)//
+    public static final RuntimeOptionKey<Integer> MaxJavaStackTraceDepth = new RuntimeOptionKey<>(1024);
 
     /* Same option name and specification as the Java HotSpot VM. */
     @Option(help = "Maximum total size of NIO direct-buffer allocations", type = OptionType.Expert)//
@@ -780,6 +786,36 @@ public class SubstrateOptions {
     @Option(help = "List of comma separated URL protocols to enable.")//
     public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> EnableURLProtocols = new HostedOptionKey<>(
                     AccumulatingLocatableMultiOptionValue.Strings.buildWithCommaDelimiter());
+
+    @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error)//
+    @Option(help = "URL protocol and URI scheme for embedded resources. Select an unused scheme to avoid collisions with application filesystem providers.", type = OptionType.Expert)//
+    public static final HostedOptionKey<String> ResourceProtocol = new HostedOptionKey<>("resource", SubstrateOptions::validateResourceProtocol) {
+        @Override
+        protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, String oldValue, String newValue) {
+            super.onValueUpdate(values, oldValue, newValue);
+            // Leave non-ASCII input for validation, since Unicode case folding can produce ASCII.
+            if (newValue.chars().allMatch(c -> c <= 0x7f)) {
+                values.put(this, newValue.toLowerCase(Locale.ROOT));
+            }
+        }
+    };
+
+    private static void validateResourceProtocol(HostedOptionKey<String> optionKey) {
+        String scheme = optionKey.getValue();
+        // URL.of forbids overriding file and jrt handlers; URL parsing treats url: as a special prefix.
+        if (scheme.equals("file") || scheme.equals("jrt") || scheme.equals("url")) {
+            throw UserError.invalidOptionValue(optionKey, scheme, "The URI scheme is reserved by the JDK and cannot be used for embedded resources");
+        }
+        try {
+            if (scheme.equals(new URI(scheme, "/", null).getScheme())) {
+                return;
+            }
+        } catch (URISyntaxException e) {
+            // Report the invalid option below.
+        }
+        throw UserError.invalidOptionValue(optionKey, optionKey.getValue(),
+                        "Expected a non-empty URI scheme starting with an ASCII letter and containing only ASCII letters, digits, '+', '-', or '.'");
+    }
 
     private static final String DEPRECATION_MESSAGE_DISABLE_URL_PROTOCOLS = "Non-default URL protocols are disabled unless registered in reachability metadata. " +
                     "This option has no reachability-metadata replacement for default protocols such as file and resource.";
@@ -1236,7 +1272,7 @@ public class SubstrateOptions {
     };
 
     private static void validateGenerateDebugInfo(HostedOptionKey<Integer> optionKey) {
-        if (OS.getCurrent() == OS.DARWIN && optionKey.hasBeenSet() && optionKey.getValue() > 0) {
+        if (OS.DARWIN.isCurrent() && optionKey.hasBeenSet() && optionKey.getValue() > 0) {
             LogUtils.warning("Using %s is not supported on macOS", SubstrateOptionsParser.commandArgument(optionKey, optionKey.getValue().toString()));
         }
     }
@@ -1271,14 +1307,14 @@ public class SubstrateOptions {
     }
 
     @Option(help = "Use a separate file for debug info.")//
-    public static final HostedOptionKey<Boolean> StripDebugInfo = new HostedOptionKey<>(OS.getCurrent() != OS.DARWIN, SubstrateOptions::validateStripDebugInfo);
+    public static final HostedOptionKey<Boolean> StripDebugInfo = new HostedOptionKey<>(!OS.DARWIN.isCurrent(), SubstrateOptions::validateStripDebugInfo);
 
     private static void validateStripDebugInfo(HostedOptionKey<Boolean> optionKey) {
         Boolean optionValue = optionKey.getValue();
-        if (OS.getCurrent() == OS.DARWIN && optionKey.hasBeenSet() && optionKey.getValue()) {
+        if (OS.DARWIN.isCurrent() && optionKey.hasBeenSet() && optionKey.getValue()) {
             throw UserError.invalidOptionValue(optionKey, optionValue, "The option is not supported on macOS");
         }
-        if (OS.getCurrent() == OS.WINDOWS && optionKey.hasBeenSet() && !optionKey.getValue()) {
+        if (OS.WINDOWS.isCurrent() && optionKey.hasBeenSet() && !optionKey.getValue()) {
             throw UserError.invalidOptionValue(optionKey, optionValue, "The option is not supported on Windows (debug info is always generated in a separate file)");
         }
     }
@@ -1310,6 +1346,120 @@ public class SubstrateOptions {
     @Option(help = "Support runtime compilation in separate isolates (enable at runtime with option CompileInIsolates).") //
     public static final HostedOptionKey<Boolean> SupportCompileInIsolates = new HostedOptionKey<>(true);
 
+    @Option(help = "Compile the application for GraalOS.", type = OptionType.User) //
+    public static final HostedOptionKey<Boolean> GraalOS = new HostedOptionKey<>(false, SubstrateOptions::validateGraalOSOption) {
+        @Override
+        protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Boolean oldValue, Boolean newValue) {
+            super.onValueUpdate(values, oldValue, newValue);
+            if (newValue) {
+                // in GraalOS mode, we default to a maximum of 16GB of reserved address space
+                if (!values.containsKey(ConcealedOptions.MaxReservedAddressSpaceSize)) {
+                    ConcealedOptions.MaxReservedAddressSpaceSize.update(values, 16L << 30);
+                }
+                // GraalOS treats non-null mmap addresses as explicit placements, so disable runtime code cache randomization.
+                if (!values.containsKey(SubstrateOptions.RandomizeRuntimeCodeCache)) {
+                    SubstrateOptions.RandomizeRuntimeCodeCache.update(values, false);
+                }
+                // compiling in Isolates would reserve too much additional address space
+                if (!values.containsKey(SubstrateOptions.SupportCompileInIsolates)) {
+                    SubstrateOptions.SupportCompileInIsolates.update(values, false);
+                }
+                // in GraalOS mode, we default to full software CFI
+                if (!values.containsKey(CFI)) {
+                    CFI.update(values, SubstrateControlFlowIntegrity.CFIOptions.SW);
+                }
+                // static linking of JDK libs, but dynamic linking against musl
+                if (!values.containsKey(SubstrateOptions.StaticExecutableWithDynamicLibC)) {
+                    SubstrateOptions.StaticExecutableWithDynamicLibC.update(values, true);
+                }
+                // position-independent executable (retain relocation info)
+                // needed because -pie is not the default with StaticExecutableWithDynamicLibC
+                NativeLinkerOption.update(values, "-pie");
+
+                boolean cfiEnabled = values.get(CFI, CFI.getDefaultValue()) == SubstrateControlFlowIntegrity.CFIOptions.SW;
+
+                if (!values.containsKey(SubstrateOptions.UseLibC)) {
+                    // change default libc (both in option and system property)
+                    String libc = cfiEnabled ? "musl-swcfi" : "musl";
+                    SubstrateOptions.UseLibC.update(values, libc);
+                    System.setProperty("substratevm.HostLibC", libc);
+
+                    /*
+                     * Unfortunately, CLibraryPath is initialized based on the libc option in an
+                     * earlier phase, so we need to patch it from "glibc" to the actual libc we want
+                     * to use.
+                     */
+                    AccumulatingLocatableMultiOptionValue<?> cLibPath = (AccumulatingLocatableMultiOptionValue<?>) values.get(SubstrateOptions.CLibraryPath);
+                    if (cLibPath == null) {
+                        throw UserError.abort("'%s' must be set when building with '%s'.", SubstrateOptionsParser.commandArgument(SubstrateOptions.CLibraryPath, ""),
+                                        SubstrateOptionsParser.commandArgument(GraalOS, "+"));
+                    }
+                    List<?> cLibPaths = cLibPath.values();
+                    if (cLibPaths == null) {
+                        throw UserError.abort("'%s' must be set when building with '%s'.", SubstrateOptionsParser.commandArgument(SubstrateOptions.CLibraryPath, ""),
+                                        SubstrateOptionsParser.commandArgument(GraalOS, "+"));
+                    }
+                    AccumulatingLocatableMultiOptionValue<Path> newCLibPaths = AccumulatingLocatableMultiOptionValue.Paths.buildWithCustomDelimiter(cLibPath.getDelimiter());
+                    for (Object pathObj : cLibPaths) {
+                        Path path = (Path) pathObj;
+                        if (path.endsWith("glibc")) {
+                            Path parent = path.getParent();
+                            if (parent == null) {
+                                throw UserError.abort("Invalid top-level directory for '%s' in '%s'.", path, SubstrateOptionsParser.commandArgument(SubstrateOptions.CLibraryPath,
+                                                cLibPaths.stream().map(Object::toString).collect(Collectors.joining(cLibPath.getDelimiter()))));
+                            }
+                            Path newPath = parent.resolve(libc);
+                            newCLibPaths.valueUpdate(newPath);
+                        } else {
+                            newCLibPaths.valueUpdate(path);
+                        }
+                    }
+                    values.put(SubstrateOptions.CLibraryPath, newCLibPaths);
+                }
+                // for SW-CFI, we know the path to the compiler toolchain
+                if (cfiEnabled && !values.containsKey(SubstrateOptions.CCompilerPath)) {
+                    String toolchain = "musl-swcfi";
+                    Path path = Paths.get(System.getProperty("java.home")).resolve(Paths.get("lib", "toolchains", toolchain, "bin", "clang"));
+                    if (path == null || !Files.exists(path)) {
+                        throw VMError.shouldNotReachHere("Toolchain compiler \"%s\" not found in %s", toolchain, path);
+                    }
+                    try {
+                        path = path.toRealPath();
+                    } catch (IOException e) {
+                        throw VMError.shouldNotReachHere("Toolchain compiler \"%s\" not found in %s", toolchain, path);
+                    }
+                    SubstrateOptions.CCompilerPath.update(values, path.toString());
+                }
+                // disable container support in GraalOS [GR-64318]
+                SubstrateOptions.UseContainerSupport.update(values, false);
+            }
+        }
+    };
+
+    private static void validateGraalOSOption(HostedOptionKey<Boolean> optionKey) {
+        if (optionKey.getValue()) {
+            if (!Platform.includedIn(Platform.LINUX_AMD64.class)) {
+                throw UserError.invalidOptionValue(optionKey, optionKey.getValue(), "The option is only supported on Linux/amd64.");
+            }
+
+            if (SubstrateOptions.StaticExecutable.getValue()) {
+                throw UserError.invalidOptionValue(SubstrateOptions.StaticExecutable, true,
+                                "Fully static executables are not supported for GraalOS; use '--static-nolibc' instead");
+            }
+
+            /*
+             * Ensure that these options are enabled for GraalOS, even if the default changes to
+             * "false".
+             */
+            if (!SubstrateOptions.NoDirectRelocationsInText.getValue()) {
+                throw UserError.invalidOptionValue(SubstrateOptions.NoDirectRelocationsInText, false, "Needs to be enabled for GraalOS");
+            }
+            if (!SubstrateOptions.StaticExecutableWithDynamicLibC.getValue()) {
+                throw UserError.invalidOptionValue(SubstrateOptions.StaticExecutableWithDynamicLibC, false, "Needs to be enabled for GraalOS");
+            }
+        }
+    }
+
     public static boolean shouldCompileInIsolates() {
         /*
          * If SupportCompileInIsolates is disabled, CompileInIsolates becomes unreachable because
@@ -1327,6 +1477,10 @@ public class SubstrateOptions {
     /** Query these options only through an appropriate method. */
     public static class ConcealedOptions {
 
+        /** Use {@link com.oracle.svm.core.heap.ReferenceAccess#getMaxAddressSpaceSize()} instead. */
+        @Option(help = "Maximum allowed address space size for the Java heap (0: no limit).", type = OptionType.Expert) //
+        public static final HostedOptionKey<Long> MaxReservedAddressSpaceSize = new HostedOptionKey<>(0L);
+
         @Option(help = "Activate runtime compilation in separate isolates (enable support during image build with option SupportCompileInIsolates).") //
         public static final RuntimeOptionKey<Boolean> CompileInIsolates = new RuntimeOptionKey<>(true, RelevantForCompilationIsolates);
 
@@ -1342,15 +1496,6 @@ public class SubstrateOptions {
         @Option(help = "Flag to disable jvmstat instrumentation for performance testing.")//
         public static final RuntimeOptionKey<Boolean> UsePerfData = new RuntimeOptionKey<>(true, RegisterForIsolateArgumentParser);
 
-        /** Use {@link SubstrateOptions#maxJavaStackTraceDepth()} instead. */
-        @Option(help = "The maximum number of lines in the stack trace for Java exceptions (0 means all)", type = OptionType.User)//
-        public static final RuntimeOptionKey<Integer> MaxJavaStackTraceDepth = new RuntimeOptionKey<>(maxJavaStackTraceDepth) {
-            @Override
-            protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Integer oldValue, Integer newValue) {
-                super.onValueUpdate(values, oldValue, newValue);
-                maxJavaStackTraceDepth = newValue;
-            }
-        };
         @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error) //
         @Option(help = "Enable FramePointerPhase for methods that modify the stack pointer. Enabled by default for Windows on AMD64.")//
         public static final HostedOptionKey<Boolean> UseFramePointerPhase = new HostedOptionKey<>(null, SubstrateOptions::validateUseFramePointerPhase);
@@ -1411,6 +1556,17 @@ public class SubstrateOptions {
                 UserError.guarantee(!useClosedTypeWorldHubLayout(), "Support for interface hashing is only available with an open world hub layout. " +
                                 "Enable the open world hub layout with %s",
                                 SubstrateOptionsParser.commandArgument(ClosedTypeWorldHubLayout, "-"));
+            }
+        });
+
+        /** Use {@link SubstrateOptions#usePextInterfaceHashing()} instead. */
+        @Option(help = "Use PEXT to compute interface hash-table indices. Selected automatically for open type world interface hashing on AMD64 targets with BMI2. Can be disabled on CPUs with slow PEXT.", type = OptionType.Debug) //
+        @LayerVerifiedOption(kind = Kind.Changed, severity = Severity.Error) //
+        public static final HostedOptionKey<Boolean> UsePextInterfaceHashing = new HostedOptionKey<>(null, key -> {
+            if (Boolean.TRUE.equals(key.getValue())) {
+                UserError.guarantee(useInterfaceHashing() && !useClosedTypeWorldHubLayout(), "UsePextInterfaceHashing requires open type world interface hashing.");
+                UserError.guarantee(SubstrateTarget.getArchitecture() instanceof AMD64 arch && arch.getFeatures().contains(AMD64.CPUFeature.BMI2),
+                                "UsePextInterfaceHashing requires BMI2 in the target CPU baseline (for example, -march=x86-64-v3).");
             }
         });
 
@@ -1657,6 +1813,7 @@ public class SubstrateOptions {
     @Option(help = "Deprecated, option no longer has any effect.", deprecated = true, deprecationMessage = "It no longer has any effect, and no replacement is available")//
     public static final HostedOptionKey<Boolean> UseOldMethodHandleIntrinsics = new HostedOptionKey<>(false);
 
+    @BundleMember(role = BundleMember.Role.InputReference, valuePrefix = "path=", delimiter = ",")//
     @Option(help = "file:doc-files/PreserveHelp.txt")//
     public static final HostedOptionKey<AccumulatingLocatableMultiOptionValue.Strings> Preserve = new HostedOptionKey<>(AccumulatingLocatableMultiOptionValue.Strings.build());
 
@@ -1717,18 +1874,30 @@ public class SubstrateOptions {
     @Option(help = "Use the closed type world dynamic hub representation. This is only allowed when the option ClosedTypeWorld is also set to true.", type = OptionType.Expert) //
     public static final HostedOptionKey<Boolean> ClosedTypeWorldHubLayout = new HostedOptionKey<>(true);
 
-    @Option(help = "Defines a threshold for interfaceIDs which can be covered by hashing if UseInterfaceHashing is enabled. Must be <= 65535 (ushort max). Larger interfaceIDs are handled by the slow path.", type = OptionType.Debug) //
-    public static final HostedOptionKey<Integer> InterfaceHashingMaxId = new HostedOptionKey<>(0xffff, key -> {
+    @Option(help = "Maximum interface ID eligible for hashing with UseInterfaceHashing. Must be between 0 and 65535, the current hash construction limit. Larger IDs remain supported through iterative lookup.", type = OptionType.Debug) //
+    public static final HostedOptionKey<Integer> InterfaceHashingMaxId = new HostedOptionKey<>(DynamicHubUtils.MAX_HASHED_INTERFACE_ID, key -> {
         if (key.hasBeenSet()) {
             UserError.guarantee(useInterfaceHashing(), "Interface hashing needs to be enabled for the InterfaceHashingMaxId to be used. " +
                             "Enable interface hashing with %s",
                             SubstrateOptionsParser.commandArgument(ConcealedOptions.UseInterfaceHashing, "+"));
         }
         int value = key.getValue();
-        if (!NumUtil.isUShort(value)) {
-            UserError.invalidOptionValue(key, value, "The specified value must be <= 65535 (ushort max)");
+        if (value < 0 || value > DynamicHubUtils.MAX_HASHED_INTERFACE_ID) {
+            UserError.invalidOptionValue(key, value, "The specified value must be between 0 and " + DynamicHubUtils.MAX_HASHED_INTERFACE_ID + " (the current hash construction limit)");
         }
     });
+
+    /**
+     * Returns whether open type world interface hash tables use PEXT to compute table indices.
+     * The choice is fixed during image building based on the target CPU features and applies to
+     * all image layers and runtime-loaded classes, keeping table construction and lookup consistent.
+     */
+    @Fold
+    public static boolean usePextInterfaceHashing() {
+        return !Boolean.FALSE.equals(ConcealedOptions.UsePextInterfaceHashing.getValue()) && useInterfaceHashing() && !useClosedTypeWorldHubLayout() &&
+                        SubstrateTarget.getArchitecture() instanceof AMD64 arch &&
+                        arch.getFeatures().contains(AMD64.CPUFeature.BMI2);
+    }
 
     @Fold
     public static boolean useClosedTypeWorldHubLayout() {
@@ -1774,6 +1943,9 @@ public class SubstrateOptions {
     }
 
     public static class TruffleStableOptions {
+
+        @Option(help = "Enable the auxiliary engine cache features at runtime.", stability = OptionStability.STABLE) //
+        public static final HostedOptionKey<Boolean> AuxiliaryEngineCache = new HostedOptionKey<>(false);
 
         @Option(help = "Automatically copy the necessary language resources to the resources directory next to the produced image.", type = User, stability = OptionStability.STABLE)//
         public static final HostedOptionKey<Boolean> CopyLanguageResources = new HostedOptionKey<>(false);
@@ -1918,9 +2090,4 @@ public class SubstrateOptions {
         }
     });
 
-    @Option(help = "Internal, instead use 'auxiliary_image_reserved_space_size' in 'graal_create_isolate_params_t', or option ReservedAuxiliaryImageBytes.", type = Expert)//
-    public static final RuntimeOptionKey<Long> AuxiliaryImageBytesIsolateArgument = new RuntimeOptionKey<>(0L, RegisterForIsolateArgumentParser);
-
-    @Option(help = "Internal, instead use 'auxiliary_image_path' in 'graal_create_isolate_params_t'.", type = Expert)//
-    public static final RuntimeOptionKey<String> AuxiliaryImagePathIsolateArgument = new RuntimeOptionKey<>(null, RegisterForIsolateArgumentParser);
 }
