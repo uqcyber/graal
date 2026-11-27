@@ -111,7 +111,7 @@ public class NegateNode extends UnaryArithmeticNode<Neg> implements NarrowableAr
                 if (shiftAmount == ((IntegerStamp) stamp).getBits() - 1) {
                     // veriopt: NegativeShift: -(x >> y) |-> x >>> y
                     //                         when (stamp_expr (x >> y) = IntegerStamp b lo hi &&
-                    //                               y = const (new_int yb yv) && yv = b - 1)
+                    //                               y = const (new_int yb yv) && shift_amount yb yv = b - 1)
                     return UnsignedRightShiftNode.create(shift.getX(), shift.getY(), view);
                 }
             }
