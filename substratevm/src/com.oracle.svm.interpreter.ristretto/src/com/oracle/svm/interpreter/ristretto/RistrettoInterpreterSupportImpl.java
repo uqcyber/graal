@@ -40,8 +40,10 @@ import com.oracle.svm.core.deopt.DeoptimizedFrame.DeoptTargetTier;
 import com.oracle.svm.core.deopt.Deoptimizer;
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.interpreter.InterpreterFrameSourceInfo;
-import com.oracle.svm.jvmci.shared.meta.SharedMethod;
+import com.oracle.svm.espresso.classfile.descriptors.ByteSequence;
 import com.oracle.svm.graal.meta.SubstrateInstalledCodeImpl;
+import com.oracle.svm.guest.staging.core.heap.RestrictHeapAccess;
+import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.interpreter.InterpreterFrame;
 import com.oracle.svm.interpreter.RistrettoInterpreterSupport;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaMethod;
@@ -61,10 +63,14 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.LineNumberTable;
 
 /** Implements the optional Ristretto services consumed by the base interpreter. */
 @SingletonTraits(access = AllAccess.class, layeredCallbacks = NoLayeredCallbacks.class, other = DisallowLayered.class)
 final class RistrettoInterpreterSupportImpl implements RistrettoInterpreterSupport {
+    /// Limits method names written to crash logs without allocating an intermediate string.
+    private static final int MAX_SYMBOL_LOG_LENGTH = 255;
+
     @Override
     @AlwaysInline("Keep the compilation-disabled interpreter entry call-free")
     public MethodProfile profileMethodEntry(InterpreterResolvedJavaMethod method) {
@@ -120,52 +126,10 @@ final class RistrettoInterpreterSupportImpl implements RistrettoInterpreterSuppo
     @Override
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     public boolean isInterpreterDeoptReturnValueObject(FrameInfoQueryResult frameInfo) {
-        /*
-         * BeforePop still describes the state before an invoke consumes its arguments, and Rethrow
-         * describes an exceptional edge; neither has a completed normal result in the return
-         * register. Only AfterPop can describe the gap between a callee return and storing that
-         * result into the reconstructed interpreter operand stack. The remaining checks keep this
-         * Ristretto-specific interpretation away from AOT, non-deoptimizing, synthetic, and
-         * bytecode-less frames, whose ABI return register contents must not be treated as object
-         * roots.
-         */
         if (!RistrettoOptions.useDeoptimization()) {
             return false;
         }
-        /*
-         * The caller invokes this hook only after proving that the instruction pointer belongs to
-         * installed code with an interpreter deoptimization target. Missing decoded frame info is
-         * therefore corruption, not evidence for a primitive result. A false answer would be an
-         * unsafe default because it leaves a possible object return in an untracked machine word.
-         */
-        VMError.guarantee(frameInfo != null, "Installed Ristretto code must have decoded frame metadata");
-        if (!frameInfo.isAfterPop()) {
-            return false;
-        }
-        /*
-         * RuntimeFrameInfoCustomization always stores the SharedMethod for a frame whose method
-         * has an interpreter counterpart. That is stronger than FrameInfoQueryResult's general
-         * contract: AOT frame-info clients may legitimately observe a null deoptMethod, but an
-         * installed Ristretto frame selected by hasInstalledCodeInterpreterDeoptTarget() may not.
-         *
-         * Do not silently turn a violated encoding invariant into the primitive-return choice.
-         * At this point such a choice would hide an object from GC while the lazy-deopt stub is
-         * constructing the interpreter frame. Failing before the return address is patched is the
-         * only memory-safe response to malformed runtime frame metadata.
-         */
-        SharedMethod deoptMethod = frameInfo.getDeoptMethod();
-        VMError.guarantee(deoptMethod instanceof RistrettoMethod,
-                        "An installed Ristretto AfterPop frame must retain its deoptimization method");
-        RistrettoMethod rMethod = (RistrettoMethod) deoptMethod;
-        /*
-         * Ristretto derives the symbolic layout of every invoke from the stable compiler-visible
-         * bytecodes when the method is created. Reading that immutable metadata gives the exact
-         * call-site return kind without depending on compiler lookup, intrinsic selection, resolution,
-         * loading, allocation, or dependence on the interpreter's opportunistic linkage cache.
-         * The lookup deliberately fails if this AfterPop BCI is not an invoke: unknown metadata is
-         * never classified as primitive because that would be unsafe for a pending object result.
-         */
-        return RistrettoDeoptimizationSupport.computeDeoptInvokeReturnKind(rMethod, frameInfo.getBci()) == JavaKind.Object;
+        return RistrettoDeoptimizationSupport.pendingSourceCallReturnKind(frameInfo) == JavaKind.Object;
     }
 
     /**
@@ -205,6 +169,49 @@ final class RistrettoInterpreterSupportImpl implements RistrettoInterpreterSuppo
         InterpreterResolvedJavaMethod interpretedMethod = rMethod.getInterpreterMethod();
         int flags = FrameSourceInfo.MethodFlags.computeSourceMethodFlags(interpretedMethod.getModifiers(), interpretedMethod.isHidden(), interpretedMethod.isLambdaFormCompiled());
         return InterpreterFrameSourceInfo.forInterpretedMethod(interpretedMethod, frameInfo.getBci(), flags);
+    }
+
+    @Override
+    @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Used for crash log")
+    public boolean logRistrettoFrame(Log log, FrameInfoQueryResult frameInfo) {
+        if (frameInfo.getSourceClass() != null || !(frameInfo.getDeoptMethod() instanceof RistrettoMethod rMethod)) {
+            return false;
+        }
+
+        InterpreterResolvedJavaMethod interpretedMethod = rMethod.getInterpreterMethod();
+        int bci = frameInfo.getBci();
+        LineNumberTable lineNumberTable = interpretedMethod.getLineNumberTable();
+        int lineNumber = lineNumberTable != null && bci >= 0 ? lineNumberTable.getLineNumber(bci) : -1;
+
+        log.string(interpretedMethod.getDeclaringClass().getJavaClass().getName()).character('.');
+        logSymbol(log, interpretedMethod.getSymbolicName());
+        if (frameInfo.isDeoptEntry()) {
+            log.string("**");
+        }
+        log.character('(');
+        String sourceFileName = interpretedMethod.getDeclaringClass().getSourceFileName();
+        if (sourceFileName != null) {
+            log.string(sourceFileName);
+            if (lineNumber >= 0) {
+                log.character(':').signed(lineNumber);
+            }
+        } else {
+            log.string("Unknown Source");
+        }
+        log.character(')');
+        return true;
+    }
+
+    /// Writes a method name directly from its symbol to avoid allocating while printing a stack.
+    private static void logSymbol(Log log, ByteSequence symbol) {
+        int length = Math.min(symbol.length(), MAX_SYMBOL_LOG_LENGTH);
+        for (int i = 0; i < length; i++) {
+            int b = symbol.unsignedByteAt(i);
+            log.character(0x20 <= b && b <= 0x7e ? (char) b : '?');
+        }
+        if (symbol.length() > MAX_SYMBOL_LOG_LENGTH) {
+            log.string("...");
+        }
     }
 
     @Override

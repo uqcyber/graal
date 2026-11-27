@@ -50,15 +50,17 @@ import com.oracle.graal.pointsto.heap.ImageHeapScanner;
 import com.oracle.graal.pointsto.meta.AnalysisMetaAccess;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
-import com.oracle.svm.shared.BuildPhaseProvider;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
 import com.oracle.svm.core.fieldvaluetransformer.NewEmptyArrayFieldValueTransformer;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
+import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.invoke.MethodHandleIntrinsic;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
+import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
+import com.oracle.svm.shared.BuildPhaseProvider;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.VMError;
@@ -112,6 +114,9 @@ public class MethodHandleFeature implements InternalFeature {
      * method handle code uses reference comparisons on {@link MethodType} objects and assumes that
      * unidentical objects are not equal. This breaks if an object is created at runtime because an
      * equivalent image heap object is not part of the table and subsequently fails a comparison.
+     * In layered builds, this table is created only in the application layer, where MethodType's
+     * static fields are installed. It includes persisted MethodTypes from prior layers as well as
+     * objects reached during the current analysis.
      */
     private Object runtimeMethodTypeInternTable;
     private Method referencedKeySetAdd;
@@ -132,22 +137,24 @@ public class MethodHandleFeature implements InternalFeature {
         Class<?> makersClass = ReflectionUtil.lookupClass("java.lang.invoke.MethodHandleImpl$Makers");
         typedCollectors = ReflectionUtil.lookupField(makersClass, "TYPED_COLLECTORS");
 
-        Class<?> referencedKeySetClass = ReflectionUtil.lookupClass("jdk.internal.util.ReferencedKeySet");
-        // The following call must match the static initializer of MethodType#internTable.
-        Method create = ReflectionUtil.lookupMethod(referencedKeySetClass, "create", boolean.class, Supplier.class);
-        runtimeMethodTypeInternTable = ReflectionUtil.invokeMethod(create, null,
-                        /* isSoft */ false, (Supplier<Object>) () -> new ConcurrentHashMap<>(512));
-        referencedKeySetAdd = ReflectionUtil.lookupMethod(referencedKeySetClass, "add", Object.class);
-
         var accessImpl = (DuringSetupAccessImpl) access;
+        if (ImageLayerBuildingSupport.lastImageBuild()) {
+            Class<?> referencedKeySetClass = ReflectionUtil.lookupClass("jdk.internal.util.ReferencedKeySet");
+            // The following call must match the static initializer of MethodType#internTable.
+            Method create = ReflectionUtil.lookupMethod(referencedKeySetClass, "create", boolean.class, Supplier.class);
+            runtimeMethodTypeInternTable = ReflectionUtil.invokeMethod(create, null,
+                            /* isSoft */ false, (Supplier<Object>) () -> new ConcurrentHashMap<>(512));
+            referencedKeySetAdd = ReflectionUtil.lookupMethod(referencedKeySetClass, "add", Object.class);
+            accessImpl.registerObjectReachabilityHandler(this::registerHeapMethodType, MethodType.class);
+        }
+
         MethodHandleInvokerRenamingSubstitutionProcessor substitutionProcessor = new MethodHandleInvokerRenamingSubstitutionProcessor(accessImpl.getBigBang());
         ImageSingletons.add(MethodHandleInvokerRenamingSubstitutionProcessor.class, substitutionProcessor);
         accessImpl.registerSubstitutionProcessor(substitutionProcessor);
 
-        accessImpl.registerObjectReachableCallback(memberNameClass, (a1, member, reason) -> registerHeapMemberName((Member) member));
-        accessImpl.registerObjectReachableCallback(MethodType.class, (a1, methodType, reason) -> registerHeapMethodType(methodType));
+        accessImpl.registerObjectReachabilityHandler(member -> registerHeapMemberName((Member) member), memberNameClass);
         Class<?> speciesDataClass = ReflectionUtil.lookupClass("java.lang.invoke.BoundMethodHandle$SpeciesData");
-        accessImpl.registerObjectReachableCallback(speciesDataClass, (a1, speciesData, reason) -> registerHeapSpeciesData(speciesData));
+        accessImpl.registerObjectReachabilityHandler(this::registerHeapSpeciesData, speciesDataClass);
     }
 
     @Override
@@ -159,12 +166,14 @@ public class MethodHandleFeature implements InternalFeature {
         eagerlyInitializeInvokersFunctions();
         eagerlyInitializeValueConversionsCaches();
         eagerlyInitializeCallSite();
+        eagerlyInitializeLazyInitializingVarHandle();
 
         access.registerSubtypeReachabilityHandler(MethodHandleFeature::registerVarHandleMethodsForReflection, VarHandle.class);
         access.registerSubtypeReachabilityHandler(MethodHandleFeature::scanBoundMethodHandle, ReflectionUtil.lookupClass("java.lang.invoke.BoundMethodHandle"));
 
         AnalysisMetaAccess metaAccess = access.getMetaAccess();
         ImageHeapScanner heapScanner = access.getUniverse().getHeapScanner();
+        var hostedValuesProvider = access.getUniverse().getHostedValuesProvider();
 
         access.registerFieldValueTransformer(
                         ReflectionUtil.lookupField(ReflectionUtil.lookupClass("java.lang.invoke.ClassSpecializer"), "cache"),
@@ -203,9 +212,19 @@ public class MethodHandleFeature implements InternalFeature {
         access.registerFieldValueTransformer(
                         JVMCIReflectionUtil.getUniqueDeclaredField(access.findTypeByName("java.lang.invoke.DirectMethodHandle").unwrapTowardsOriginalType(), "ACCESSOR_FORMS"),
                         NewEmptyArrayFieldValueTransformer.INSTANCE);
-        access.registerFieldValueTransformer(
-                        ReflectionUtil.lookupField(ReflectionUtil.lookupClass("java.lang.invoke.MethodType"), "internTable"),
-                        (receiver, originalValue) -> runtimeMethodTypeInternTable);
+        if (ImageLayerBuildingSupport.lastImageBuild()) {
+            access.registerFieldValueTransformer(
+                            ReflectionUtil.lookupField(ReflectionUtil.lookupClass("java.lang.invoke.MethodType"), "internTable"),
+                            (receiver, originalValue) -> runtimeMethodTypeInternTable);
+            if (ImageLayerBuildingSupport.buildingApplicationLayer()) {
+                /*
+                 * Shared layer code can use MethodTypes that are never visited by this layer's
+                 * reachability callbacks. Keep them in the runtime intern table so that runtime
+                 * lookups return the same objects as those embedded in shared layer code.
+                 */
+                HostedImageLayerBuildingSupport.singleton().getLoader().forEachPersistedMethodType(this::registerHeapMethodType);
+            }
+        }
 
         // We initialize most of method-handle-related classes eagerly.
         access.allowStableFieldFoldingBeforeAnalysis(access.findField("java.lang.invoke.MethodHandleImpl", "ARRAYS"));
@@ -229,7 +248,7 @@ public class MethodHandleFeature implements InternalFeature {
                 MethodHandle[] filteredArray = new MethodHandle[originalArray.length];
                 for (int i = 0; i < originalArray.length; i++) {
                     MethodHandle handle = originalArray[i];
-                    if (handle != null && heapScanner.isObjectReachable(handle)) {
+                    if (handle != null && heapScanner.isObjectReachable(hostedValuesProvider.forObject(handle))) {
                         filteredArray[i] = handle;
                     }
                 }
@@ -285,7 +304,8 @@ public class MethodHandleFeature implements InternalFeature {
                                     if (object != null) {
                                         MethodHandle constructor = ReflectionUtil.invokeMethod(constructorGetter, object);
                                         MethodHandle concatenator = ReflectionUtil.invokeMethod(concatenatorGetter, object);
-                                        if (constructor != null && concatenator != null && heapScanner.isObjectReachable(constructor) && heapScanner.isObjectReachable(concatenator)) {
+                                        if (constructor != null && concatenator != null && heapScanner.isObjectReachable(hostedValuesProvider.forObject(constructor)) &&
+                                                        heapScanner.isObjectReachable(hostedValuesProvider.forObject(concatenator))) {
                                             result.put(entry.getKey(), value);
                                         }
                                     }
@@ -414,6 +434,17 @@ public class MethodHandleFeature implements InternalFeature {
         ReflectionUtil.invokeMethod(ReflectionUtil.lookupMethod(CallSite.class, "uninitializedCallSiteHandle"), null);
     }
 
+    /**
+     * Eagerly initializes a JDK method-handle cache that would otherwise trigger reflection
+     * registration after analysis.
+     */
+    private static void eagerlyInitializeLazyInitializingVarHandle() {
+        Class<?> lazyInitializingVarHandleClass = ReflectionUtil.lookupClass(true, "java.lang.invoke.LazyInitializingVarHandle");
+        if (lazyInitializingVarHandleClass != null) {
+            ReflectionUtil.invokeMethod(ReflectionUtil.lookupMethod(lazyInitializingVarHandleClass, "ensureInitializedMh"), null);
+        }
+    }
+
     private static void registerVarHandleMethodsForReflection(FeatureAccess access, Class<?> subtype) {
         if (subtype.getPackage().getName().equals(JLI_PACKAGE) && subtype != VarHandle.class) {
             JVMCIRuntimeReflection.register(((DuringAnalysisAccessImpl) access).getMetaAccess().lookupJavaType(subtype).getDeclaredMethods(false));
@@ -421,6 +452,7 @@ public class MethodHandleFeature implements InternalFeature {
     }
 
     public void registerHeapMethodType(MethodType methodType) {
+        assert ImageLayerBuildingSupport.lastImageBuild();
         try {
             referencedKeySetAdd.invoke(runtimeMethodTypeInternTable, methodType);
         } catch (ReflectiveOperationException e) {
@@ -489,7 +521,9 @@ public class MethodHandleFeature implements InternalFeature {
         ScanReason reason = new ObjectScanner.OtherReason("Manual rescan triggered during analysis from " + MethodHandleFeature.class);
         access.rescanRoot(typedAccessors, reason);
         access.rescanRoot(typedCollectors, reason);
-        access.rescanObject(runtimeMethodTypeInternTable, reason);
+        if (ImageLayerBuildingSupport.lastImageBuild()) {
+            access.rescanObject(runtimeMethodTypeInternTable, reason);
+        }
         if (numTypes != access.getUniverse().getTypes().size()) {
             access.requireAnalysisIteration();
         }

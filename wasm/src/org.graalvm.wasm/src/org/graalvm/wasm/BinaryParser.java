@@ -123,7 +123,6 @@ import org.graalvm.wasm.parser.bytecode.BytecodeParser;
 import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen;
 import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen.BranchHint;
 import org.graalvm.wasm.parser.bytecode.RuntimeBytecodeGen.BranchOp.BrOnCast;
-import org.graalvm.wasm.parser.ir.CallNode;
 import org.graalvm.wasm.parser.ir.CodeEntry;
 import org.graalvm.wasm.parser.validation.ExceptionHandler;
 import org.graalvm.wasm.parser.validation.ParserState;
@@ -658,6 +657,9 @@ public class BinaryParser extends BinaryStreamParser {
                     int superTypeCount = readLength();
                     if (superTypeCount == 1) {
                         int superTypeIndex = readTypeIndex();
+                        if (superTypeIndex >= typeIndex) {
+                            fail(Failure.SUB_TYPE, "Supertypes must be defined before subtypes");
+                        }
                         module.registerSuperType(typeIndex, superTypeIndex);
                         module.limits().checkSubtypeDepth(module.superTypeDepth(typeIndex));
                     } else if (superTypeCount > 1) {
@@ -823,7 +825,8 @@ public class BinaryParser extends BinaryStreamParser {
             // Store the function start offset, instruction start offset, and function end offset.
             functionDebugData.add(startOffset - codeSectionOffset);
             functionDebugData.add(offset - codeSectionOffset);
-            codeEntries[entryIndex] = readCodeEntry(importedFunctionCount + entryIndex, locals, startOffset, startOffset + codeEntrySize, entryIndex < codeEntryCount - 1, bytecode, entryIndex);
+            codeEntries[entryIndex] = readCodeEntry(importedFunctionCount + entryIndex, locals, startOffset, startOffset + codeEntrySize,
+                            entryIndex < codeEntryCount - 1, bytecode, entryIndex);
             functionDebugData.add(offset - codeSectionOffset);
             assertIntEqual(offset - startOffset, codeEntrySize, Failure.UNSPECIFIED_MALFORMED, "Code entry %d size is incorrect", entryIndex);
         }
@@ -841,7 +844,7 @@ public class BinaryParser extends BinaryStreamParser {
             localTypes[index + paramCount] = locals.get(index);
         }
         final BranchHintState branchHintState = branchHintSection == null ? BranchHintState.EMPTY : branchHintSection.stateFor(functionIndex);
-        return readFunction(functionIndex, localTypes, startOffset, endOffset, hasNextFunction, bytecode, codeEntryIndex, null, branchHintState);
+        return readFunction(functionIndex, localTypes, startOffset, endOffset, hasNextFunction, bytecode, codeEntryIndex, null, branchHintState, false);
     }
 
     private IntArrayList readCodeEntryLocals() {
@@ -903,10 +906,15 @@ public class BinaryParser extends BinaryStreamParser {
     }
 
     private CodeEntry readFunction(int functionIndex, int[] locals, int sourceCodeStartOffset, int sourceCodeEndOffset, boolean hasNextFunction, RuntimeBytecodeGen bytecode,
-                    int codeEntryIndex, EconomicMap<Integer, Integer> offsetToLineIndexMap, BranchHintState branchHintState) {
+                    int codeEntryIndex, EconomicMap<Integer, Integer> offsetToLineIndexMap, BranchHintState branchHintState, boolean hasLegacyCatches) {
         final ParserState state = new ParserState(bytecode, module);
-        final ArrayList<CallNode> callNodes = new ArrayList<>();
+        final IntArrayList callFunctionIndices = new IntArrayList();
+        int directCallNodeCount = 0;
+        int indirectCallNodeCount = 0;
+        int indirectCallCount = 0;
         final int bytecodeStartOffset = bytecode.location();
+        final int functionSourceCodeStartOffset = offset;
+        boolean hasLoops = false;
         int[] paramTypes = module.function(functionIndex).paramTypes();
         int[] resultTypes = module.function(functionIndex).resultTypes();
         state.enterFunction(paramTypes, resultTypes, locals);
@@ -959,6 +967,7 @@ public class BinaryParser extends BinaryStreamParser {
                     break;
                 }
                 case Instructions.LOOP: {
+                    hasLoops = true;
                     // Jumps are targeting the loop instruction for OSR.
                     final int[] loopParamTypes;
                     final int[] loopResultTypes;
@@ -982,7 +991,7 @@ public class BinaryParser extends BinaryStreamParser {
                         default -> throw WasmException.create(Failure.DISABLED_MULTI_VALUE);
                     }
                     state.popAll(loopParamTypes);
-                    state.enterLoop(loopParamTypes, loopResultTypes);
+                    state.enterLoop(loopParamTypes, loopResultTypes, hasLegacyCatches);
                     break;
                 }
                 case Instructions.IF: {
@@ -1091,8 +1100,9 @@ public class BinaryParser extends BinaryStreamParser {
                         assertIntLessOrEqual(function.resultCount(), 1, Failure.INVALID_RESULT_ARITY);
                     }
                     state.pushAll(function.resultTypes());
-                    state.addCall(callNodes.size(), callFunctionIndex);
-                    callNodes.add(new CallNode(bytecode.location(), callFunctionIndex));
+                    final int callNodeIndex = function.isImported() ? indirectCallNodeCount++ : directCallNodeCount++;
+                    state.addCall(callNodeIndex, callFunctionIndex);
+                    callFunctionIndices.add(callFunctionIndex);
                     break;
                 }
                 case Instructions.CALL_INDIRECT: {
@@ -1116,8 +1126,8 @@ public class BinaryParser extends BinaryStreamParser {
                         callResultTypes[i] = module.functionTypeResultTypeAt(expectedFunctionTypeIndex, i);
                     }
                     state.pushAll(callResultTypes);
-                    state.addIndirectCall(callNodes.size(), expectedFunctionTypeIndex, tableIndex);
-                    callNodes.add(new CallNode(bytecode.location()));
+                    state.addIndirectCall(indirectCallNodeCount++, expectedFunctionTypeIndex, tableIndex);
+                    indirectCallCount++;
                     break;
                 }
                 case Instructions.RETURN_CALL: {
@@ -1549,8 +1559,8 @@ public class BinaryParser extends BinaryStreamParser {
                     for (int i = 0; i < resultCount; i++) {
                         state.push(module.functionTypeResultTypeAt(expectedFunctionTypeIndex, i));
                     }
-                    state.addRefCall(callNodes.size(), expectedFunctionTypeIndex);
-                    callNodes.add(new CallNode(bytecode.location()));
+                    state.addRefCall(indirectCallNodeCount++, expectedFunctionTypeIndex);
+                    indirectCallCount++;
                     break;
                 }
                 case Instructions.RETURN_CALL_REF: {
@@ -1627,6 +1637,17 @@ public class BinaryParser extends BinaryStreamParser {
             }
         }
 
+        if (!hasLegacyCatches && hasLoops && state.maxLegacyCatchDepth() != 0) {
+            // A loop can precede the first legacy catch. Re-emit only functions that actually
+            // contain legacy catches, before publishing code-entry metadata. Tail-call flags and
+            // the module's EH-family flags are idempotent; branch-hint consumption must be reset.
+            bytecode.retreatTo(bytecodeStartOffset);
+            offset = functionSourceCodeStartOffset;
+            branchHintState.index = 0;
+            return readFunction(functionIndex, locals, sourceCodeStartOffset, sourceCodeEndOffset, hasNextFunction, bytecode,
+                            codeEntryIndex, offsetToLineIndexMap, branchHintState, true);
+        }
+
         if (offsetToLineIndexMap != null) {
             // Make sure we notify a statement exit before leaving the function
             bytecode.addNotify(-1, -1);
@@ -1665,8 +1686,8 @@ public class BinaryParser extends BinaryStreamParser {
             // Do not override the code entry offset when rereading the function.
             module.setCodeEntryOffset(codeEntryIndex, functionEndOffset);
         }
-        return new CodeEntry(functionIndex, state.maxStackSize(), state.maxLegacyCatchDepth(), locals, resultTypes, callNodes, bytecodeStartOffset, bytecodeEndOffset,
-                        state.usesMemoryZero(), exceptionTableOffset);
+        return new CodeEntry(functionIndex, state.maxStackSize(), state.maxLegacyCatchDepth(), locals, resultTypes, callFunctionIndices.toArray(), indirectCallCount,
+                        bytecodeStartOffset, bytecodeEndOffset, state.usesMemoryZero(), exceptionTableOffset);
     }
 
     private void readNumericInstructions(ParserState state, int opcode) {
@@ -4575,7 +4596,8 @@ public class BinaryParser extends BinaryStreamParser {
         final CodeEntry codeEntry = BytecodeParser.readCodeEntry(module, module.bytecode(), codeEntryIndex);
         offset = module.functionSourceCodeInstructionOffset(functionIndex);
         final int endOffset = module.functionSourceCodeEndOffset(functionIndex);
-        final CodeEntry result = readFunction(functionIndex, codeEntry.localTypes(), offset, endOffset, true, bytecode, codeEntryIndex, offsetToLineIndexMap, BranchHintState.EMPTY);
+        final CodeEntry result = readFunction(functionIndex, codeEntry.localTypes(), offset, endOffset, true, bytecode,
+                        codeEntryIndex, offsetToLineIndexMap, BranchHintState.EMPTY, codeEntry.maxLegacyCatchDepth() != 0);
         return Pair.create(result, bytecode.toArray());
     }
 }

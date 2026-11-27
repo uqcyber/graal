@@ -70,6 +70,7 @@ import jdk.vm.ci.meta.Assumptions.AssumptionResult;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
+import jdk.vm.ci.meta.MetaUtil;
 import jdk.vm.ci.meta.PrimitiveConstant;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -931,18 +932,35 @@ public abstract class AnalysisType extends AnalysisElement implements WrappedJav
         return wrapped;
     }
 
+    /**
+     * Returns whether this type is backed by a host VM type rather than an incomplete placeholder
+     * loaded from a shared layer.
+     */
+    public boolean isBackedByHostType() {
+        return !(wrapped instanceof BaseLayerType);
+    }
+
     @Override
     public ResolvedJavaType unwrapTowardsOriginalType() {
         return wrapped;
     }
 
-    public Class<?> getJavaClass() {
-        return OriginalClassProvider.getJavaClass(this);
-    }
-
     @Override
     public final String getName() {
         return wrapped.getName();
+    }
+
+    /**
+     * Array names must incorporate substituted component names rather than the original VM name
+     * retained by the wrapped array type. This keeps runtime class names consistent with their
+     * component types, including when names are constant-folded.
+     */
+    @Override
+    public String toClassName() {
+        if (isArray()) {
+            return MetaUtil.internalNameToJava("[".repeat(getArrayDimension()) + getElementalType().getName(), true, true);
+        }
+        return wrapped.toClassName();
     }
 
     @Override
@@ -1032,7 +1050,18 @@ public abstract class AnalysisType extends AnalysisElement implements WrappedJav
              * It is possible that we see unresolved types here. If the permitted subclasses are
              * queried during analysis, we need to resolve them.
              */
-            ResolvedJavaType resolvedPermittedSubclass = permittedSubclass.resolve(wrapped);
+            ResolvedJavaType resolvedPermittedSubclass;
+            try {
+                resolvedPermittedSubclass = permittedSubclass.resolve(wrapped);
+            } catch (LinkageError e) {
+                /*
+                 * Like Class.getPermittedSubclasses(), omit subclasses that cannot be loaded. A
+                 * permitted subclass may be absent from the application class path, for example
+                 * after removing unused classes. Such a subclass cannot be instantiated and must
+                 * not prevent analysis of the remaining sealed hierarchy.
+                 */
+                continue;
+            }
             /*
              * The permitted subclasses of the wrapped type may contain types that are unsupported
              * on the target platform (e.g. hosted-only types). We therefore need to filter the list

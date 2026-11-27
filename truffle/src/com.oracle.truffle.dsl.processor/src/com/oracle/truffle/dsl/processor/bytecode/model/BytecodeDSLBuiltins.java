@@ -261,13 +261,20 @@ public class BytecodeDSLBuiltins {
                         .setInstruction(m.storeLocalInstruction);
         m.clearLocalInstruction = m.instruction(InstructionKind.CLEAR_LOCAL, "clear.local", m.signature(void.class))//
                         .addImmediate(ImmediateKind.FRAME_INDEX, "frame_index");
+        m.operation(OperationKind.CLEAR_LOCAL, "ClearLocal", String.format("""
+                        ClearLocal clears {@code local} in the current frame.
+                        Until a value is written to the local, a subsequent LoadLocal %s.
+                        """, loadIllegalLocalBehaviour(m))) //
+                        .setVoid(true)//
+                        .setOperationBeginArguments(new OperationArgument(types.BytecodeLocal, Encoding.LOCAL, "local", "the local to clear"))//
+                        .setInstruction(m.clearLocalInstruction);
         if (m.enableMaterializedLocalAccesses) {
             m.loadLocalMaterializedOperation = m.operation(OperationKind.LOAD_LOCAL_MATERIALIZED, "LoadLocalMaterialized",
                             String.format("""
                                             LoadLocalMaterialized reads {@code local} from the materialized frame produced by {@code frame}.
                                             This operation can be used to read a local defined by the current root or an enclosing root.
                                             The local must belong to the materialized frame. It should also be in scope, otherwise the operation may produce unexpected values.
-                                            The interpreter will validate the scope if the interpreter is configured to {@link %s#storeBytecodeIndexInFrame store the bytecode index in the frame}.
+                                            The interpreter will validate the scope if {@link %s#bytecodeIndexMode the bytecode index mode} is {@code FRAME}.
                                             """, GENERATE_BYTECODE)) //
                             .setOperationBeginArguments(new OperationArgument(types.BytecodeLocal, Encoding.LOCAL, "local", "the local to load")) //
                             .setDynamicOperands(child("frame")) //
@@ -280,7 +287,7 @@ public class BytecodeDSLBuiltins {
                                             StoreLocalMaterialized writes the value produced by {@code value} into {@code local} in the materialized frame produced by {@code frame}.
                                             This operation can be used to store locals defined by the current root or an enclosing root.
                                             The local must belong to the materialized frame. It should also be in scope, otherwise the operation may produce unexpected values.
-                                            The interpreter will validate the scope if the interpreter is configured to {@link %s#storeBytecodeIndexInFrame store the bytecode index in the frame}.
+                                            The interpreter will validate the scope if {@link %s#bytecodeIndexMode the bytecode index mode} is {@code FRAME}.
                                             """, GENERATE_BYTECODE)) //
                             .setVoid(true) //
                             .setOperationBeginArguments(new OperationArgument(types.BytecodeLocal, Encoding.LOCAL, "local", "the local to store to")) //
@@ -495,15 +502,6 @@ public class BytecodeDSLBuiltins {
                             .setInstruction(m.storeStackValueInstruction);
         }
 
-        OperationModel clearLocalOperation = m.operation(OperationKind.CLEAR_LOCAL, "ClearLocal", String.format("""
-                        ClearLocal clears {@code local} in the current frame.
-                        Until a value is written to the local, a subsequent LoadLocal %s.
-                        """, loadIllegalLocalBehaviour(m)), "ClearLocal", BytecodeDSLModel.RegistrationMode.OPTIONAL_BUILTIN);
-        if (clearLocalOperation != null) {
-            clearLocalOperation.setVoid(true)//
-                            .setOperationBeginArguments(new OperationArgument(types.BytecodeLocal, Encoding.LOCAL, "local", "the local to clear"))//
-                            .setInstruction(m.clearLocalInstruction);
-        }
     }
 
     /**

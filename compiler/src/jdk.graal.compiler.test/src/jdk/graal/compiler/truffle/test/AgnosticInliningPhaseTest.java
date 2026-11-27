@@ -28,6 +28,7 @@ import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
 
 import jdk.graal.compiler.api.directives.GraalDirectives;
+import jdk.graal.compiler.core.common.CancellationBailoutException;
 import jdk.graal.compiler.core.common.CompilationIdentifier;
 import jdk.graal.compiler.nodes.IfNode;
 import jdk.graal.compiler.nodes.ProfileData.BranchProbabilityData;
@@ -85,6 +86,24 @@ public class AgnosticInliningPhaseTest extends PartialEvaluationTest {
                         new PostPartialEvaluationSuite(compiler.getOrCreateCompilerOptions(callTarget), false));
         agnosticInliningPhase.apply(context.graph, context);
         return task;
+    }
+
+    @Test
+    public void testCancellationDuringCallExpansion() {
+        OptimizedCallTarget leaf = createDummyNode();
+        OptimizedCallTarget target = callTarget(new BranchCallRootNode(leaf, 0.2D));
+        warm(target, true);
+        TruffleCompilerImpl compiler = getTruffleCompiler(target);
+        RecordingCompilationTask task = new RecordingCompilationTask();
+        try (TruffleCompilation compilation = compiler.openCompilation(task, target)) {
+            TruffleTierContext context = TruffleTierContext.createInitialContext(compiler.getPartialEvaluator(), compiler.getOrCreateCompilerOptions(target),
+                            getDebugContext(), target, compilation.getCompilationId(), getSpeculationLog(), task, null);
+            CallTree tree = new CallTree(new PostPartialEvaluationSuite(compiler.getOrCreateCompilerOptions(target), false), context, new InliningPolicy() {
+            });
+            task.cancelled = true;
+            CancellationBailoutException bailout = Assert.assertThrows(CancellationBailoutException.class, onlyChild(tree.getRoot())::expand);
+            Assert.assertFalse(bailout.isPermanent());
+        }
     }
 
     @Test
@@ -230,6 +249,22 @@ public class AgnosticInliningPhaseTest extends PartialEvaluationTest {
         assertNotInlined(task, deadLeaf);
     }
 
+    @Test
+    public void testBalancedRecursiveInliningDecisions() {
+        OptimizedCallTarget recursive = callTarget(new BinaryRecursiveRootNode());
+        CallTree tree = createAgnosticCallTree(recursive, 3);
+
+        tree.getRoot().getPolicy().run(tree);
+
+        // Each recursive invocation replaces one call with two half-frequency calls. Recursion
+        // alone should not give this balanced, non-leaf subtree an inlining benefit.
+        Assert.assertEquals(2, tree.getRoot().getChildren().size());
+        for (CallNode child : tree.getRoot().getChildren()) {
+            Assert.assertEquals(1, child.getRecursionDepth());
+            Assert.assertEquals(CallNode.State.Expanded, child.getState());
+        }
+    }
+
     private static void warm(OptimizedCallTarget target, Object... arguments) {
         target.call(arguments);
         target.call(arguments);
@@ -355,6 +390,28 @@ public class AgnosticInliningPhaseTest extends PartialEvaluationTest {
                 return firstCallNode.call();
             }
             return secondCallNode.call();
+        }
+    }
+
+    private static final class BinaryRecursiveRootNode extends RootNode {
+
+        @Child private OptimizedDirectCallNode firstCallNode;
+        @Child private OptimizedDirectCallNode secondCallNode;
+
+        BinaryRecursiveRootNode() {
+            super(null);
+            RootCallTarget target = getCallTarget();
+            this.firstCallNode = insert((OptimizedDirectCallNode) Truffle.getRuntime().createDirectCallNode(target));
+            this.secondCallNode = insert((OptimizedDirectCallNode) Truffle.getRuntime().createDirectCallNode(target));
+        }
+
+        @Override
+        public Object execute(VirtualFrame frame) {
+            int depth = (int) frame.getArguments()[0];
+            if (CompilerDirectives.injectBranchProbability(0.5D, depth == 0)) {
+                return 1;
+            }
+            return (int) firstCallNode.call(depth - 1) + (int) secondCallNode.call(depth - 1);
         }
     }
 
@@ -509,10 +566,11 @@ public class AgnosticInliningPhaseTest extends PartialEvaluationTest {
     private static final class RecordingCompilationTask implements TruffleCompilationTask {
 
         private final EconomicSet<TruffleCompilable> inlinedTargets = EconomicSet.create(Equivalence.IDENTITY);
+        private boolean cancelled;
 
         @Override
         public boolean isCancelled() {
-            return false;
+            return cancelled;
         }
 
         @Override

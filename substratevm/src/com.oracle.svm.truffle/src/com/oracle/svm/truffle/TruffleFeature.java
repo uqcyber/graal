@@ -113,6 +113,7 @@ import org.graalvm.word.impl.Word;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.HostedProviders;
+import com.oracle.svm.core.ParsingReason;
 import com.oracle.svm.core.UninterruptibleAnnotationUtils;
 import com.oracle.svm.core.UninterruptibleGuestValue;
 import com.oracle.svm.core.annotate.Alias;
@@ -125,13 +126,13 @@ import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.core.graal.snippets.NodeLoweringProvider;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.jdk.VectorAPIEnabled;
 import com.oracle.svm.core.jdk.resources.MissingResourceRegistrationUtils;
 import com.oracle.svm.core.reflect.MissingReflectionRegistrationUtils;
 import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.core.stack.JavaStackWalker;
-import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.guest.staging.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.graal.RuntimeCompilationSupport;
 import com.oracle.svm.graal.hosted.runtimecompilation.CallTreeInfo;
@@ -159,11 +160,13 @@ import com.oracle.svm.shared.util.ReflectionUtil;
 import com.oracle.svm.shared.util.StringUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.truffle.api.SubstrateKnownTruffleTypes;
+import com.oracle.svm.truffle.api.SubstrateOptimizedCallTarget;
 import com.oracle.svm.truffle.api.SubstrateThreadLocalHandshake;
 import com.oracle.svm.truffle.api.SubstrateThreadLocalHandshakeSnippets;
 import com.oracle.svm.truffle.api.SubstrateTruffleCompiler;
 import com.oracle.svm.truffle.api.SubstrateTruffleRuntime;
 import com.oracle.svm.truffle.api.SubstrateTruffleUniverseFactory;
+import com.oracle.svm.truffle.api.TypedEntrySupport;
 import com.oracle.svm.util.GuestAnnotationAccess;
 import com.oracle.svm.util.OriginalClassProvider;
 import com.oracle.truffle.api.CompilerAsserts;
@@ -270,6 +273,11 @@ public class TruffleFeature implements InternalFeature {
     }
 
     @Override
+    public void registerGraphBuilderPlugins(Providers providers, GraphBuilderConfiguration.Plugins plugins, ParsingReason reason) {
+        TypedEntrySupport.registerExactEntryPlugin(plugins, ((SubstrateTruffleRuntime) Truffle.getRuntime()).getExactGeneratedProxyEntries());
+    }
+
+    @Override
     public void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {
         foreignCalls.register(SubstrateThreadLocalHandshake.FOREIGN_POLL);
     }
@@ -336,6 +344,7 @@ public class TruffleFeature implements InternalFeature {
         UserError.guarantee(runtime instanceof SubstrateTruffleRuntime, "TruffleFeature requires SubstrateTruffleRuntime");
         SubstrateTruffleRuntime truffleRuntime = (SubstrateTruffleRuntime) Truffle.getRuntime();
         truffleRuntime.resetHosted();
+        truffleRuntime.initializeEngineCacheSupport(new AuxiliaryEngineCacheSupport());
         RuntimeCompilationFeature runtimeCompilationFeature = RuntimeCompilationFeature.singleton();
         runtimeCompilationFeature.addAfterInstallRuntimeConfigCallback(() -> {
             Providers providers = RuntimeCompilationSupport.getRuntimeConfig().getProviders();
@@ -470,6 +479,7 @@ public class TruffleFeature implements InternalFeature {
         for (ResolvedJavaMethod method : partialEvaluator.getCompilationRootMethods()) {
             runtimeCompilationFeature.prepareMethodForRuntimeCompilation(method, config);
         }
+        TypedEntrySupport.beforeAnalysis(config);
         runtimeCompilationFeature.initializeAnalysisProviders(config.getBigBang(), HostedTruffleConstantFieldProvider::new);
 
         initializeMethodBlocklist(config.getMetaAccess(), access);
@@ -488,16 +498,12 @@ public class TruffleFeature implements InternalFeature {
         }
 
         /*
-         * GR-57561: The constructor of the concrete subclass of OptimizedCallTarget needs to be
-         * seen by the analysis, otherwise the analysis will not see any writes to its fields
-         * (namely rootNode and engine), which will make a lot of Truffle code look unreachable.
-         * Since the createOptimizedCallTarget is a member method, we also need to ensure that an
-         * instance of TruffleSupport is always seen as instantiated, otherwise the method might not
-         * be considered reachable.
+         * GR-57561: The concrete OptimizedCallTarget must be seen as instantiated, and its
+         * constructor analyzed so writes to rootNode and engine keep Truffle compilation reachable.
          */
-        config.registerAsInHeap(TruffleSupport.singleton().getClass(), "Concrete subclass of TruffleSupport needs to be seen as instantiated, registered by " + TruffleFeature.class);
-        config.registerAsRoot(ReflectionUtil.lookupMethod(TruffleSupport.singleton().getClass(), "createOptimizedCallTarget", OptimizedCallTarget.class, RootNode.class), true,
-                        "The constructor of the concrete subclass of OptimizedCallTarget needs to be seen by the analysis, registered by " + TruffleFeature.class);
+        config.registerAsInHeap(SubstrateOptimizedCallTarget.class, "Concrete OptimizedCallTarget needs to be seen as instantiated, registered by " + TruffleFeature.class);
+        config.registerAsRoot(ReflectionUtil.lookupConstructor(SubstrateOptimizedCallTarget.class, OptimizedCallTarget.class, RootNode.class), true,
+                        "The constructor of OptimizedCallTarget needs to be seen by the analysis, registered by " + TruffleFeature.class);
 
         /*
          * This effectively initializes the Truffle fallback engine which does all the system
@@ -1054,6 +1060,7 @@ public class TruffleFeature implements InternalFeature {
 
     @Override
     public void beforeCompilation(BeforeCompilationAccess config) {
+        TypedEntrySupport.beforeCompilation(config);
 
         if (Options.TruffleCheckFrameImplementation.getValue()) {
             /*

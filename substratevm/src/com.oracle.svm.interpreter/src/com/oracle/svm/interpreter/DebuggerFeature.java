@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -79,7 +79,8 @@ import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.code.SubstrateBackendWithAssembler;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.meta.MethodRef;
+import com.oracle.svm.guest.staging.meta.MethodRef;
+import com.oracle.svm.core.meta.MethodRefUtils;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.graal.hosted.DeoptimizationFeature;
 import com.oracle.svm.hosted.FeatureImpl;
@@ -115,6 +116,7 @@ import com.oracle.svm.shared.option.HostedOptionValues;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GuestAccess;
 import com.oracle.svm.util.JVMCIReflectionUtil;
+import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.core.common.SuppressFBWarnings;
@@ -386,7 +388,7 @@ public class DebuggerFeature implements InternalFeature {
                                         InterpreterUtil.log("[process invokes] cannot execute %s due to call-site (%s) @ bci=%s is not callable by interpreter%n", method.getName(), bci, calleeMethod);
                                         if (method.getAnalyzedGraph() == null) {
                                             accessImpl.registerAsRoot(method, isInvokeSpecial(method), "method handle for interpreter");
-                                            accessImpl.registerAsUsed(method.getDeclaringClass().getJavaClass());
+                                            accessImpl.registerAsUsed(method.getDeclaringClass());
                                             access.requireAnalysisIteration();
                                         }
                                         if (method.reachableInCurrentLayer()) {
@@ -458,7 +460,7 @@ public class DebuggerFeature implements InternalFeature {
                          * initializer; it can't always be made read-only.
                          */
                         if (staticField.isStatic() && staticField.isSynthetic() && staticField.getName().startsWith(AssertionsSupport.SYNTHETIC_ASSERTIONS_DISABLED_FIELD_NAME)) {
-                            Class<?> declaringClass = aType.getJavaClass();
+                            Class<?> declaringClass = OriginalClassProvider.getJavaClass(aType);
                             boolean value = !AssertionsSupport.singleton().desiredAssertionStatus(declaringClass);
                             InterpreterResolvedJavaField field = iUniverse.getOrCreateField(analysisStaticField);
                             JavaConstant javaConstant = iUniverse.constant(JavaConstant.forBoolean(value));
@@ -563,7 +565,7 @@ public class DebuggerFeature implements InternalFeature {
                     interpreterMethod.setEnterStubOffset(estOffset++);
                 }
 
-                interpreterMethod.setNativeEntryPoint(InterpreterResolvedJavaMethod.createMethodRef(interpreterMethod.getOriginalMethod()));
+                interpreterMethod.setNativeEntryPoint(MethodRefUtils.create(interpreterMethod.getOriginalMethod()));
             }
 
             if (!interpreterMethod.isStatic() && !interpreterMethod.isConstructor()) {
@@ -626,6 +628,12 @@ public class DebuggerFeature implements InternalFeature {
                 BuildTimeInterpreterUniverse.setUnmaterializedConstantValue(field, JavaConstant.forIllegal());
             } else {
                 BuildTimeInterpreterUniverse.singleton().initializeJavaFieldFromHosted(hostedField, field);
+            }
+        }
+
+        for (InterpreterResolvedJavaType type : BuildTimeInterpreterUniverse.singleton().getTypes()) {
+            if (type instanceof InterpreterResolvedObjectType objectType) {
+                objectType.sortDeclaredFields();
             }
         }
 

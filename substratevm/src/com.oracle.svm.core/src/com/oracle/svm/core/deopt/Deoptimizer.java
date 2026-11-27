@@ -46,22 +46,23 @@ import com.oracle.svm.core.FrameAccess;
 import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateTarget;
-import com.oracle.svm.core.code.CodeInfo;
+import com.oracle.svm.guest.staging.core.code.CodeInfo;
 import com.oracle.svm.core.code.CodeInfoAccess;
 import com.oracle.svm.core.code.CodeInfoQueryResult;
 import com.oracle.svm.core.code.CodeInfoTable;
 import com.oracle.svm.core.code.FrameInfoDecoder;
 import com.oracle.svm.core.code.FrameInfoQueryResult;
 import com.oracle.svm.core.code.FrameInfoQueryResult.ValueInfo;
-import com.oracle.svm.core.code.UntetheredCodeInfo;
+import com.oracle.svm.guest.staging.core.code.UntetheredCodeInfo;
 import com.oracle.svm.core.collections.RingBuffer;
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
+import com.oracle.svm.core.config.ObjectLayoutCompilerSupport;
 import com.oracle.svm.core.deopt.DeoptimizedFrame.DeoptTargetTier;
 import com.oracle.svm.core.deopt.DeoptimizedFrame.RelockObjectData;
 import com.oracle.svm.core.graal.code.StubCallingConvention;
 import com.oracle.svm.core.graal.meta.SharedRuntimeMethod;
-import com.oracle.svm.core.heap.GCCause;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.GCCause;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.jvmci.shared.meta.DeoptStub;
 import com.oracle.svm.core.heap.ReferenceAccess;
 import com.oracle.svm.core.heap.SuspendSerialGCMaxHeapSize;
@@ -75,7 +76,7 @@ import com.oracle.svm.guest.staging.core.graal.KnownIntrinsics;
 import com.oracle.svm.core.stack.JavaFrame;
 import com.oracle.svm.core.stack.JavaStackWalker;
 import com.oracle.svm.core.stack.StackFrameVisitor;
-import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.guest.staging.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.JavaVMOperation;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
@@ -85,6 +86,7 @@ import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
 import com.oracle.svm.shared.NeverInline;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.option.HostedOptionKey;
+import com.oracle.svm.guest.staging.util.PreallocatedExceptions;
 import com.oracle.svm.shared.util.TimeUtils;
 import com.oracle.svm.shared.util.VMError;
 
@@ -1108,9 +1110,9 @@ public final class Deoptimizer {
              * contains an object.
              *
              * For this reason, classify the return value only for an AfterPop frame at an invoke
-             * in a Ristretto method. Determine its kind from existing interpreter linkage without
-             * linking during deoptimization. All other states use the primitive stub. The AOT path
-             * below continues to use the target deoptimization entry's CodeInfo bit.
+             * in runtime-installed code, using the immutable bytecode invoke layout of that frame.
+             * All other states use the primitive stub. The AOT path below continues to use the
+             * target deoptimization entry's CodeInfo bit.
              */
             boolean objectReturnValueIsObject = InterpreterSupport.singleton().isInterpreterDeoptReturnValueObject(sourceChunk.getFrameInfo());
             if (ImageSingletons.contains(LazyDeoptStubSelectionRecorder.class)) {
@@ -1168,7 +1170,7 @@ public final class Deoptimizer {
 
         final EagerDeoptSourceFrameOperation operation = new EagerDeoptSourceFrameOperation(this, pc, ignoreNonDeoptimizable);
         operation.enqueue();
-        return operation.getResult();
+        return operation.takeResult();
     }
 
     public DeoptimizedFrame deoptimizeEagerly() {
@@ -1223,7 +1225,7 @@ public final class Deoptimizer {
      */
     private static final class EagerDeoptSourceFrameOperation extends JavaVMOperation {
 
-        private final Deoptimizer receiver;
+        private Deoptimizer receiver;
         private final CodePointer pc;
         private final boolean ignoreNonDeoptimizable;
         private DeoptimizedFrame result;
@@ -1244,8 +1246,12 @@ public final class Deoptimizer {
             result = receiver.doDeoptSourceFrame(pc, ignoreNonDeoptimizable, true);
         }
 
-        public DeoptimizedFrame getResult() {
-            return result;
+        public DeoptimizedFrame takeResult() {
+            // The empty VM-operation queue can still retain its last node. Drop consumed payloads.
+            DeoptimizedFrame resultFrame = result;
+            result = null;
+            receiver = null;
+            return resultFrame;
         }
     }
 
@@ -1524,7 +1530,7 @@ public final class Deoptimizer {
                             if (targetValue.getKind().isObject() && !targetValue.isCompressedReference()) {
                                 size = FrameAccess.uncompressedReferenceSize();
                             } else {
-                                size = ObjectLayout.singleton().sizeInBytes(con.getJavaKind());
+                                size = ObjectLayoutCompilerSupport.sizeInBytes(ObjectLayout.singleton(), con.getJavaKind());
                             }
                             int endOffset = totalOffset + size;
                             if (endOffset > newEndOfParams) {
@@ -1716,9 +1722,9 @@ public final class Deoptimizer {
         /** All references in deopt frames are compressed when compressed references are enabled. */
         private final int sizeofCompressedReference = ObjectLayout.singleton().getReferenceSize();
         private final int sizeofUncompressedReference = FrameAccess.uncompressedReferenceSize();
-        private final int arrayBaseOffset = ObjectLayout.singleton().getArrayBaseOffset(JavaKind.Byte);
+        private final int arrayBaseOffset = ObjectLayoutCompilerSupport.getArrayBaseOffset(ObjectLayout.singleton(), JavaKind.Byte);
 
-        private static final ArrayIndexOutOfBoundsException arrayIndexOutOfBoundsException = new ArrayIndexOutOfBoundsException("TargetContent.offsetCheck");
+        private static final ArrayIndexOutOfBoundsException arrayIndexOutOfBoundsException = PreallocatedExceptions.createArrayIndexOutOfBoundsException("TargetContent.offsetCheck");
 
         /* Check that an offset is in range. */
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)

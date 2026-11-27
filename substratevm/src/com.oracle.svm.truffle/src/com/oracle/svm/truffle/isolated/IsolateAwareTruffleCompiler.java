@@ -47,7 +47,7 @@ import com.oracle.svm.core.graal.isolated.ClientIsolateThread;
 import com.oracle.svm.core.graal.isolated.CompilerIsolateThread;
 import com.oracle.svm.core.graal.isolated.IsolatedCompileClient;
 import com.oracle.svm.core.graal.isolated.IsolatedCompileContext;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.guest.staging.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.graal.isolated.ImageHeapObjects;
 import com.oracle.svm.graal.isolated.ImageHeapRef;
@@ -241,8 +241,16 @@ public class IsolateAwareTruffleCompiler implements SubstrateTruffleCompiler {
              * down.
              */
             Thread t = new Thread(() -> {
-                shutdownCompilationsAndWaitAction.run();
-                tearDownIsolateOnShutdown();
+                try {
+                    shutdownCompilationsAndWaitAction.run();
+                } finally {
+                    /*
+                     * Call tear down in the finally block to tear down the isolate
+                     * even when the shutdownCompilationsAndWaitAction is interrupted
+                     * by CEntryPointSnippets::initiateTearDownIsolateInterruptibly
+                     */
+                    tearDownIsolateOnShutdown();
+                }
             });
             // we ignore uncaught exceptions here. For example
             // if the waiting thread was interrupted.

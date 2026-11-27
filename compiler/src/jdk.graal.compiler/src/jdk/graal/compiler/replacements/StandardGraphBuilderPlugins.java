@@ -96,6 +96,7 @@ import jdk.graal.compiler.nodes.SafepointNode;
 import jdk.graal.compiler.nodes.SpinWaitNode;
 import jdk.graal.compiler.nodes.StateSplit;
 import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.UnreachablePathNode;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.ValuePhiNode;
 import jdk.graal.compiler.nodes.calc.AbsNode;
@@ -111,6 +112,7 @@ import jdk.graal.compiler.nodes.calc.IntegerMulHighNode;
 import jdk.graal.compiler.nodes.calc.IntegerNormalizeCompareNode;
 import jdk.graal.compiler.nodes.calc.IsNullNode;
 import jdk.graal.compiler.nodes.calc.LeftShiftNode;
+import jdk.graal.compiler.nodes.calc.ArbitraryValueNode;
 import jdk.graal.compiler.nodes.calc.NarrowNode;
 import jdk.graal.compiler.nodes.calc.ObjectEqualsNode;
 import jdk.graal.compiler.nodes.calc.ReinterpretNode;
@@ -1899,6 +1901,36 @@ public class StandardGraphBuilderPlugins {
         }
     }
 
+    static class SpeculativeDeoptimizePlugin extends DeoptimizePlugin {
+
+        SpeculativeDeoptimizePlugin(SnippetReflectionProvider snippetReflection) {
+            super(snippetReflection, InvalidateReprofile, TransferToInterpreter, true, "speculativeDeoptimizeAndInvalidate");
+        }
+
+        @Override
+        void add(GraphBuilderContext b, DeoptimizationAction action, DeoptimizationReason reason, boolean withSpeculation) {
+            assert withSpeculation;
+            /*
+             * Omit the inlining chain so the reason stays stable across recompilations: parsing-time
+             * inlining can change even with fixed options, for example when failed speculations
+             * retain more code and affect the parsing node budget. Inline copies of this bytecode
+             * location intentionally share failures within the compilation root's speculation log.
+             */
+            BytecodePosition pos = new BytecodePosition(null, b.getMethod(), b.bci());
+            add(b, action, reason, DIRECTIVE_SPECULATIONS.createSpeculationReason(pos));
+        }
+
+        @Override
+        DeoptimizeNode add(GraphBuilderContext b, DeoptimizationAction action, DeoptimizationReason reason, SpeculationReason speculationReason) {
+            SpeculationLog speculationLog = b.getGraph().getSpeculationLog();
+            GraalError.guarantee(speculationLog != null, "A speculation log is needed to use `speculativeDeoptimizeAndInvalidate`");
+            if (!speculationLog.maySpeculate(speculationReason)) {
+                return null;
+            }
+            return b.add(new DeoptimizeNode(action, reason, speculationLog.speculate(speculationReason)));
+        }
+    }
+
     static class PreciseDeoptimizePlugin extends DeoptimizePlugin {
 
         PreciseDeoptimizePlugin(SnippetReflectionProvider snippetReflection, DeoptimizationAction action, DeoptimizationReason reason, Boolean withSpeculation,
@@ -1952,6 +1984,7 @@ public class StandardGraphBuilderPlugins {
 
         r.register(new DeoptimizePlugin(snippetReflection, None, TransferToInterpreter, false, "deoptimize"));
         r.register(new DeoptimizePlugin(snippetReflection, InvalidateReprofile, TransferToInterpreter, false, "deoptimizeAndInvalidate"));
+        r.register(new SpeculativeDeoptimizePlugin(snippetReflection));
         r.register(new DeoptimizePlugin(snippetReflection, InvalidateRecompile, TransferToInterpreter, false, "deoptimizeAndRecompile"));
         r.register(new DeoptimizePlugin(snippetReflection, null, null, null,
                         "deoptimize", DeoptimizationAction.class, DeoptimizationReason.class, boolean.class));
@@ -2041,6 +2074,20 @@ public class StandardGraphBuilderPlugins {
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod method, Receiver receiver, ValueNode n) {
                 BeginNode begin = b.add(new BeginNode());
                 b.addPush(JavaKind.Long, PiNode.create(n, IntegerStamp.create(64, 0, Long.MAX_VALUE).improveWith(n.stamp(NodeView.DEFAULT)), begin));
+                return true;
+            }
+        });
+        r.register(new RequiredInlineOnlyInvocationPlugin("unreachable") {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
+                b.add(new UnreachablePathNode());
+                return true;
+            }
+        });
+        r.register(new RequiredInlineOnlyInvocationPlugin("unconstrainedValue") {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod method, Receiver receiver) {
+                b.addPush(JavaKind.Long, new ArbitraryValueNode());
                 return true;
             }
         });
@@ -2192,7 +2239,7 @@ public class StandardGraphBuilderPlugins {
         r.register(new RequiredInlineOnlyInvocationPlugin("guardingNonNull", Object.class) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
-                b.addPush(value.getStackKind(), b.nullCheckedValue(value));
+                b.addPush(value.getStackKind(), b.addNonNullCast(value, InvalidateReprofile));
                 return true;
             }
         });

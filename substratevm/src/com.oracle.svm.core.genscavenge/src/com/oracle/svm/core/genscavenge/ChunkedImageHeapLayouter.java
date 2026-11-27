@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,7 @@ package com.oracle.svm.core.genscavenge;
 import java.nio.ByteBuffer;
 import java.util.List;
 
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.word.UnsignedWord;
 
@@ -36,7 +36,7 @@ import com.oracle.svm.core.genscavenge.ChunkedImageHeapAllocator.AlignedChunk;
 import com.oracle.svm.core.genscavenge.ChunkedImageHeapAllocator.Chunk;
 import com.oracle.svm.core.genscavenge.ChunkedImageHeapAllocator.UnalignedChunk;
 import com.oracle.svm.core.genscavenge.remset.RememberedSet;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.image.ImageHeap;
 import com.oracle.svm.core.image.ImageHeapLayoutInfo;
@@ -85,7 +85,7 @@ public class ChunkedImageHeapLayouter implements ImageHeapLayouter {
     private final ChunkedImageHeapPartition[] partitions;
     private final ImageHeapInfo heapInfo;
     private final long startOffset;
-    private final long unalignedObjectSizeThreshold;
+    private final long alignedChunkCapacity;
     private ChunkedImageHeapAllocator allocator;
 
     /** @param startOffset Offset relative to the heap base. */
@@ -105,7 +105,7 @@ public class ChunkedImageHeapLayouter implements ImageHeapLayouter {
         this.startOffset = startOffset;
 
         UnsignedWord alignedHeaderSize = RememberedSet.get().getHeaderSizeOfAlignedChunk();
-        this.unalignedObjectSizeThreshold = HeapParameters.getAlignedHeapChunkSize().subtract(alignedHeaderSize).rawValue();
+        this.alignedChunkCapacity = HeapParameters.getAlignedHeapChunkSize().subtract(alignedHeaderSize).rawValue();
     }
 
     @Override
@@ -127,7 +127,7 @@ public class ChunkedImageHeapLayouter implements ImageHeapLayouter {
         if (patched) {
             return getAlignedWritablePatched();
         } else if (immutable) {
-            if (info.getSize() >= unalignedObjectSizeThreshold) {
+            if (info.getSize() > alignedChunkCapacity) {
                 if (hasRelocatables) {
                     if (info.getObjectClass() == DynamicHub.class) {
                         throw reportObjectTooLargeForAlignedChunkError(info, "Class metadata (dynamic hubs) cannot be in unaligned heap chunks: the dynamic hub %s", info.getObject().toString());
@@ -144,7 +144,7 @@ public class ChunkedImageHeapLayouter implements ImageHeapLayouter {
             }
         } else {
             assert info.getObjectClass() != DynamicHub.class : "Class metadata (dynamic hubs) cannot be writable";
-            if (info.getSize() >= unalignedObjectSizeThreshold) {
+            if (info.getSize() > alignedChunkCapacity) {
                 return getUnalignedWritable();
             }
             return getAlignedWritableRegular();
@@ -164,8 +164,8 @@ public class ChunkedImageHeapLayouter implements ImageHeapLayouter {
     }
 
     private Error reportObjectTooLargeForAlignedChunkError(ImageHeapObject info, String objectTypeMsg, String objectText) {
-        String msg = String.format(objectTypeMsg + " with size %d B and the limit is %d B. Use '%s' to increase GC chunk size to be larger than the object.",
-                        objectText, info.getSize(), unalignedObjectSizeThreshold, ALIGNED_HEAP_CHUNK_OPTION);
+        String msg = String.format(objectTypeMsg + " with size %d B and the limit is %d B. Use '%s' to increase GC chunk size to be large enough for the object.",
+                        objectText, info.getSize(), alignedChunkCapacity, ALIGNED_HEAP_CHUNK_OPTION);
         if (ImageInfo.inImageBuildtimeCode()) {
             throw UserError.abort(msg);
         } else {
@@ -262,11 +262,22 @@ public class ChunkedImageHeapLayouter implements ImageHeapLayouter {
 
     @Override
     public void writeMetadata(ByteBuffer imageHeapBytes, long imageHeapOffsetInBuffer) {
+        VMError.guarantee(allocator != null, "Image heap layout metadata is not available.");
         long layoutToBufferOffsetAddend = imageHeapOffsetInBuffer - startOffset;
         ImageHeapChunkWriter writer = SubstrateUtil.HOSTED ? new HostedImageHeapChunkWriter(imageHeapBytes, layoutToBufferOffsetAddend)
                         : new RuntimeImageHeapChunkWriter(imageHeapBytes, layoutToBufferOffsetAddend);
         writeHeaders(writer, allocator.getAlignedChunks());
         writeHeaders(writer, allocator.getUnalignedChunks());
+    }
+
+    @Override
+    public void releaseObjectReferences() {
+        VMError.guarantee(allocator != null, "Image heap layout metadata is not available or was already released.");
+        for (ChunkedImageHeapPartition partition : partitions) {
+            partition.releaseObjectReferences();
+        }
+        /* The allocator owns its chunks, so dropping it also releases their object lists. */
+        allocator = null;
     }
 
     private static void writeHeaders(ImageHeapChunkWriter writer, List<? extends Chunk> chunks) {

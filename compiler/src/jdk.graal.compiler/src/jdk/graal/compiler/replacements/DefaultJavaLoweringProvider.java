@@ -158,6 +158,7 @@ import jdk.graal.compiler.nodes.memory.WriteNode;
 import jdk.graal.compiler.nodes.memory.address.AddressNode;
 import jdk.graal.compiler.nodes.memory.address.IndexAddressNode;
 import jdk.graal.compiler.nodes.memory.address.OffsetAddressNode;
+import jdk.graal.compiler.nodes.spi.CoreProviders;
 import jdk.graal.compiler.nodes.spi.LIRLowerable;
 import jdk.graal.compiler.nodes.spi.Lowerable;
 import jdk.graal.compiler.nodes.spi.LoweringProvider;
@@ -452,13 +453,16 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
         return graph.unique(new OffsetAddressNode(object, o));
     }
 
-    public AddressNode createFieldAddress(StructuredGraph graph, ValueNode object, ResolvedJavaField field) {
+    /** Creates a field address, using the compilation's selected offset for static fields. */
+    private AddressNode createFieldAddress(StructuredGraph graph, ValueNode object, ResolvedJavaField field, CoreProviders providers) {
         int offset = fieldOffset(field);
-        if (offset >= 0) {
-            return createOffsetAddress(graph, object, offset);
-        } else {
+        if (offset < 0) {
             throw GraalError.shouldNotReachHere("Field is missing: " + field.getDeclaringClass().toJavaName(true) + "." + field.getName());
         }
+        if (field.isStatic()) {
+            offset = providers.getMetaAccessExtensionProvider().getStaticFieldOffset(field, offset);
+        }
+        return createOffsetAddress(graph, object, offset);
     }
 
     public final JavaKind getStorageKind(ResolvedJavaField field) {
@@ -477,7 +481,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
         object = createNullCheckedValue(object, loadField, tool);
         Stamp loadStamp = loadStamp(loadField.stamp(NodeView.DEFAULT), getStorageKind(field));
 
-        AddressNode address = createFieldAddress(graph, object, field);
+        AddressNode address = createFieldAddress(graph, object, field, tool);
 
         BarrierType barrierType = barrierSet.fieldReadBarrierType(field, getStorageKind(field));
         ReadNode memoryRead = graph.add(new ReadNode(address, overrideFieldLocationIdentity(loadField.getLocationIdentity()),
@@ -493,7 +497,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
         ValueNode object = storeField.isStatic() ? staticFieldBase(graph, field, tool) : storeField.object();
         object = createNullCheckedValue(object, storeField, tool);
         ValueNode value = implicitStoreConvert(graph, getStorageKind(storeField.field()), storeField.value());
-        AddressNode address = createFieldAddress(graph, object, field);
+        AddressNode address = createFieldAddress(graph, object, field, tool);
 
         BarrierType barrierType = barrierSet.fieldWriteBarrierType(field, getStorageKind(field));
         WriteNode memoryWrite = graph.add(new WriteNode(address, overrideFieldLocationIdentity(storeField.getLocationIdentity()), value, barrierType, storeField.getMemoryOrder()));
@@ -765,7 +769,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
 
         AddressNode address = graph.unique(new OffsetAddressNode(n.object(), n.offset()));
         BarrierType barrierType = barrierSet.readWriteBarrier(n.object(), newValue);
-        LoweredAtomicReadAndWriteNode memoryRead = graph.add(new LoweredAtomicReadAndWriteNode(address, n.getKilledLocationIdentity(), newValue, barrierType));
+        LoweredAtomicReadAndWriteNode memoryRead = graph.add(new LoweredAtomicReadAndWriteNode(address, n.getLocationIdentity(), newValue, barrierType));
         memoryRead.setStateAfter(n.stateAfter());
 
         ValueNode readValue = implicitLoadConvert(graph, valueKind, memoryRead);
@@ -781,7 +785,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
         ValueNode delta = implicitStoreConvert(graph, valueKind, n.delta());
 
         AddressNode address = graph.unique(new OffsetAddressNode(n.object(), n.offset()));
-        LoweredAtomicReadAndAddNode memoryRead = graph.add(new LoweredAtomicReadAndAddNode(address, n.getKilledLocationIdentity(), delta));
+        LoweredAtomicReadAndAddNode memoryRead = graph.add(new LoweredAtomicReadAndAddNode(address, n.getLocationIdentity(), delta));
         memoryRead.setStateAfter(n.stateAfter());
 
         ValueNode readValue = implicitLoadConvert(graph, valueKind, memoryRead);
@@ -946,7 +950,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
          * INIT_MEMORY. This ensures that GC barrier assumptions aren't violated.
          */
         int[] emissionOrder = new int[virtualObjects.size()];
-        computeAllocationEmissionOrder(commit, emissionOrder);
+        computeAllocationEmissionOrder(commit, emissionOrder, valuePositions);
 
         List<AbstractNewObjectNode> recursiveLowerings = new ArrayList<>();
         ValueNode[] allocations = new ValueNode[virtualObjects.size()];
@@ -1059,7 +1063,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
                         if (virtual instanceof VirtualInstanceNode virtualInstance) {
                             ResolvedJavaField field = virtualInstance.field(i);
                             if (fieldOffset(field) >= 0) {
-                                address = createFieldAddress(graph, newObject, field);
+                                address = createOffsetAddress(graph, newObject, fieldOffset(field));
                                 barrierType = barrierSet.fieldWriteBarrierType(field, getStorageKind(field));
                             }
                         } else {
@@ -1079,7 +1083,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
         }
     }
 
-    private static void computeAllocationEmissionOrder(CommitAllocationNode commit, int[] order) {
+    private static void computeAllocationEmissionOrder(CommitAllocationNode commit, int[] order, int[] valuePositions) {
         int size = commit.getVirtualObjects().size();
         boolean[] complete = new boolean[size];
         int cur = 0;
@@ -1091,13 +1095,13 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
         boolean progress = true;
         while (progress) {
             progress = false;
-            int valuePos = 0;
             for (int objIndex = 0; objIndex < size; objIndex++) {
                 if (complete[objIndex]) {
                     continue;
                 }
                 VirtualObjectNode virtual = commit.getVirtualObjects().get(objIndex);
                 int entryCount = virtual.entryCount();
+                int valuePos = valuePositions[objIndex];
 
                 boolean allValuesAvailable = true;
                 for (int i = 0; i < entryCount; i++) {
@@ -1598,11 +1602,9 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
                  */
                 return true;
             } else if (n instanceof NewArrayNode) {
-                lowerNewArrayToVector((NewArrayNode) n, tool);
-                return true;
+                return lowerNewArrayToVector((NewArrayNode) n, tool);
             } else if (n instanceof DynamicNewArrayNode) {
-                lowerDynamicNewArrayToVector((DynamicNewArrayNode) n, tool);
-                return true;
+                return lowerDynamicNewArrayToVector((DynamicNewArrayNode) n, tool);
             }
         }
         if (n instanceof LoadVectorNode) {
@@ -1616,14 +1618,18 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
     }
 
     @SuppressWarnings("try")
-    protected void lowerNewArrayToVector(NewArrayNode newArray, LoweringTool tool) {
-        lowerNewArrayToVector(newArray, tool, getStorageKind(newArray.elementType()));
+    protected boolean lowerNewArrayToVector(NewArrayNode newArray, LoweringTool tool) {
+        return lowerNewArrayToVector(newArray, tool, getStorageKind(newArray.elementType()));
     }
 
     // Lower the array with vectorized initialization. The element kind must be determined by the
     // caller: SVM has special treatment for Word types.
     @SuppressWarnings("try")
-    protected void lowerNewArrayToVector(NewArrayNode newArray, LoweringTool tool, JavaKind elementKind) {
+    protected boolean lowerNewArrayToVector(NewArrayNode newArray, LoweringTool tool, JavaKind elementKind) {
+        VectorArchitecture vectorArch = getVectorArchitecture();
+        if (elementKind == JavaKind.Object && (vectorArch == null || !vectorArch.supportsObjectVectorization())) {
+            return false;
+        }
         try (DebugCloseable position = newArray.withNodeSourcePosition()) {
             StructuredGraph graph = newArray.graph();
             ResolvedJavaType elementType = newArray.elementType();
@@ -1638,11 +1644,16 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
                             newArray.stateBefore()));
             loweredNewArray.setEmitMemoryBarrier(newArray.emitMemoryBarrier());
             graph.replaceFixedWithFixed(newArray, loweredNewArray);
+            return true;
         }
     }
 
     @SuppressWarnings("try")
-    protected void lowerDynamicNewArrayToVector(DynamicNewArrayNode newArray, LoweringTool tool) {
+    protected boolean lowerDynamicNewArrayToVector(DynamicNewArrayNode newArray, LoweringTool tool) {
+        VectorArchitecture vectorArch = getVectorArchitecture();
+        if (newArray.getKnownElementKind() == JavaKind.Object && (vectorArch == null || !vectorArch.supportsObjectVectorization())) {
+            return false;
+        }
         try (DebugCloseable position = newArray.withNodeSourcePosition()) {
             StructuredGraph graph = newArray.graph();
             // use the expected "shape" for the length
@@ -1661,6 +1672,7 @@ public abstract class DefaultJavaLoweringProvider implements LoweringProvider, V
                                 newArray.stateBefore()));
             }
             graph.replaceFixedWithFixed(newArray, loweredNewArray);
+            return true;
         }
     }
 

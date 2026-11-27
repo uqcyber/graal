@@ -49,6 +49,7 @@ import mx_sdk_vm_ng
 import pathlib
 import mx_sdk_benchmark # pylint: disable=unused-import
 import mx_sdk_clangformat # pylint: disable=unused-import
+import mx_run_jdk_test # pylint: disable=unused-import
 import argparse
 import datetime
 import re
@@ -108,9 +109,13 @@ def javadoc(args):
         'org.graalvm.polyglot.tck',
         'org.graalvm.sdk',
         'org.graalvm.shadowed.org.jline.reader',
+        'org.graalvm.shadowed.org.jline.reader.impl',
         'org.graalvm.shadowed.org.jline.reader.impl.completer',
         'org.graalvm.shadowed.org.jline.reader.impl.history',
+        'org.graalvm.shadowed.org.jline.terminal',
         'org.graalvm.shadowed.org.jline.terminal.impl',
+        'org.graalvm.shadowed.org.jline.terminal.impl.exec',
+        'org.graalvm.shadowed.org.jline.builtins',
         'org.graalvm.shadowed.org.jline.utils',
     ]
     mx.javadoc(['--unified', '--disallow-all-warnings', '--exclude-packages', ','.join(excludedPackages)] + extraArgs + args)

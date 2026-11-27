@@ -33,6 +33,7 @@ import java.lang.annotation.Annotation;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.ListIterator;
@@ -69,11 +70,13 @@ import com.oracle.svm.core.heap.RestrictHeapAccessCallees;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.imagelayer.LayeredImageOptions;
 import com.oracle.svm.core.interpreter.InterpreterSupport;
-import com.oracle.svm.core.meta.MethodRef;
+import com.oracle.svm.guest.staging.meta.MethodRef;
+import com.oracle.svm.core.meta.MethodRefSupport;
 import com.oracle.svm.core.meta.SubstrateMethodOffsetConstant;
 import com.oracle.svm.core.meta.SubstrateMethodPointerConstant;
 import com.oracle.svm.core.util.InterruptImageBuilding;
 import com.oracle.svm.hosted.FeatureHandler;
+import com.oracle.svm.hosted.HostedConfiguration;
 import com.oracle.svm.hosted.NativeImageGenerator;
 import com.oracle.svm.hosted.NativeImageOptions;
 import com.oracle.svm.hosted.ProgressReporter;
@@ -99,7 +102,6 @@ import com.oracle.svm.util.OriginalClassProvider;
 
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.asm.Assembler;
-import jdk.graal.compiler.bytecode.BytecodeProvider;
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.core.GraalCompiler;
 import jdk.graal.compiler.core.common.CompilationIdentifier;
@@ -110,6 +112,7 @@ import jdk.graal.compiler.debug.DebugCloseable;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.DebugContext.Description;
 import jdk.graal.compiler.debug.DebugDumpHandlersFactory;
+import jdk.graal.compiler.duplication.phases.simulation.TailCallDuplicationPhase;
 import jdk.graal.compiler.debug.GlobalMetrics;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.debug.Indent;
@@ -117,6 +120,7 @@ import jdk.graal.compiler.debug.TTY;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.Node.NodeIntrinsic;
 import jdk.graal.compiler.lir.LIR;
+import jdk.graal.compiler.lir.alloc.lsra.LinearScan;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilderFactory;
 import jdk.graal.compiler.lir.asm.DataBuilder;
@@ -124,7 +128,8 @@ import jdk.graal.compiler.lir.asm.FrameContext;
 import jdk.graal.compiler.lir.framemap.FrameMap;
 import jdk.graal.compiler.lir.phases.LIRSuites;
 import jdk.graal.compiler.core.phases.MidTier;
-import jdk.graal.compiler.loop.phases.LoopPartialUnrollPhase;
+import jdk.graal.compiler.loop.phases.AggressivePartialUnrollPhase;
+import jdk.graal.compiler.loop.phases.SimpleLoopPartialUnrollPhase;
 import jdk.graal.compiler.loop.phases.NonCountedStripMiningPhase;
 import jdk.graal.compiler.loop.phases.LoopRotationPhase;
 import jdk.graal.compiler.nodes.CallTargetNode;
@@ -160,6 +165,7 @@ import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.phases.tiers.LowTierContext;
 import jdk.graal.compiler.phases.tiers.MidTierContext;
 import jdk.graal.compiler.phases.tiers.Suites;
+import jdk.graal.compiler.virtual.phases.ea.FinalPartialEscapePhase;
 import jdk.graal.compiler.phases.util.GraphOrder;
 import jdk.graal.compiler.phases.util.Providers;
 import jdk.graal.compiler.replacements.PEGraphDecoder;
@@ -205,7 +211,7 @@ public class CompileQueue {
     private final Boolean deoptimizeAll;
     protected final List<Policy> policies;
     protected CompletionExecutor executor;
-    protected final ConcurrentMap<HostedMethod, CompileTask> compilations;
+    protected ConcurrentMap<HostedMethod, CompileTask> compilations;
     protected final RuntimeConfiguration runtimeConfig;
     protected final MetaAccessProvider metaAccess;
     private Suites regularSuites = null;
@@ -363,7 +369,9 @@ public class CompileQueue {
 
         @Override
         public void run(DebugContext debug) {
-            result = doCompile(debug, method, compilationIdentifier, reason);
+            CompilationResult compilation = doCompile(debug, method, compilationIdentifier, reason);
+            HostedConfiguration.instance().handleSourceMappingsAfterCompilation(method, compilation);
+            result = compilation;
         }
 
         @Override
@@ -566,8 +574,15 @@ public class CompileQueue {
 
         Suites tunedSuites = suites.copy();
         PhaseSuite<MidTierContext> midTier = tunedSuites.getMidTier();
-        if (!GraalOptions.PartialUnroll.hasBeenSet(hostedOptions)) {
-            midTier.removeSubTypePhases(LoopPartialUnrollPhase.class);
+        boolean partialUnrollSet = GraalOptions.PartialUnroll.hasBeenSet(hostedOptions);
+        boolean aggressivePartialUnrollSet = AggressivePartialUnrollPhase.Options.AggressivePartialUnroll.hasBeenSet(hostedOptions);
+        if (!partialUnrollSet && !aggressivePartialUnrollSet) {
+            tunedSuites.getHighTier().removeSubTypePhases(AggressivePartialUnrollPhase.class);
+            midTier.removeSubTypePhases(AggressivePartialUnrollPhase.class);
+        }
+        boolean aggressivePartialUnrollEnabledExplicitly = aggressivePartialUnrollSet && AggressivePartialUnrollPhase.Options.AggressivePartialUnroll.getValue(hostedOptions);
+        if (!partialUnrollSet && !aggressivePartialUnrollEnabledExplicitly) {
+            midTier.removeSubTypePhases(SimpleLoopPartialUnrollPhase.class);
         }
         if (!LoopVectorizationPhase.Options.VectorizeLoops.hasBeenSet(hostedOptions)) {
             midTier.removeSubTypePhases(LoopVectorizationPhase.class);
@@ -647,16 +662,23 @@ public class CompileQueue {
         return phaseSuite;
     }
 
+    /**
+     * Returns a read-only view of the compilation tasks. Previously obtained views retain their
+     * tasks after {@link #purge()}; consumers must drop them to allow reclamation.
+     */
     public Map<HostedMethod, CompileTask> getCompilations() {
-        return compilations;
+        VMError.guarantee(compilations != null, "Compilation tasks were released.");
+        return Collections.unmodifiableMap(compilations);
     }
 
     public void purge() {
-        compilations.clear();
+        VMError.guarantee(compilations != null, "Compilation tasks were already released.");
+        /* Detach instead of making an earlier view look as if nothing was compiled. */
+        compilations = null;
     }
 
     public Collection<CompileTask> getCompilationTasks() {
-        return compilations.values();
+        return getCompilations().values();
     }
 
     private void printMethodHistogram() {
@@ -782,8 +804,7 @@ public class CompileQueue {
                     }
                     continue;
                 }
-                if (hMethod.isEntryPoint() || SubstrateCompilationDirectives.singleton().isForcedCompilation(hMethod) ||
-                                hMethod.wrapped.isDirectRootMethod() && hMethod.wrapped.isSimplyImplementationInvoked()) {
+                if (isParseRoot(hMethod)) {
                     ensureParsed(hMethod, null, new EntryPointReason());
                 }
                 if (hMethod.wrapped.isVirtualRootMethod()) {
@@ -796,7 +817,7 @@ public class CompileQueue {
         }
 
         SubstrateForeignCallsProvider foreignCallsProvider = (SubstrateForeignCallsProvider) runtimeConfig.getProviders().getForeignCalls();
-        for (SubstrateForeignCallLinkage linkage : foreignCallsProvider.getForeignCalls().values()) {
+        for (SubstrateForeignCallLinkage linkage : foreignCallsProvider.getForeignCalls()) {
             HostedMethod method = (HostedMethod) linkage.getDescriptor().findMethod(runtimeConfig.getProviders().getMetaAccess());
             if (method.wrapped.isDirectRootMethod() && method.wrapped.isSimplyImplementationInvoked()) {
                 ensureParsed(method, null, new EntryPointReason());
@@ -808,6 +829,27 @@ public class CompileQueue {
                 }
             }
         }
+    }
+
+    /** Identifies methods that need a hosted graph without relying on discovery from another graph. */
+    private static boolean isParseRoot(HostedMethod method) {
+        if (HostedConfiguration.instance().isAdditionalParseRoot(method)) {
+            // Clients request analyzed variants for separate compilation or later inlining.
+            return true;
+        }
+        if (method.isEntryPoint()) {
+            // Native entry points can be reached without a Java caller.
+            return true;
+        }
+        if (SubstrateCompilationDirectives.singleton().isForcedCompilation(method)) {
+            // An explicit compilation request also needs a prepared graph.
+            return true;
+        }
+        if (method.wrapped.isDirectRootMethod() && method.wrapped.isSimplyImplementationInvoked()) {
+            // Analysis roots need their implementation, unless an invocation plugin handles the call.
+            return true;
+        }
+        return false;
     }
 
     public boolean isRegisteredDeoptTarget(HostedMethod method) {
@@ -869,8 +911,10 @@ public class CompileQueue {
 
         @Override
         public InlineInfo shouldInlineInvoke(GraphBuilderContext b, ResolvedJavaMethod method, ValueNode[] args) {
-            if (makeInlineDecision((HostedMethod) b.getMethod(), (HostedMethod) method) && b.recursiveInliningDepth(method) == 0) {
-                return InlineInfo.createStandardInlineInfo(method);
+            HostedMethod caller = (HostedMethod) b.getMethod();
+            HostedMethod inlinee = makeInlineDecision(caller, (HostedMethod) method);
+            if (inlinee != null && b.recursiveInliningDepth(inlinee) == 0) {
+                return InlineInfo.createStandardInlineInfo(inlinee);
             } else {
                 return InlineInfo.DO_NOT_INLINE_WITH_EXCEPTION;
             }
@@ -893,7 +937,8 @@ public class CompileQueue {
         }
 
         @Override
-        protected EncodedGraph lookupEncodedGraph(ResolvedJavaMethod method, BytecodeProvider intrinsicBytecodeProvider) {
+        protected EncodedGraph lookupEncodedGraph(ResolvedJavaMethod method) {
+            verifyInliningProviders((HostedMethod) graph.method(), (HostedMethod) method, runtimeConfig);
             return ((HostedMethod) method).compilationInfo.getCompilationGraph().getEncodedGraph();
         }
 
@@ -944,7 +989,7 @@ public class CompileQueue {
          */
         boolean inliningPotential = false;
         for (var invokeInfo : method.compilationInfo.getCompilationGraph().getInvokeInfos()) {
-            if (invokeInfo.getInvokeKind().isDirect() && makeInlineDecision(method, invokeInfo.getTargetMethod())) {
+            if (invokeInfo.getInvokeKind().isDirect() && makeInlineDecision(method, invokeInfo.getTargetMethod()) != null) {
                 inliningPotential = true;
                 break;
             }
@@ -952,7 +997,7 @@ public class CompileQueue {
         if (!inliningPotential) {
             return;
         }
-        var providers = runtimeConfig.lookupBackend(method).getProviders();
+        var providers = selectCompilationProviders(method, runtimeConfig);
         var graph = method.compilationInfo.createGraph(debug, getCustomizedOptions(method, debug), CompilationIdentifier.INVALID_COMPILATION_ID, false);
         try (var _ = debug.scope("InlineTrivial", graph, method, this)) {
             var inliningPlugin = new TrivialInliningPlugin();
@@ -990,29 +1035,31 @@ public class CompileQueue {
         }
     }
 
-    private boolean makeInlineDecision(HostedMethod method, HostedMethod callee) {
-        if (!LayeredImageOptions.UseSharedLayerStrengthenedGraphs.getValue() && callee.compilationInfo.getCompilationGraph() == null) {
+    /** Returns the selected inlinee variant, or {@code null} when inlining is declined. */
+    private HostedMethod makeInlineDecision(HostedMethod method, HostedMethod callee) {
+        HostedMethod inlinee = selectInlineeMethod(method, callee);
+        if (!LayeredImageOptions.UseSharedLayerStrengthenedGraphs.getValue() && inlinee.compilationInfo.getCompilationGraph() == null) {
             /*
              * We have compiled this method in a prior layer or this method's compilation is delayed
              * to the application layer, but don't have the graph available here.
              */
             assert callee.isCompiledInPriorLayer() || callee.wrapped.isDelayed() : method;
-            return false;
+            return null;
         }
         if (InterpreterSupport.isEnabled() && InterpreterSupport.singleton().isInterpreterBytecodeHandlerStub(method) && isBytecodeHandlerStubTarget(method, callee)) {
             VMError.guarantee(callee.canBeInlined(), "Bytecode handler target must be inlinable into its generated stub: %s", callee);
-            return true;
+            return inlinee;
         }
         if (universe.hostVM().neverInlineTrivial(method.getWrapped(), callee.getWrapped())) {
-            return false;
+            return null;
         }
         if (callee.shouldBeInlined()) {
-            return true;
+            return inlinee;
         }
-        if (optionAOTTrivialInline && callee.compilationInfo.isTrivialMethod() && !method.compilationInfo.isTrivialInliningDisabled()) {
-            return true;
+        if (optionAOTTrivialInline && inlinee.compilationInfo.isTrivialMethod() && !method.compilationInfo.isTrivialInliningDisabled()) {
+            return inlinee;
         }
-        return false;
+        return null;
     }
 
     /**
@@ -1218,7 +1265,7 @@ public class CompileQueue {
                             ". Make sure you have used Graal annotation processors on the parent-project of the method's declaring class.");
         }
 
-        HostedProviders providers = (HostedProviders) config.lookupBackend(method).getProviders();
+        HostedProviders providers = selectCompilationProviders(method, config);
 
         StructuredGraph graph = graphTransplanter.transplantGraph(debug, method, reason);
         try (DebugContext.Scope _ = debug.scope("Parsing", graph, method, this)) {
@@ -1295,7 +1342,7 @@ public class CompileQueue {
 
     @SuppressWarnings("unused")
     protected void notifyBeforeEncode(HostedMethod method, StructuredGraph graph) {
-        HostedProviders providers = (HostedProviders) runtimeConfig.lookupBackend(method).getProviders();
+        HostedProviders providers = selectCompilationProviders(method, runtimeConfig);
         HighTierContext highTierContext = new HighTierContext(providers, null, CompileQueue.getOptimisticOpts());
 
         for (Policy policy : this.policies) {
@@ -1320,7 +1367,8 @@ public class CompileQueue {
         OptionValues customizedOptions = debug.getOptions();
         if (InterpreterSupport.isEnabled() && InterpreterSupport.singleton().isInterpreterBytecodeHandlerStub(method)) {
             // Keep handler reads fixed and branch-local to avoid increasing register pressure.
-            customizedOptions = new OptionValues(customizedOptions, GraalOptions.OptFloatingReads, false, GraalOptions.OptDeduplicateReadsAcrossBranches, false);
+            customizedOptions = new OptionValues(customizedOptions, GraalOptions.OptFloatingReads, false, GraalOptions.OptDeduplicateReadsAcrossBranches, false,
+                            LinearScan.Options.LIROptLSRACallClobberAwareSpilling, true);
         }
         if (omitPriorityInliningTuning()) {
             return customizedOptions;
@@ -1504,7 +1552,69 @@ public class CompileQueue {
      * Compiles an additional method result without adding it to the normal image compilation map.
      */
     public final CompilationResult compileAdditionalMethod(DebugContext debug, HostedMethod method, CompileReason reason) {
+        VMError.guarantee(method.compilationInfo.getCompilationGraph() != null, "Additional compilation requires a method parsed during the normal parse phase: %s", method);
         return doCompile(debug, method, new SubstrateHostedCompilationIdentifier(method), reason);
+    }
+
+    /**
+     * Selects an existing variant of {@code callee} for inlining into {@code caller}, using
+     * {@link HostedConfiguration#selectInlineeMethod}. The selected variant must represent the same
+     * Java method. This selects the graph to inline without changing the destination of a call
+     * that remains uninlined.
+     */
+    public static HostedMethod selectInlineeMethod(HostedMethod caller, HostedMethod callee) {
+        HostedMethod inlinee = HostedConfiguration.instance().selectInlineeMethod(caller, callee);
+        VMError.guarantee(inlinee != null && inlinee.getMethodVariant(MethodVariant.ORIGINAL_METHOD).equals(callee.getMethodVariant(MethodVariant.ORIGINAL_METHOD)),
+                        "Inlining selection must return an existing variant of %s for caller %s", callee, caller);
+        VMError.guarantee(inlinee.equals(callee) || inlinee.compilationInfo.getCompilationGraph() != null,
+                        "Selected inlinee variant %s for caller %s was not prepared; register all possible variants with isAdditionalParseRoot", inlinee, caller);
+        return inlinee;
+    }
+
+    /** Fails before importing a graph prepared under incompatible compilation assumptions. */
+    public static void verifyInliningProviders(HostedMethod caller, HostedMethod inlinee, RuntimeConfiguration config) {
+        VMError.guarantee(hasCompatibleCompilationProviders(caller, inlinee, config),
+                        "Incompatible compilation providers when inlining %s into %s; select a compatible prepared method variant or explicitly disable this inline", inlinee, caller);
+    }
+
+    /**
+     * Prepared graphs already contain decisions made with the callee's providers. Decoding with
+     * the caller's providers cannot undo them. Require identical services before importing such
+     * a graph, allowing the backend's original calling-convention code cache to differ.
+     */
+    private static boolean hasCompatibleCompilationProviders(HostedMethod caller, HostedMethod callee, RuntimeConfiguration config) {
+        HostedProviders callerProviders = selectCompilationProviders(caller, config);
+        HostedProviders calleeProviders = selectCompilationProviders(callee, config);
+        return hasCompatibleCodeCache(caller, callee, callerProviders, calleeProviders, config) &&
+                        callerProviders.getGraphBuilderPlugins() == calleeProviders.getGraphBuilderPlugins() &&
+                        callerProviders.getMetaAccess() == calleeProviders.getMetaAccess() &&
+                        callerProviders.getConstantReflection() == calleeProviders.getConstantReflection() &&
+                        callerProviders.getConstantFieldProvider() == calleeProviders.getConstantFieldProvider() &&
+                        callerProviders.getForeignCalls() == calleeProviders.getForeignCalls() &&
+                        callerProviders.getLowerer() == calleeProviders.getLowerer() &&
+                        callerProviders.getReplacements() == calleeProviders.getReplacements() &&
+                        callerProviders.getStampProvider() == calleeProviders.getStampProvider() &&
+                        callerProviders.getSnippetReflection() == calleeProviders.getSnippetReflection() &&
+                        callerProviders.getWordTypes() == calleeProviders.getWordTypes() &&
+                        callerProviders.getPlatformConfigurationProvider() == calleeProviders.getPlatformConfigurationProvider() &&
+                        callerProviders.getMetaAccessExtensionProvider() == calleeProviders.getMetaAccessExtensionProvider() &&
+                        callerProviders.getLoopsDataProvider() == calleeProviders.getLoopsDataProvider();
+    }
+
+    /**
+     * Accepts identical code caches, or each method's original backend code cache. Native-entry
+     * and Java backends use different calling conventions, but inlining imports a graph rather
+     * than machine code: the caller's backend compiles the combined graph. Other provider services
+     * must still match.
+     */
+    private static boolean hasCompatibleCodeCache(HostedMethod caller, HostedMethod callee, HostedProviders callerProviders, HostedProviders calleeProviders, RuntimeConfiguration config) {
+        return callerProviders.getCodeCache() == calleeProviders.getCodeCache() ||
+                        callerProviders.getCodeCache() == config.lookupBackend(caller).getProviders().getCodeCache() &&
+                                        calleeProviders.getCodeCache() == config.lookupBackend(callee).getProviders().getCodeCache();
+    }
+
+    private static HostedProviders selectCompilationProviders(HostedMethod method, RuntimeConfiguration config) {
+        return HostedConfiguration.instance().selectCompilationProviders(method, (HostedProviders) config.lookupBackend(method).getProviders());
     }
 
     protected final CompilationResult doCompile(DebugContext debug, final HostedMethod method, CompilationIdentifier compilationIdentifier, CompileReason reason) {
@@ -1531,7 +1641,6 @@ public class CompileQueue {
                 } else {
                     throw t;
                 }
-
             }
         }
     }
@@ -1603,6 +1712,9 @@ public class CompileQueue {
                 if (InterpreterSupport.isEnabled() && InterpreterSupport.singleton().isInterpreterBytecodeHandlerStub(method)) {
                     // Suites are shared between compilation threads; specialize only this stub.
                     suites = suites.copy();
+                    if (suites.getHighTier().findPhase(FinalPartialEscapePhase.class) != null) {
+                        suites.getHighTier().insertAfterPhase(FinalPartialEscapePhase.class, new TailCallDuplicationPhase(CanonicalizerPhase.create()));
+                    }
                     // Keep reloads after calls instead of extending their live ranges through GVN.
                     suites.getHighTier().removeSubTypePhases(DominatorBasedGlobalValueNumberingPhase.class);
                     suites.getMidTier().removeSubTypePhases(DominatorBasedGlobalValueNumberingPhase.class);
@@ -1613,7 +1725,7 @@ public class CompileQueue {
                 CompilationResult result = backend.newCompilationResult(compilationIdentifier, method.getQualifiedName());
 
                 try (Indent _ = debug.logAndIndent("compile %s", method)) {
-                    Providers providers = backend.getProviders();
+                    Providers providers = selectCompilationProviders(method, config);
                     OptimisticOptimizations optimisticOpts = getOptimisticOpts();
                     GraalCompiler.compile(new GraalCompiler.Request<>(graph,
                                     method,
@@ -1719,7 +1831,7 @@ public class CompileQueue {
                     ref = offsetConstant.offset();
                 }
                 if (ref != null) {
-                    HostedMethod referencedMethod = (HostedMethod) ref.getMethod();
+                    HostedMethod referencedMethod = (HostedMethod) MethodRefSupport.getMethod(ref);
                     ensureCompiled(referencedMethod, new MethodRefConstantReason(method, referencedMethod, reason));
                 }
             }
@@ -1728,7 +1840,7 @@ public class CompileQueue {
 
     public Map<HostedMethod, CompilationResult> getCompilationResults() {
         Map<HostedMethod, CompilationResult> result = new TreeMap<>(HostedUniverse.METHOD_COMPARATOR);
-        for (Entry<HostedMethod, CompileTask> entry : compilations.entrySet()) {
+        for (Entry<HostedMethod, CompileTask> entry : getCompilations().entrySet()) {
             result.put(entry.getKey(), entry.getValue().result);
         }
         return result;

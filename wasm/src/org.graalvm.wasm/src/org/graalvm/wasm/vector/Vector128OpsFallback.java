@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2024, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,10 @@
  */
 
 package org.graalvm.wasm.vector;
+
+import java.lang.reflect.Field;
+
+import sun.misc.Unsafe;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.ExactMath;
@@ -203,12 +207,9 @@ public final class Vector128OpsFallback implements Vector128Ops<byte[]> {
     @Override
     @ExplodeLoop(kind = ExplodeLoop.LoopExplosionKind.FULL_UNROLL)
     public byte[] v128_load8x8(long value, int vectorOpcode) {
-        byte[] bytes = new byte[8];
-        CompilerDirectives.ensureVirtualized(bytes);
-        byteArraySupport.putLong(bytes, 0, value);
         byte[] resultBytes = new byte[Vector128.BYTES];
         for (int i = 0; i < 8; i++) {
-            byte x = bytes[i];
+            byte x = (byte) (value >>> (i * Byte.SIZE));
             short result = (short) switch (vectorOpcode) {
                 case Bytecode.VECTOR_V128_LOAD8X8_S -> x;
                 case Bytecode.VECTOR_V128_LOAD8X8_U -> Byte.toUnsignedInt(x);
@@ -222,12 +223,9 @@ public final class Vector128OpsFallback implements Vector128Ops<byte[]> {
     @Override
     @ExplodeLoop(kind = ExplodeLoop.LoopExplosionKind.FULL_UNROLL)
     public byte[] v128_load16x4(long value, int vectorOpcode) {
-        byte[] bytes = new byte[8];
-        CompilerDirectives.ensureVirtualized(bytes);
-        byteArraySupport.putLong(bytes, 0, value);
         byte[] resultBytes = new byte[Vector128.BYTES];
         for (int i = 0; i < 4; i++) {
-            short x = byteArraySupport.getShort(bytes, i * Short.BYTES);
+            short x = (short) (value >>> (i * Short.SIZE));
             int result = switch (vectorOpcode) {
                 case Bytecode.VECTOR_V128_LOAD16X4_S -> x;
                 case Bytecode.VECTOR_V128_LOAD16X4_U -> Short.toUnsignedInt(x);
@@ -241,12 +239,9 @@ public final class Vector128OpsFallback implements Vector128Ops<byte[]> {
     @Override
     @ExplodeLoop(kind = ExplodeLoop.LoopExplosionKind.FULL_UNROLL)
     public byte[] v128_load32x2(long value, int vectorOpcode) {
-        byte[] bytes = new byte[8];
-        CompilerDirectives.ensureVirtualized(bytes);
-        byteArraySupport.putLong(bytes, 0, value);
         byte[] resultBytes = new byte[Vector128.BYTES];
         for (int i = 0; i < 2; i++) {
-            int x = byteArraySupport.getInt(bytes, i * Integer.BYTES);
+            int x = (int) (value >>> (i * Integer.SIZE));
             long result = switch (vectorOpcode) {
                 case Bytecode.VECTOR_V128_LOAD32X2_S -> x;
                 case Bytecode.VECTOR_V128_LOAD32X2_U -> Integer.toUnsignedLong(x);
@@ -1489,6 +1484,33 @@ public final class Vector128OpsFallback implements Vector128Ops<byte[]> {
     @Override
     public void intoArray(byte[] vec, byte[] array, int offset) {
         System.arraycopy(vec, 0, array, offset, BYTES);
+    }
+
+    @Override
+    public byte[] fromNativeMemory(long address) {
+        byte[] bytes = new byte[BYTES];
+        NativeMemoryAccess.unsafe.copyMemory(null, address, bytes, Unsafe.ARRAY_BYTE_BASE_OFFSET, BYTES);
+        return bytes;
+    }
+
+    @Override
+    public void intoNativeMemory(byte[] vec, long address) {
+        NativeMemoryAccess.unsafe.copyMemory(vec, Unsafe.ARRAY_BYTE_BASE_OFFSET, null, address, BYTES);
+    }
+
+    // Byte-array-only execution does not need to initialize Unsafe.
+    private static final class NativeMemoryAccess {
+        private static final Unsafe unsafe = initUnsafe();
+
+        private static Unsafe initUnsafe() {
+            try {
+                Field field = Unsafe.class.getDeclaredField("theUnsafe");
+                field.setAccessible(true);
+                return (Unsafe) field.get(null);
+            } catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
     }
 
     @Override

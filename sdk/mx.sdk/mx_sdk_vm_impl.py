@@ -1283,8 +1283,7 @@ class NativePropertiesBuildTask(mx.ProjectBuildTask):
                 build_args += ['-ea', '-O0',] + svm_experimental_options(['-H:+PreserveFramePointer', '-H:-DeleteLocalSymbols'])
             if _get_svm_support().generate_debug_info(image_config):
                 build_args += _get_svm_support().get_debug_flags(image_config)
-            if getattr(image_config, 'link_at_build_time', True):
-                build_args += ['--link-at-build-time']
+            link_at_build_time_index = len(build_args)
 
             location_classpath = self._get_location_classpath()
             graalvm_home = _get_graalvm_archive_path("", self._graalvm_dist)
@@ -1381,6 +1380,10 @@ class NativePropertiesBuildTask(mx.ProjectBuildTask):
             if build_with_module_path:
                 export_deps_to_exclude = [str(dep) for dep in mx.classpath_entries(NativePropertiesBuildTask.implicit_excludes)] + list(_known_missing_jars)
                 build_args += image_config.get_add_exports(set(export_deps_to_exclude))
+
+            if getattr(image_config, 'link_at_build_time', True) and not any(
+                            arg == '--link-at-build-time' or arg.startswith('--link-at-build-time=') for arg in build_args):
+                build_args.insert(link_at_build_time_index, '--link-at-build-time')
 
             requires = [arg[2:] for arg in build_args if arg.startswith('--language:') or arg.startswith('--tool:') or arg.startswith('--macro:')]
             build_args = [arg for arg in build_args if not (arg.startswith('--language:') or arg.startswith('--tool:') or arg.startswith('--macro:'))]
@@ -2308,11 +2311,13 @@ def default_jvm_components():
     return [mx_sdk.graal_sdk_compiler_component]
 
 
-def _get_jvm_cfg():
+def _get_jvm_cfg(java_home=None):
+    if java_home is None:
+        java_home = mx_sdk_vm.base_jdk().home
     candidates = (['lib', 'jvm.cfg'], ['jre', 'lib', 'jvm.cfg'], ['jre', 'lib', mx.get_arch(), 'jvm.cfg'])
     probed = []
     for candidate in candidates:
-        jvm_cfg = join(mx_sdk_vm.base_jdk().home, *candidate)
+        jvm_cfg = join(java_home, *candidate)
         if exists(jvm_cfg):
             return jvm_cfg
         probed.append(jvm_cfg)
@@ -2503,6 +2508,11 @@ class NativeLibraryLauncherProject(mx_native.DefaultNativeProject):
 
         # launcher classpath for launching via jvm
         _mp = NativePropertiesBuildTask.get_launcher_classpath(_dist, _graalvm_home, self.language_library_config, self.component, exclude_implicit=True)
+        # JVM launchers need the Truffle runtime when it is not linked into the JDK.
+        _truffle_component = get_component('Truffle API')
+        if _truffle_component:
+            _truffle_cp = graalvm_home_relative_classpath(_truffle_component.jvmci_parent_jars, _graalvm_home, graal_vm=_dist)
+            _mp.extend(path for path in _truffle_cp.split(os.pathsep) if path and path not in _mp)
         _mp = [join(_dist.path_substitutions.substitute('<jdk_base>'), x) for x in _mp]
         # path from language launcher to jars
         _mp = [escaped_relpath(x) for x in _mp]
@@ -3060,6 +3070,54 @@ def graalvm_home_from_env(extra_mx_args, env, stage1=False, suite=None):
         mx.warn(f"'mx {mx.list_to_cmd_line(args)}' returned {exit_status}. Stdout:\n{out.data.strip()}\nStderr: {err.data.strip()}")
         mx.abort(exit_status)
     return out.data.strip()
+
+
+def resolve_graalvm_home(args=None):
+    """Resolves the location of a GraalVM JAVA_HOME. The order of resolution is:
+       1. The value of -g/--graalvm-home in `args` if `args` is not None. In any
+       case, `args` is not modified.
+       2. The current GraalVM distribution, if it has been built.
+       3. The value of the GRAALVM_HOME environment variable.
+
+    If the GraalVM home cannot be resolved, an exception is raised via `mx.abort`.
+    """
+
+    # Parse only the GraalVM option while leaving integration test arguments untouched.
+    class NonExitingArgumentParser(ArgumentParser):
+        def error(self, message):
+            """Raises an assertion instead of exiting when parsing the partial argument list."""
+            raise AssertionError(message)
+
+    if args is not None:
+        try:
+            parser = NonExitingArgumentParser(add_help=False)
+            parser.add_argument("-g", "--graalvm-home", metavar="GRAALVM")
+            namespace, _ = parser.parse_known_args(args)
+            if namespace.graalvm_home:
+                return namespace.graalvm_home
+        except AssertionError as e:
+            mx.warn(f"{e}")
+
+    detected = graalvm_home(fatalIfMissing=False)
+    if detected and exists(detected):
+        return detected
+
+    graalvm_home_env = os.environ.get('GRAALVM_HOME')
+    if graalvm_home_env and exists(graalvm_home_env):
+        return graalvm_home_env
+
+    mx.abort("""\
+No GraalVM home could be resolved.
+
+Either specify -g/--graalvm-home, or build a GraalVM for the desired environment and try again. For example:
+  1) Build GraalVM EE with Native Image:
+       mx --env ee build --dependencies=GRAALVM
+  2) Inspect the built home for the selected --env:
+       mx --env ee graalvm-home
+  3) Re-run the tests, passing the same --env (preferred) or by setting GRAALVM_HOME explicitly:
+       mx --env ee graalTest <test-file>
+       # or
+       GRAALVM_HOME=/path/to/graalvm mx graalTest <test-file>""")
 
 
 def print_graalvm_components(args):

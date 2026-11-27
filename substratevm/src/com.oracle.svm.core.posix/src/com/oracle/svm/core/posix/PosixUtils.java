@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -80,11 +80,6 @@ public class PosixUtils {
         SubstrateUtil.cast(descriptor, Target_java_io_FileDescriptor.class).fd = fd;
     }
 
-    public static String strerrorErrno() {
-        int errno = LibC.errno();
-        return strerror(errno);
-    }
-
     public static String strerror(int errno) {
         UnsignedWord size = Word.unsigned(1024);
         CCharPointer buf = NullableNativeMemory.malloc(size, NmtCategory.Internal);
@@ -92,8 +87,11 @@ public class PosixUtils {
             return "[could not allocate memory for error string]";
         }
         try {
-            CCharPointer cstr = Errno.strerror_r(errno, buf, size);
-            return CTypeConversion.toJavaString(cstr);
+            int status = Errno.strerror_r(errno, buf, size);
+            if (status != 0) {
+                return "Unknown error " + errno;
+            }
+            return CTypeConversion.toJavaString(buf);
         } finally {
             NullableNativeMemory.free(buf);
         }
@@ -268,6 +266,7 @@ public class PosixUtils {
     }
     // Checkstyle: resume
 
+    /// Looks up the login name of the user identified by `uid`.
     public static String getUserName(int uid) {
         return getUserNameOrDir(uid, true);
     }
@@ -284,7 +283,7 @@ public class PosixUtils {
             bufSize = 1024;
         }
 
-        /* Does not use StackValue because it is not safe to use in virtual threads. */
+        /* Keeps the native buffer off the stack because getpwuid_r can transition and safepoint. */
         UnsignedWord allocSize = Word.unsigned(SizeOf.get(passwdPointer.class) + SizeOf.get(passwd.class) + bufSize);
         Pointer alloc = NullableNativeMemory.malloc(allocSize, NmtCategory.Internal);
         if (alloc.isNull()) {

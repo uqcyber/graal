@@ -224,7 +224,8 @@ public class NodeCostModelBasedDuplicationCostFunction implements DuplicationCos
         final int cyclesSavedCanonicalization = canonicalizationOpportunity.cyclesSaved();
 
         ReducedRegion reducedRegion = canReduceRegionSize(killedBranches, killedGuards,
-                        new DuplicationOpportunity[]{readEliminationOpportunity, escapeAnalysisOpportunity, canonicalizationOpportunity, lockCoarseningOpportunity}, s.getOriginalMerge(), regionEnd);
+                        new DuplicationOpportunity[]{readEliminationOpportunity, escapeAnalysisOpportunity, canonicalizationOpportunity, lockCoarseningOpportunity},
+                        s.getOriginalMerge(), regionEnd);
 
         accumulatedResult.benefit += killedBranches;
         accumulatedResult.benefit += killedGuards;

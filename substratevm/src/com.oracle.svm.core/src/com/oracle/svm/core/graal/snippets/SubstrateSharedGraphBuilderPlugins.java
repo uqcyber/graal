@@ -24,10 +24,13 @@
  */
 package com.oracle.svm.core.graal.snippets;
 
+import java.lang.reflect.Type;
+
 import java.util.Objects;
 import java.util.function.Function;
 
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.classinitialization.EnsureClassInitializedNode;
 import com.oracle.svm.core.graal.jdk.SubstrateObjectCloneWithExceptionNode;
 import com.oracle.svm.core.identityhashcode.SubstrateIdentityHashCodeNode;
 
@@ -43,7 +46,11 @@ import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.Receiver;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.RequiredInvocationPlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins.Registration;
+import jdk.graal.compiler.nodes.java.DynamicNewInstanceNode;
+import jdk.graal.compiler.nodes.java.DynamicNewInstanceWithExceptionNode;
+import jdk.graal.compiler.nodes.java.ValidateNewInstanceClassNode;
 import jdk.graal.compiler.replacements.nodes.MacroNode.MacroParams;
+import jdk.vm.ci.meta.DeoptimizationAction;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -55,13 +62,51 @@ import jdk.vm.ci.meta.ResolvedJavaType;
  */
 public final class SubstrateSharedGraphBuilderPlugins {
 
+    /** A required plugin whose underlying method body has no executable fallback. */
+    public abstract static class IntrinsicOnlyInvocationPlugin extends RequiredInvocationPlugin {
+        protected IntrinsicOnlyInvocationPlugin(String name, Type... argumentTypes) {
+            super(name, argumentTypes);
+        }
+    }
+
+    /** Registers Unsafe allocation with class initialization and the original exception states. */
+    public static void registerUnsafeAllocateInstancePlugin(Registration r) {
+        r.register(new RequiredInvocationPlugin("allocateInstance", Receiver.class, Class.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver unsafe, ValueNode clazz) {
+                /* Emits a null-check for the otherwise unused receiver. */
+                unsafe.get(true);
+                /*
+                 * The allocated class must be null-checked already before the class initialization
+                 * check.
+                 */
+                ValueNode clazzNonNull = b.nullCheckedValue(clazz, DeoptimizationAction.None);
+                EnsureClassInitializedNode ensureInitialized = b.append(new EnsureClassInitializedNode(clazzNonNull));
+                ensureInitialized.setStateAfter(b.getInvocationPluginBeforeState());
+
+                ValidateNewInstanceClassNode clazzLegal = b.add(new ValidateNewInstanceClassNode(clazzNonNull));
+                if (b.currentBlockCatchesOOME()) {
+                    b.addPush(JavaKind.Object, new DynamicNewInstanceWithExceptionNode(clazzLegal, true, true));
+                } else {
+                    b.addPush(JavaKind.Object, new DynamicNewInstanceNode(clazzLegal, true, true));
+                }
+                return true;
+            }
+        });
+    }
+
     public static void registerSystemPlugins(InvocationPlugins plugins) {
         registerSecurityManagerPlugin(plugins);
         registerSystemIdentityHashCodePlugin(plugins);
     }
 
     public static void registerSecurityManagerPlugin(InvocationPlugins plugins) {
-        if (!SubstrateOptions.FoldSecurityManagerGetter.getValue()) {
+        registerSecurityManagerPlugin(plugins, SubstrateOptions.FoldSecurityManagerGetter.getValue());
+    }
+
+    /// Registers the same getter fold with an explicit option value, without reading image globals.
+    public static void registerSecurityManagerPlugin(InvocationPlugins plugins, boolean foldSecurityManagerGetter) {
+        if (!foldSecurityManagerGetter) {
             return;
         }
         Registration registration = new Registration(plugins, System.class);
@@ -77,7 +122,7 @@ public final class SubstrateSharedGraphBuilderPlugins {
 
     public static void registerSystemIdentityHashCodePlugin(InvocationPlugins plugins) {
         Registration registration = new Registration(plugins, System.class);
-        registration.register(new RequiredInvocationPlugin("identityHashCode", Object.class) {
+        registration.register(new IntrinsicOnlyInvocationPlugin("identityHashCode", Object.class) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode object) {
                 b.addPush(JavaKind.Int, SubstrateIdentityHashCodeNode.create(object, b.bci(), b));
@@ -97,7 +142,7 @@ public final class SubstrateSharedGraphBuilderPlugins {
             }
         });
 
-        registration.register(new RequiredInvocationPlugin("hashCode", Receiver.class) {
+        registration.register(new IntrinsicOnlyInvocationPlugin("hashCode", Receiver.class) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
                 ValueNode object = receiver.get(true);

@@ -165,6 +165,7 @@ public final class BytecodeFrame {
      * {@code [0, getLocalCount())}.
      *
      * @since 25.1
+     * @see BytecodeNode#getLocalValue(int, Frame, int)
      */
     public Object getLocalValue(int localOffset) {
         return bytecode.getLocalValue(bytecodeIndex, frame, localOffset);
@@ -178,6 +179,7 @@ public final class BytecodeFrame {
      * writes.
      *
      * @since 25.1
+     * @see BytecodeNode#setLocalValue(int, Frame, int, Object)
      */
     public void setLocalValue(int localOffset, Object value) {
         bytecode.setLocalValue(bytecodeIndex, frame, localOffset, value);
@@ -256,7 +258,7 @@ public final class BytecodeFrame {
             return null;
         }
         Frame frame = bytecode.resolveFrameImpl(frameInstance, access);
-        int bytecodeIndex = bytecode.findBytecodeIndex(frameInstance);
+        int bytecodeIndex = bytecode.resolveBytecodeIndex(frameInstance);
         assert bytecodeIndex != -1;
         return new BytecodeFrame(frame, bytecode, bytecodeIndex);
     }
@@ -289,7 +291,7 @@ public final class BytecodeFrame {
          * (either we are in the interpreter, or it is already materialized).
          */
         Frame frame = bytecode.resolveFrameImpl(frameInstance, FrameAccess.READ_WRITE);
-        int bytecodeIndex = bytecode.findBytecodeIndex(frameInstance);
+        int bytecodeIndex = bytecode.resolveBytecodeIndex(frameInstance);
         assert bytecodeIndex != -1;
         return new BytecodeFrame(frame, bytecode, bytecodeIndex);
     }

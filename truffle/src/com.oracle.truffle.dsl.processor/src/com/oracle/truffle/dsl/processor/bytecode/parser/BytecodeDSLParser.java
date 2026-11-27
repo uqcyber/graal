@@ -76,10 +76,12 @@ import com.oracle.truffle.dsl.processor.TruffleTypes;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeConfigEncoding;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLBuiltins;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel;
+import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.BytecodeIndexMode;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.IllegalLocalExceptionFactory;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.IllegalLocalExceptionFactory.ParameterKind;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.LoadIllegalLocalStrategy;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModels;
+import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeVersion;
 import com.oracle.truffle.dsl.processor.bytecode.model.CustomOperationModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.InstructionModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.InstructionModel.ImmediateKind;
@@ -232,9 +234,46 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
                         typeElement.getSimpleName() + suffix);
     }
 
+    private static BytecodeVersion parseVersion(BytecodeDSLModel model, AnnotationMirror annotation) {
+        AnnotationValue explicitVersion = ElementUtils.getAnnotationValue(annotation, "version", false);
+        VariableElement selected = ElementUtils.getAnnotationValue(VariableElement.class, annotation, "version");
+        String selectedName = selected.getSimpleName().toString();
+        BytecodeVersion version = BytecodeVersion.getVersion(selectedName);
+        if (version.number() < BytecodeVersion.MIN_SUPPORTED) {
+            String supportedVersions = BytecodeVersion.getSupportedVersions().stream().map(v -> "BytecodeVersion." + v.name()).collect(Collectors.joining(", "));
+            model.addError(annotation, explicitVersion,
+                            "Unsupported Bytecode DSL behaviour version BytecodeVersion.%s.\nPlease migrate to the newest version. See the BytecodeVersion Javadoc for migration instructions.\nSupported versions: %s.",
+                            selectedName, supportedVersions);
+            return null;
+        }
+        if (explicitVersion == null) {
+            model.addWarning(annotation, null,
+                            "A version should be specified explicitly. Defaulting to version %d. In the future, an explicit version will be required. See BytecodeVersion#%s for the selected behaviour.",
+                            version.number(), version.name());
+        }
+        if (version != BytecodeVersion.getLatestVersion()) {
+            String status = version.removalRelease() == null ? "" : "\nSupport will be removed in release " + version.removalRelease() + ".";
+            model.addWarning(annotation, explicitVersion,
+                            "Bytecode DSL behaviour version %d is older than the newest version %d.\nPlease migrate to the newest version. See the BytecodeVersion Javadoc for migration instructions.%s",
+                            version.number(), BytecodeVersion.getLatestVersion().number(), status);
+        }
+        return version;
+    }
+
     @SuppressWarnings("unchecked")
     private void parseBytecodeDSLModel(TypeElement typeElement, BytecodeDSLModel model, AnnotationMirror generateBytecodeMirror) {
+        model.version = parseVersion(model, generateBytecodeMirror);
+        if (model.hasErrors()) {
+            return;
+        }
         model.languageClass = (DeclaredType) ElementUtils.getAnnotationValue(generateBytecodeMirror, "languageClass").getValue();
+        model.unwindExceptions = ElementUtils.getAnnotationValueList(TypeMirror.class, generateBytecodeMirror, "unwindExceptions");
+        for (TypeMirror exceptionType : model.unwindExceptions) {
+            if (ElementUtils.isAssignable(exceptionType, context.getType(ThreadDeath.class))) {
+                model.addError(generateBytecodeMirror, ElementUtils.getAnnotationValue(generateBytecodeMirror, "unwindExceptions"),
+                                "ThreadDeath and its subtypes are reserved for instrumentation unwinds and cannot be configured as unwind exceptions.");
+            }
+        }
         AnnotationMirror languageRegistration = ElementUtils.findAnnotationMirror(model.languageClass.asElement(), types.TruffleLanguage_Registration);
         model.languageId = languageRegistration != null ? (String) ElementUtils.getAnnotationValue(languageRegistration, "id").getValue() : null;
         model.enableUncachedInterpreter = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableUncachedInterpreter");
@@ -244,7 +283,16 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         model.allowUnsafe = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "allowUnsafe");
         model.enableMaterializedLocalAccesses = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableMaterializedLocalAccesses");
         model.enableYield = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableYield");
-        model.storeBciInFrame = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "storeBytecodeIndexInFrame");
+        VariableElement bytecodeIndexMode = ElementUtils.getAnnotationValue(VariableElement.class, generateBytecodeMirror, "bytecodeIndexMode");
+        model.bytecodeIndexMode = BytecodeIndexMode.valueOf(bytecodeIndexMode.getSimpleName().toString());
+        boolean storeBytecodeIndexInFrame = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "storeBytecodeIndexInFrame");
+        if (storeBytecodeIndexInFrame) {
+            AnnotationValue explicitMode = ElementUtils.getAnnotationValue(generateBytecodeMirror, "bytecodeIndexMode", false);
+            if (explicitMode != null && model.bytecodeIndexMode != BytecodeIndexMode.CACHED_NODE) {
+                model.addError(typeElement, "GenerateBytecode#storeBytecodeIndexInFrame cannot be true when GenerateBytecode#bytecodeIndexMode is explicitly set to a non-default mode.");
+            }
+            model.bytecodeIndexMode = BytecodeIndexMode.FRAME;
+        }
         model.captureFramesForTrace = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "captureFramesForTrace");
         model.enableQuickening = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableQuickening");
         model.enableTagInstrumentation = ElementUtils.getAnnotationValue(Boolean.class, generateBytecodeMirror, "enableTagInstrumentation");
@@ -1404,6 +1452,7 @@ public class BytecodeDSLParser extends AbstractParser<BytecodeDSLModels> {
         supportedParams.put(new TypeMirrorKey(types.Node, typeUtils), ParameterKind.NODE);
         supportedParams.put(new TypeMirrorKey(types.BytecodeNode, typeUtils), ParameterKind.BYTECODE_NODE);
         supportedParams.put(new TypeMirrorKey(types.BytecodeLocation, typeUtils), ParameterKind.BYTECODE_LOCATION);
+        supportedParams.put(new TypeMirrorKey(model.getContext().getType(int.class), typeUtils), ParameterKind.BYTECODE_INDEX);
         supportedParams.put(new TypeMirrorKey(types.LocalVariable, typeUtils), ParameterKind.LOCAL_VARIABLE);
         for (VariableElement param : createMethod.getParameters()) {
             TypeMirror paramType = param.asType();

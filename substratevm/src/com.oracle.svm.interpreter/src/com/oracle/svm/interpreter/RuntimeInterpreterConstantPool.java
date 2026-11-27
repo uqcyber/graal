@@ -30,6 +30,7 @@ import java.lang.invoke.MethodType;
 import org.graalvm.nativeimage.impl.ClassLoading;
 
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.DynamicHubUtils;
 import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.core.methodhandles.Target_java_lang_invoke_MethodHandleNatives;
@@ -44,7 +45,6 @@ import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
 import com.oracle.svm.espresso.shared.meta.SignaturePolymorphicIntrinsic;
 import com.oracle.svm.interpreter.metadata.AccessChecks;
-import com.oracle.svm.interpreter.metadata.Bytecodes;
 import com.oracle.svm.interpreter.metadata.CremaResolvedObjectType;
 import com.oracle.svm.interpreter.metadata.InterpreterConstantPool;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedInvokeGenericJavaMethod;
@@ -54,7 +54,6 @@ import com.oracle.svm.interpreter.metadata.InterpreterResolvedJavaType;
 import com.oracle.svm.interpreter.metadata.InterpreterResolvedObjectType;
 import com.oracle.svm.shared.util.VMError;
 
-import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.UnresolvedJavaField;
 import jdk.vm.ci.meta.UnresolvedJavaMethod;
 import jdk.vm.ci.meta.UnresolvedJavaType;
@@ -194,7 +193,7 @@ public final class RuntimeInterpreterConstantPool extends InterpreterConstantPoo
 
     private static InterpreterResolvedJavaType resolveSymbolOrThrow(Symbol<Type> type, InterpreterResolvedObjectType accessingClass) {
         DynamicHub hub = DynamicHub.fromClass(CremaSupport.singleton().resolveOrThrow(type, accessingClass));
-        return (InterpreterResolvedJavaType) hub.getInterpreterType();
+        return (InterpreterResolvedJavaType) DynamicHubUtils.getInterpreterType(hub);
     }
 
     private Object resolveClassConstant(int classIndex, InterpreterResolvedObjectType accessingKlass) {
@@ -279,20 +278,20 @@ public final class RuntimeInterpreterConstantPool extends InterpreterConstantPoo
 
     private Object resolveClassMethodRefConstant(int methodIndex, InterpreterResolvedObjectType accessingClass) {
         assert accessingClass != null;
-        assert tagAt(methodIndex) == Tag.METHOD_REF;
+        assert this.tagAt(methodIndex) == Tag.METHOD_REF;
 
-        Object entry = this.cachedEntries[methodIndex];
+        Object entry = this.peekCachedEntry(methodIndex);
 
         Symbol<Name> methodName = null;
         Symbol<Signature> methodSignature = null;
         InterpreterResolvedJavaType holder = null;
 
         if (entry == null) {
-            // CP comes from dynamically loaded .class file.
+            // CP comes from a dynamically loaded .class file.
             methodName = this.methodName(methodIndex);
             methodSignature = this.methodSignature(methodIndex);
             int memberClassIndex = this.memberClassIndex(methodIndex);
-            holder = resolvedTypeAt(accessingClass, memberClassIndex);
+            holder = this.resolvedTypeAt(accessingClass, memberClassIndex);
         } else if (entry instanceof UnresolvedJavaMethod unresolvedJavaMethod) {
             Throwable cause = unresolvedJavaMethod.getCause();
             if (cause != null) {
@@ -403,36 +402,6 @@ public final class RuntimeInterpreterConstantPool extends InterpreterConstantPoo
             AccessChecks.ensureTypeAccess(resolvedType, accessingClass);
             return resolvedType;
         }
-    }
-
-    @Override
-    public JavaType lookupReferencedType(int cpi, int opcode) {
-        int declaringClassCPI = -1;
-        switch (opcode) {
-            case Bytecodes.CHECKCAST:
-            case Bytecodes.INSTANCEOF:
-            case Bytecodes.NEW:
-            case Bytecodes.ANEWARRAY:
-            case Bytecodes.MULTIANEWARRAY:
-            case Bytecodes.LDC:
-            case Bytecodes.LDC_W:
-            case Bytecodes.LDC2_W:
-                declaringClassCPI = cpi;
-                break;
-            case Bytecodes.GETSTATIC:
-            case Bytecodes.PUTSTATIC:
-            case Bytecodes.GETFIELD:
-            case Bytecodes.PUTFIELD:
-            case Bytecodes.INVOKEVIRTUAL:
-            case Bytecodes.INVOKESPECIAL:
-            case Bytecodes.INVOKESTATIC:
-            case Bytecodes.INVOKEINTERFACE:
-                declaringClassCPI = memberClassIndex(cpi);
-                break;
-            default:
-                throw VMError.shouldNotReachHere("Unexpected opcode: " + opcode); // ExcludeFromJacocoGeneratedReport
-        }
-        return findClassAt(declaringClassCPI);
     }
 
     @Override

@@ -38,7 +38,6 @@ import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisPolicy.AbstractPolicyScope;
 
-import jdk.graal.compiler.bytecode.BytecodeProvider;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeSourcePosition;
@@ -77,9 +76,9 @@ public class InlineBeforeAnalysisGraphDecoder extends PEGraphDecoder {
          */
         private final EconomicSet<EncodedGraph> encodedGraphs;
 
-        InlineBeforeAnalysisMethodScope(StructuredGraph targetGraph, PEMethodScope caller, LoopScope callerLoopScope, EncodedGraph encodedGraph, AnalysisMethod method,
+        InlineBeforeAnalysisMethodScope(StructuredGraph targetGraph, PEMethodScope caller, EncodedGraph encodedGraph, AnalysisMethod method,
                         InvokeData invokeData, int inliningDepth, ValueNode[] arguments) {
-            super(targetGraph, caller, callerLoopScope, encodedGraph, method, invokeData, inliningDepth, arguments);
+            super(targetGraph, caller, encodedGraph, method, invokeData, inliningDepth, arguments);
 
             if (caller == null) {
                 /* The root method that we are decoding, i.e., inlining into. */
@@ -178,13 +177,13 @@ public class InlineBeforeAnalysisGraphDecoder extends PEGraphDecoder {
     }
 
     @Override
-    protected PEMethodScope createMethodScope(StructuredGraph targetGraph, PEMethodScope caller, LoopScope callerLoopScope, EncodedGraph encodedGraph, ResolvedJavaMethod method, InvokeData invokeData,
+    protected PEMethodScope createMethodScope(StructuredGraph targetGraph, PEMethodScope caller, EncodedGraph encodedGraph, ResolvedJavaMethod method, InvokeData invokeData,
                     int inliningDepth, ValueNode[] arguments) {
-        return new InlineBeforeAnalysisMethodScope(targetGraph, caller, callerLoopScope, encodedGraph, (AnalysisMethod) method, invokeData, inliningDepth, arguments);
+        return new InlineBeforeAnalysisMethodScope(targetGraph, caller, encodedGraph, (AnalysisMethod) method, invokeData, inliningDepth, arguments);
     }
 
     @Override
-    protected EncodedGraph lookupEncodedGraph(ResolvedJavaMethod method, BytecodeProvider intrinsicBytecodeProvider) {
+    protected EncodedGraph lookupEncodedGraph(ResolvedJavaMethod method) {
         AnalysisMethod aMethod = (AnalysisMethod) method;
         return aMethod.ensureGraphParsed(bb).getEncodedGraph();
     }
@@ -312,7 +311,7 @@ public class InlineBeforeAnalysisGraphDecoder extends PEGraphDecoder {
     protected void finishInlining(MethodScope is) {
         InlineBeforeAnalysisMethodScope inlineScope = cast(is);
         InlineBeforeAnalysisMethodScope callerScope = cast(inlineScope.caller);
-        LoopScope callerLoopScope = inlineScope.callerLoopScope;
+        LoopScope callerLoopScope = inlineScope.caller.currentLoopScope;
         InvokeData invokeData = inlineScope.invokeData;
 
         if (inlineScope.inliningAborted) {

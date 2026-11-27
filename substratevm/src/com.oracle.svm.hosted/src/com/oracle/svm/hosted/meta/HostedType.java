@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,6 +40,7 @@ import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.DynamicHubProvider;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
 import com.oracle.svm.jvmci.shared.meta.SharedType;
+import com.oracle.svm.core.graal.meta.TypeCheckInfoProvider.TypeCheckInfo;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.OriginalClassProvider;
 
@@ -270,6 +271,12 @@ public abstract class HostedType extends HostedElement implements SharedType, Dy
         return typeCheckStart;
     }
 
+    @Override
+    public TypeCheckInfo getTypeCheckInfo() {
+        assert SubstrateOptions.useClosedTypeWorldHubLayout();
+        return new TypeCheckInfo(typeCheckStart, typeCheckRange, typeCheckSlot);
+    }
+
     public short getTypeCheckRange() {
         assert SubstrateOptions.useClosedTypeWorldHubLayout();
         return typeCheckRange;
@@ -372,6 +379,11 @@ public abstract class HostedType extends HostedElement implements SharedType, Dy
     @Override
     public final String getName() {
         return wrapped.getName();
+    }
+
+    @Override
+    public String toClassName() {
+        return wrapped.toClassName();
     }
 
     @Override

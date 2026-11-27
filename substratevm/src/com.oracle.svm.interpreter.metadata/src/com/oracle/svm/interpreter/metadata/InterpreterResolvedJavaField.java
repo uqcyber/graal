@@ -39,11 +39,14 @@ import org.graalvm.word.impl.Word;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.svm.core.SubstrateMetadata;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.interpreter.InterpreterJNIFieldIds;
 import com.oracle.svm.core.hub.crema.CremaSupport;
+import com.oracle.svm.core.hub.registry.ClassRegistries;
 import com.oracle.svm.core.hub.registry.SymbolsSupport;
 import com.oracle.svm.core.invoke.ResolvedMember;
+import com.oracle.svm.core.jni.headers.JNIFieldId;
 import com.oracle.svm.jvmci.shared.meta.SharedField;
-import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.guest.staging.core.stack.StackOverflowCheck;
 import com.oracle.svm.espresso.classfile.ClassfileParser;
 import com.oracle.svm.espresso.classfile.Constants;
 import com.oracle.svm.espresso.classfile.descriptors.Name;
@@ -51,11 +54,11 @@ import com.oracle.svm.espresso.classfile.descriptors.Symbol;
 import com.oracle.svm.espresso.classfile.descriptors.Type;
 import com.oracle.svm.espresso.classfile.descriptors.TypeSymbols;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
+import com.oracle.svm.shared.util.NumUtil;
 import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 import com.oracle.svm.util.GuestAnnotationAccess;
 
-import jdk.graal.compiler.core.common.NumUtil;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
@@ -264,6 +267,33 @@ public class InterpreterResolvedJavaField extends InterpreterAnnotated implement
 
     public final int getInstalledLayerNum() {
         return layerNum;
+    }
+
+    /** Returns whether this field has addressable storage that can be encoded in a JNI field ID. */
+    public final boolean canCreateJNIFieldId() {
+        int fieldOffset = getOffset();
+        return isStatic() ? fieldOffset >= 0 && getInstalledLayerNum() != MultiLayeredImageSingleton.LAYER_NUM_UNINSTALLED : fieldOffset > 0;
+    }
+
+    /**
+     * Gets or creates the tagged JNI field ID for this interpreter field. Instance field IDs encode
+     * the field offset directly. Static field IDs are cached by the declaring class loader's
+     * registry and encode the declaring hub, offset, and installed static-storage layer in a
+     * metaspace node.
+     *
+     * @return the JNI field ID
+     */
+    public final JNIFieldId getOrCreateJNIFieldId() {
+        assert canCreateJNIFieldId();
+        int fieldOffset = getOffset();
+        if (!isStatic()) {
+            return InterpreterJNIFieldIds.forInstanceField(fieldOffset);
+        }
+        DynamicHub hub = getDeclaringClass().getHub();
+        ClassLoader loader = getDeclaringClass().getJavaClass().getClassLoader();
+        var node = ClassRegistries.runtimeLastLayer().getRegistry(loader).getOrCreateInterpreterJNIStaticFieldId(
+                        this, hub, fieldOffset, getInstalledLayerNum());
+        return InterpreterJNIFieldIds.forStaticField(node);
     }
 
     @Override

@@ -39,7 +39,7 @@ import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.RuntimeStateTrimConfig.Mode;
+import org.graalvm.nativeimage.impl.RuntimeStateTrimConfig.Mode;
 import org.graalvm.nativeimage.c.function.CEntryPointLiteral;
 import org.graalvm.nativeimage.c.function.CFunctionPointer;
 import org.graalvm.nativeimage.c.struct.SizeOf;
@@ -51,7 +51,6 @@ import org.graalvm.word.impl.Word;
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateDiagnostics;
 import com.oracle.svm.core.SubstrateDiagnostics.DiagnosticThunk;
-import com.oracle.svm.core.SubstrateDiagnostics.DiagnosticThunkRegistry;
 import com.oracle.svm.core.SubstrateDiagnostics.ErrorContext;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Substitute;
@@ -59,7 +58,8 @@ import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.code.RuntimeCodeInfoMemory;
 import com.oracle.svm.core.code.RuntimeCodeInstallation;
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
+import com.oracle.svm.core.config.ObjectLayoutCompilerSupport;
 import com.oracle.svm.core.g1.nativelib.G1Library;
 import com.oracle.svm.core.g1.nativelib.G1Structs.G1InitState;
 import com.oracle.svm.core.g1.nativelib.G1Structs.G1InternalState;
@@ -71,19 +71,20 @@ import com.oracle.svm.core.gc.shared.NativeGCVMOperationSupport.NativeGCVMOperat
 import com.oracle.svm.core.gc.shared.NativeGCVMOperationSupport.NativeGCVMOperationWrapperData;
 import com.oracle.svm.core.heap.FillerArray;
 import com.oracle.svm.core.heap.FillerObject;
-import com.oracle.svm.core.heap.GC;
-import com.oracle.svm.core.heap.GCCause;
-import com.oracle.svm.core.heap.Heap;
-import com.oracle.svm.core.heap.InstanceReferenceMapEncoder;
+import com.oracle.svm.guest.staging.core.heap.GC;
+import com.oracle.svm.guest.staging.core.heap.GCCause;
+import com.oracle.svm.guest.staging.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.InstanceReferenceMapDecoder;
 import com.oracle.svm.core.heap.NoAllocationVerifier;
-import com.oracle.svm.core.heap.ObjectHeader;
-import com.oracle.svm.core.heap.ObjectVisitor;
+import com.oracle.svm.guest.staging.core.heap.ObjectHeader;
+import com.oracle.svm.guest.staging.core.heap.ObjectVisitor;
 import com.oracle.svm.core.heap.ReferenceHandlerThread;
-import com.oracle.svm.core.heap.RuntimeCodeInfoGCSupport;
+import com.oracle.svm.guest.staging.core.heap.RuntimeCodeInfoGCSupport;
 import com.oracle.svm.core.heap.StoredContinuation;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.DynamicHubUtils;
 import com.oracle.svm.core.hub.LayoutEncoding;
+import com.oracle.svm.guest.staging.core.metaspace.Metaspace;
 import com.oracle.svm.core.thread.PlatformThreads;
 import com.oracle.svm.core.thread.Safepoint;
 import com.oracle.svm.core.thread.ThreadsLock;
@@ -107,6 +108,7 @@ import com.oracle.svm.guest.staging.log.Log;
 import com.oracle.svm.guest.staging.option.NotifyGCRuntimeOptionKey;
 import com.oracle.svm.guest.staging.option.RuntimeOptionKey;
 import com.oracle.svm.shared.BuildPhaseProvider.ReadyForCompilation;
+import com.oracle.svm.shared.ReflectivelyAccessed;
 import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.MultiLayeredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
@@ -118,6 +120,7 @@ import com.oracle.svm.shared.util.SubstrateUtil;
 import com.oracle.svm.shared.util.VMError;
 
 import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.nodes.extended.MembarNode;
 import jdk.graal.compiler.replacements.ReplacementsUtil;
 import jdk.vm.ci.meta.JavaKind;
@@ -137,7 +140,7 @@ public final class G1Heap extends Heap {
     public static final FastThreadLocalBytes<Word> javaThreadTL = FastThreadLocalFactory.createBytes(G1Constants::javaThreadSize, "G1Heap.javaThread");
     private static final FastThreadLocalWord<Word> cardTableAddressTL = FastThreadLocalFactory.createWord("G1Heap.cardTableAddress").setMaxOffset(FastThreadLocal.FIRST_CACHE_LINE);
 
-    private static long gcTotalCollectionsAddress;
+    @ReflectivelyAccessed private static long gcTotalCollectionsAddress;
 
     private final G1GC gc = new G1GC();
     private final G1ImageHeapInfo imageHeapInfo = new G1ImageHeapInfo();
@@ -160,10 +163,6 @@ public final class G1Heap extends Heap {
     public G1Heap(G1PerfData perfData) {
         this.objectHeader = new G1ObjectHeader();
         this.perfData = perfData;
-
-        DiagnosticThunkRegistry.singleton().add(new DumpHeapSettingsAndGCInternalState());
-        DiagnosticThunkRegistry.singleton().add(new DumpRegionInformation());
-        DiagnosticThunkRegistry.singleton().add(new DumpCurrentGCThreadName());
     }
 
     @Fold
@@ -203,14 +202,14 @@ public final class G1Heap extends Heap {
         Word vmOperationThread = Word.objectToUntrackedWord(VMOperationControl.getDedicatedVMOperationThread());
         Word safepointMaster = Word.objectToUntrackedWord(Safepoint.singleton());
         Word runtimeCodeInfoMemory = Word.objectToUntrackedWord(RuntimeCodeInfoMemory.singleton());
-        int referenceMapCompressedOffsetShift = InstanceReferenceMapEncoder.REFERENCE_MAP_COMPRESSED_OFFSET_SHIFT;
+        int referenceMapCompressedOffsetShift = InstanceReferenceMapDecoder.REFERENCE_MAP_COMPRESSED_OFFSET_SHIFT;
         Word threadLocalsReferenceMap = NonmovableArrays.addressOf(threadLocalSupport.getThreadLocalsReferenceMap(), threadLocalSupport.getThreadLocalsReferenceMapIndex());
         Word classesAssumedReachableForCodeUnloading = getClassesAssumedReachableForCodeUnloading();
         Word performanceData = Word.objectToUntrackedWord(perfData);
         boolean closedTypeWorldHubLayout = SubstrateOptions.useClosedTypeWorldHubLayout();
         boolean useInterfaceHashing = SubstrateOptions.useInterfaceHashing();
+        boolean usePextInterfaceHashing = SubstrateOptions.usePextInterfaceHashing();
         int interfaceHashingMaxId = SubstrateOptions.interfaceHashingMaxId();
-        int dynamicHubHashingInterfaceMask = DynamicHubUtils.HASHING_INTERFACE_MASK;
         int dynamicHubHashingShiftOffset = DynamicHubUtils.HASHING_SHIFT_OFFSET;
         Word offsets = Word.objectToUntrackedWord(accessedFieldOffsets).add(getByteArrayBaseOffset());
         int offsetsLength = accessedFieldOffsets.length;
@@ -241,7 +240,7 @@ public final class G1Heap extends Heap {
                         staticObjectFields, staticPrimitiveFields, vmOperationThread, safepointMaster, runtimeCodeInfoMemory,
                         referenceMapCompressedOffsetShift, threadLocalsReferenceMap,
                         classesAssumedReachableForCodeUnloading, performanceData, closedTypeWorldHubLayout,
-                        useInterfaceHashing, interfaceHashingMaxId, dynamicHubHashingInterfaceMask, dynamicHubHashingShiftOffset,
+                        useInterfaceHashing, usePextInterfaceHashing, interfaceHashingMaxId, dynamicHubHashingShiftOffset,
                         offsets, offsetsLength,
                         collectForAllocationOp, executePauseRemark, executePauseCleanup,
                         collectFullOp, verifyHeapOp, tryInitiateConcMarkOp,
@@ -339,6 +338,31 @@ public final class G1Heap extends Heap {
     }
 
     @Fold
+    public static int getNullRegionSize() {
+        int buildTimePageSize = SubstrateOptions.getPageSize();
+        int result = Math.max(buildTimePageSize * G1Constants.cardSize(), G1HeapRegionSize.getValue());
+        assert result % G1HeapRegionSize.getValue() == 0 : "null region size must be region-aligned";
+        return result;
+    }
+
+    @Fold
+    static int getMetaspaceOffsetInAddressSpace() {
+        int result = getNullRegionSize();
+        assert result % G1HeapRegionSize.getValue() == 0 : "start of metaspace must be region-aligned";
+        return result;
+    }
+
+    @Fold
+    static int getReservedMetaspaceSize() {
+        if (!Metaspace.isSupported()) {
+            return 0;
+        }
+
+        int unalignedValue = SubstrateGCOptions.ConcealedOptions.getMaxMetaspaceSize();
+        return NumUtil.roundUp(unalignedValue, G1Options.G1HeapRegionSize.getValue());
+    }
+
+    @Fold
     @Override
     public int getHeapBaseAlignment() {
         int buildTimePageSize = SubstrateOptions.getPageSize();
@@ -354,8 +378,7 @@ public final class G1Heap extends Heap {
     @Fold
     @Override
     public int getImageHeapOffsetInAddressSpace() {
-        int buildTimePageSize = SubstrateOptions.getPageSize();
-        int result = Math.max(buildTimePageSize * G1Constants.cardSize(), G1HeapRegionSize.getValue());
+        int result = getNullRegionSize() + getReservedMetaspaceSize();
         assert result % getImageHeapAlignment() == 0 : "start of image heap must be aligned";
         return result;
     }
@@ -448,7 +471,7 @@ public final class G1Heap extends Heap {
 
     @Fold
     static int getByteArrayBaseOffset() {
-        return ObjectLayout.singleton().getArrayBaseOffset(JavaKind.Byte);
+        return ObjectLayoutCompilerSupport.getArrayBaseOffset(ObjectLayout.singleton(), JavaKind.Byte);
     }
 
     @Override
@@ -582,14 +605,14 @@ public final class G1Heap extends Heap {
         if (value.equal(heapBase)) {
             log.string("is the heap base");
             return true;
-        } else if (value.aboveThan(heapBase) && value.belowThan(imageHeapInfo.getImageHeapStart())) {
-            log.string("points into the protected memory between the heap base and the image heap");
+        } else if (value.aboveThan(heapBase) && value.belowThan(heapBase.add(getNullRegionSize()))) {
+            log.string("points into the protected null region after the heap base");
             return true;
         }
 
         if (objectHeader.isEncodedObjectHeader((Word) value)) {
             log.string("is the encoded object header for an object of type ");
-            DynamicHub hub = objectHeader.dynamicHubFromObjectHeader((Word) value);
+            DynamicHub hub = (DynamicHub) objectHeader.dynamicHubFromObjectHeader((Word) value);
             log.string(hub.getName());
             return true;
         }
@@ -726,7 +749,7 @@ public final class G1Heap extends Heap {
         return true;
     }
 
-    private static final class DumpHeapSettingsAndGCInternalState extends DiagnosticThunk {
+    public static final class DumpHeapSettingsAndGCInternalState extends DiagnosticThunk {
         @Override
         public int maxInvocationCount() {
             return 1;
@@ -751,7 +774,7 @@ public final class G1Heap extends Heap {
         }
     }
 
-    private static final class DumpRegionInformation extends DiagnosticThunk {
+    public static final class DumpRegionInformation extends DiagnosticThunk {
         private static final int MAX_REGIONS_TO_PRINT = 128 * 1024;
 
         @Override
@@ -801,7 +824,7 @@ public final class G1Heap extends Heap {
         }
     }
 
-    private static final class DumpCurrentGCThreadName extends DiagnosticThunk {
+    public static final class DumpCurrentGCThreadName extends DiagnosticThunk {
         @Override
         public int maxInvocationCount() {
             return 1;

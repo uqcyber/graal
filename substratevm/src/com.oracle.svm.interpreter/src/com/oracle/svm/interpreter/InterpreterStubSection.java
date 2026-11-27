@@ -59,10 +59,11 @@ import com.oracle.svm.core.graal.code.SubstrateRegisterConfigFactory;
 import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
 import com.oracle.svm.core.graal.nodes.VaListInitializationNode;
 import com.oracle.svm.core.graal.nodes.VaListNextArgNode;
-import com.oracle.svm.core.heap.GCCause;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.GCCause;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.hub.crema.CremaJNIMethodIds;
+import com.oracle.svm.core.hub.DynamicHubUtils;
+import com.oracle.svm.core.interpreter.InterpreterJNIMethodIds;
 import com.oracle.svm.core.hub.crema.CremaResolvedJavaMethod;
 import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.interpreter.InterpreterEnterStub;
@@ -309,7 +310,7 @@ public abstract class InterpreterStubSection {
         Object receiver = ((Pointer) Word.pointer(accessHelper.getGpArgumentAt(PreparedSignature.encodeArgumentType(JavaKind.Object, 0, true), enterData))).toObject();
 
         DynamicHub hub = DynamicHub.fromClass(receiver.getClass());
-        InterpreterResolvedObjectType thisType = (InterpreterResolvedObjectType) hub.getInterpreterType();
+        InterpreterResolvedObjectType thisType = (InterpreterResolvedObjectType) DynamicHubUtils.getInterpreterType(hub);
         InterpreterResolvedJavaMethod interpreterMethod = thisType.getVtable()[vTableIndex];
 
         return enterHelper(interpreterMethod, enterData);
@@ -429,52 +430,52 @@ public abstract class InterpreterStubSection {
     }
 
     public static long enterInterpreterForJNIUpcallArrayVirtual(JNIObjectHandle receiverOrClass, JNIMethodId methodId, Pointer array) throws InstantiationException {
-        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) CremaJNIMethodIds.getMethod(methodId);
-        Object[] args = prepareJNIArgsFromArray(receiverOrClass, method, array, false);
+        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) InterpreterJNIMethodIds.getMethod(methodId);
+        Object[] args = prepareJNIUpcallArgsFromArray(receiverOrClass, method, array, false);
         return enterInterpreterForJNIUpcallVirtual(method, args);
     }
 
     public static long enterInterpreterForJNIUpcallArrayNonVirtual(JNIObjectHandle receiverOrClass, JNIMethodId methodId, Pointer array) throws InstantiationException {
-        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) CremaJNIMethodIds.getMethod(methodId);
-        Object[] args = prepareJNIArgsFromArray(receiverOrClass, method, array, false);
+        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) InterpreterJNIMethodIds.getMethod(methodId);
+        Object[] args = prepareJNIUpcallArgsFromArray(receiverOrClass, method, array, false);
         return enterInterpreterForJNIUpcallNonVirtual(method, args);
     }
 
     public static long enterInterpreterForJNIUpcallArrayReadDoubleForFloatVirtual(JNIObjectHandle receiverOrClass, JNIMethodId methodId, Pointer array) throws InstantiationException {
-        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) CremaJNIMethodIds.getMethod(methodId);
-        Object[] args = prepareJNIArgsFromArray(receiverOrClass, method, array, true);
+        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) InterpreterJNIMethodIds.getMethod(methodId);
+        Object[] args = prepareJNIUpcallArgsFromArray(receiverOrClass, method, array, true);
         return enterInterpreterForJNIUpcallVirtual(method, args);
     }
 
     public static long enterInterpreterForJNIUpcallArrayReadDoubleForFloatNonVirtual(JNIObjectHandle receiverOrClass, JNIMethodId methodId, Pointer array) throws InstantiationException {
-        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) CremaJNIMethodIds.getMethod(methodId);
-        Object[] args = prepareJNIArgsFromArray(receiverOrClass, method, array, true);
+        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) InterpreterJNIMethodIds.getMethod(methodId);
+        Object[] args = prepareJNIUpcallArgsFromArray(receiverOrClass, method, array, true);
         return enterInterpreterForJNIUpcallNonVirtual(method, args);
     }
 
     public static long enterInterpreterForJNIUpcallVarargsVirtual(JNIObjectHandle receiverOrClass, JNIMethodId methodId, Pointer jniEnterData) throws InstantiationException {
-        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) CremaJNIMethodIds.getMethod(methodId);
-        Object[] args = prepareJNIArgsFromVarargs(receiverOrClass, method, jniEnterData, false);
+        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) InterpreterJNIMethodIds.getMethod(methodId);
+        Object[] args = prepareJNIUpcallArgsFromVarargs(receiverOrClass, method, jniEnterData, false);
         return enterInterpreterForJNIUpcallVirtual(method, args);
     }
 
     public static long enterInterpreterForJNIUpcallVarargsNonVirtual(JNIObjectHandle receiverOrClass, JNIMethodId methodId, Pointer jniEnterData) throws InstantiationException {
-        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) CremaJNIMethodIds.getMethod(methodId);
-        Object[] args = prepareJNIArgsFromVarargs(receiverOrClass, method, jniEnterData, true);
+        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) InterpreterJNIMethodIds.getMethod(methodId);
+        Object[] args = prepareJNIUpcallArgsFromVarargs(receiverOrClass, method, jniEnterData, true);
         return enterInterpreterForJNIUpcallNonVirtual(method, args);
     }
 
     public static long enterInterpreterForJNIUpcallVaListVirtual(JNIObjectHandle receiverOrClass, JNIMethodId methodId, Pointer vaList) throws InstantiationException {
-        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) CremaJNIMethodIds.getMethod(methodId);
+        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) InterpreterJNIMethodIds.getMethod(methodId);
         Pointer vaListInitialized = VaListInitializationNode.vaListInitialization(vaList);
-        Object[] args = prepareJNIArgsFromVaList(receiverOrClass, method, vaListInitialized);
+        Object[] args = prepareJNIUpcallArgsFromVaList(receiverOrClass, method, vaListInitialized);
         return enterInterpreterForJNIUpcallVirtual(method, args);
     }
 
     public static long enterInterpreterForJNIUpcallVaListNonVirtual(JNIObjectHandle receiverOrClass, JNIMethodId methodId, Pointer vaList) throws InstantiationException {
-        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) CremaJNIMethodIds.getMethod(methodId);
+        InterpreterResolvedJavaMethod method = (InterpreterResolvedJavaMethod) InterpreterJNIMethodIds.getMethod(methodId);
         Pointer vaListInitialized = VaListInitializationNode.vaListInitialization(vaList);
-        Object[] args = prepareJNIArgsFromVaList(receiverOrClass, method, vaListInitialized);
+        Object[] args = prepareJNIUpcallArgsFromVaList(receiverOrClass, method, vaListInitialized);
         return enterInterpreterForJNIUpcallNonVirtual(method, args);
     }
 
@@ -494,24 +495,25 @@ public abstract class InterpreterStubSection {
         return encodeReturnValue(method.getPreparedSignature().getReturnKind(), result, ObjectReturnKind.HANDLE);
     }
 
-    private static Object[] createJNIArgs(InterpreterResolvedJavaMethod method) {
+    private static Object[] createJNIUpcallArgs(InterpreterResolvedJavaMethod method) {
         int[] argumentTypes = method.getPreparedSignature().getArgumentTypes();
         return new Object[argumentTypes.length];
     }
 
-    private static Object[] prepareJNIArgsFromArray(JNIObjectHandle receiverOrClass, InterpreterResolvedJavaMethod method, Pointer array, boolean readDoubleForFloat) throws InstantiationException {
+    private static Object[] prepareJNIUpcallArgsFromArray(JNIObjectHandle receiverOrClass, InterpreterResolvedJavaMethod method, Pointer array, boolean readDoubleForFloat)
+                    throws InstantiationException {
         int offset = 0;
         int[] argumentTypes = method.getPreparedSignature().getArgumentTypes();
         Object[] args = new Object[argumentTypes.length];
-        int index = prepareJNIReceiver(receiverOrClass, method, args);
+        int index = prepareJNIUpcallReceiver(receiverOrClass, method, args);
         for (int i = index; i < argumentTypes.length; i++) {
-            args[i] = readArray(array, offset, PreparedSignature.getKind(argumentTypes[i]), readDoubleForFloat);
+            args[i] = readJNIUpcallArray(array, offset, PreparedSignature.getKind(argumentTypes[i]), readDoubleForFloat);
             offset += SubstrateTarget.getWordSize();
         }
         return args;
     }
 
-    private static int prepareJNIReceiver(JNIObjectHandle receiverOrClass, InterpreterResolvedJavaMethod method, Object[] args) throws InstantiationException {
+    private static int prepareJNIUpcallReceiver(JNIObjectHandle receiverOrClass, InterpreterResolvedJavaMethod method, Object[] args) throws InstantiationException {
         if (!method.hasReceiver()) {
             return 0;
         }
@@ -535,7 +537,7 @@ public abstract class InterpreterStubSection {
     }
 
     @AlwaysInline("Performance")
-    private static Object readArray(Pointer array, int offset, JavaKind kind, boolean readDoubleForFloat) {
+    private static Object readJNIUpcallArray(Pointer array, int offset, JavaKind kind, boolean readDoubleForFloat) {
         return switch (kind) {
             case Boolean -> array.readByte(offset) != 0;
             case Byte -> array.readByte(offset);
@@ -552,14 +554,15 @@ public abstract class InterpreterStubSection {
         };
     }
 
-    private static Object[] prepareJNIArgsFromVarargs(JNIObjectHandle receiverOrClass, InterpreterResolvedJavaMethod method, Pointer jniEnterData, boolean nonVirtual) throws InstantiationException {
+    private static Object[] prepareJNIUpcallArgsFromVarargs(JNIObjectHandle receiverOrClass, InterpreterResolvedJavaMethod method, Pointer jniEnterData, boolean nonVirtual)
+                    throws InstantiationException {
         InterpreterAccessStubData accessHelper = ImageSingletons.lookup(InterpreterAccessStubData.class);
         int[] targetArgumentTypes = method.getPreparedSignature().getArgumentTypes();
         int[] sourceArgumentTypes = InterpreterSupport.singleton().prepareJNIUpcallVarargsSignature(method.getSignature(), method.getDeclaringClass(),
                         nonVirtual)
                         .getArgumentTypes();
-        Object[] args = createJNIArgs(method);
-        int targetArgumentIndex = prepareJNIReceiver(receiverOrClass, method, args);
+        Object[] args = createJNIUpcallArgs(method);
+        int targetArgumentIndex = prepareJNIUpcallReceiver(receiverOrClass, method, args);
         /*
          * Varargs JNI calls start with JNIEnv, the receiver/class handle, and the jmethodID. The
          * non-virtual variants have one additional class handle before the jmethodID that selects the
@@ -574,69 +577,69 @@ public abstract class InterpreterStubSection {
         return args;
     }
 
-    private static Object[] prepareJNIArgsFromVaList(JNIObjectHandle receiverOrClass, InterpreterResolvedJavaMethod method, Pointer vaList) throws InstantiationException {
+    private static Object[] prepareJNIUpcallArgsFromVaList(JNIObjectHandle receiverOrClass, InterpreterResolvedJavaMethod method, Pointer vaList) throws InstantiationException {
         int[] argumentTypes = method.getPreparedSignature().getArgumentTypes();
-        Object[] args = createJNIArgs(method);
-        int index = prepareJNIReceiver(receiverOrClass, method, args);
+        Object[] args = createJNIUpcallArgs(method);
+        int index = prepareJNIUpcallReceiver(receiverOrClass, method, args);
         for (int i = index; i < argumentTypes.length; i++) {
-            args[i] = readVaList(vaList, PreparedSignature.getKind(argumentTypes[i]));
+            args[i] = readJNIUpcallVaList(vaList, PreparedSignature.getKind(argumentTypes[i]));
         }
         return args;
     }
 
     @AlwaysInline("Performance")
-    private static Object readVaList(Pointer vaList, JavaKind kind) {
+    private static Object readJNIUpcallVaList(Pointer vaList, JavaKind kind) {
         return switch (kind) {
-            case Boolean -> readVaListBoolean(vaList);
-            case Byte -> readVaListByte(vaList);
-            case Short -> readVaListShort(vaList);
-            case Char -> readVaListChar(vaList);
-            case Int -> readVaListInt(vaList);
-            case Long -> readVaListLong(vaList);
-            case Object -> JNIObjectHandles.getObject(Word.pointer(readVaListLong(vaList)));
-            case Float -> readVaListFloat(vaList);
-            case Double -> readVaListDouble(vaList);
+            case Boolean -> readJNIUpcallVaListBoolean(vaList);
+            case Byte -> readJNIUpcallVaListByte(vaList);
+            case Short -> readJNIUpcallVaListShort(vaList);
+            case Char -> readJNIUpcallVaListChar(vaList);
+            case Int -> readJNIUpcallVaListInt(vaList);
+            case Long -> readJNIUpcallVaListLong(vaList);
+            case Object -> JNIObjectHandles.getObject(Word.pointer(readJNIUpcallVaListLong(vaList)));
+            case Float -> readJNIUpcallVaListFloat(vaList);
+            case Double -> readJNIUpcallVaListDouble(vaList);
             default -> throw VMError.shouldNotReachHereAtRuntime();
         };
     }
 
     @AlwaysInline("Performance")
-    private static boolean readVaListBoolean(Pointer vaList) {
+    private static boolean readJNIUpcallVaListBoolean(Pointer vaList) {
         return VaListNextArgNode.vaListNextBoolean(JavaKind.Boolean, vaList);
     }
 
     @AlwaysInline("Performance")
-    private static byte readVaListByte(Pointer vaList) {
+    private static byte readJNIUpcallVaListByte(Pointer vaList) {
         return VaListNextArgNode.vaListNextByte(JavaKind.Byte, vaList);
     }
 
     @AlwaysInline("Performance")
-    private static short readVaListShort(Pointer vaList) {
+    private static short readJNIUpcallVaListShort(Pointer vaList) {
         return VaListNextArgNode.vaListNextShort(JavaKind.Short, vaList);
     }
 
     @AlwaysInline("Performance")
-    private static char readVaListChar(Pointer vaList) {
+    private static char readJNIUpcallVaListChar(Pointer vaList) {
         return VaListNextArgNode.vaListNextChar(JavaKind.Char, vaList);
     }
 
     @AlwaysInline("Performance")
-    private static int readVaListInt(Pointer vaList) {
+    private static int readJNIUpcallVaListInt(Pointer vaList) {
         return VaListNextArgNode.vaListNextInt(JavaKind.Int, vaList);
     }
 
     @AlwaysInline("Performance")
-    private static long readVaListLong(Pointer vaList) {
+    private static long readJNIUpcallVaListLong(Pointer vaList) {
         return VaListNextArgNode.vaListNextLong(JavaKind.Long, vaList);
     }
 
     @AlwaysInline("Performance")
-    private static float readVaListFloat(Pointer vaList) {
+    private static float readJNIUpcallVaListFloat(Pointer vaList) {
         return VaListNextArgNode.vaListNextFloat(JavaKind.Float, vaList);
     }
 
     @AlwaysInline("Performance")
-    private static double readVaListDouble(Pointer vaList) {
+    private static double readJNIUpcallVaListDouble(Pointer vaList) {
         return VaListNextArgNode.vaListNextDouble(JavaKind.Double, vaList);
     }
 
@@ -887,10 +890,26 @@ public abstract class InterpreterStubSection {
     }
 
     @AlwaysInline("Performance")
-    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    @Uninterruptible(reason = "Uses raw object pointers.", mayBeInlined = true)
     private static Object decodeReturnValue(JavaKind returnKind, long rawReturnValue, ObjectReturnKind objectKind) {
+        if (returnKind == JavaKind.Boolean) {
+            return (rawReturnValue & 0xff) != 0 ? Boolean.TRUE : Boolean.FALSE;
+        } else if (returnKind == JavaKind.Void) {
+            return null;
+        } else if (returnKind == JavaKind.Object && objectKind == ObjectReturnKind.OOP) {
+            return ((Pointer) Word.pointer(rawReturnValue)).toObject();
+        } else {
+            return decodeReturnValueInterruptibly(returnKind, rawReturnValue, objectKind);
+        }
+    }
+
+    @Uninterruptible(reason = "Switch to interruptible code to decode other return values.", calleeMustBe = false)
+    private static Object decodeReturnValueInterruptibly(JavaKind returnKind, long rawReturnValue, ObjectReturnKind objectKind) {
+        return decodeReturnValueInterruptibly0(returnKind, rawReturnValue, objectKind);
+    }
+
+    private static Object decodeReturnValueInterruptibly0(JavaKind returnKind, long rawReturnValue, ObjectReturnKind objectKind) {
         return switch (returnKind) {
-            case Boolean -> (rawReturnValue & 0xff) != 0;
             case Byte -> (byte) rawReturnValue;
             case Short -> (short) rawReturnValue;
             case Char -> (char) rawReturnValue;
@@ -898,13 +917,10 @@ public abstract class InterpreterStubSection {
             case Long -> rawReturnValue;
             case Float -> Float.intBitsToFloat((int) rawReturnValue);
             case Double -> Double.longBitsToDouble(rawReturnValue);
-            case Object ->
-                switch (objectKind) {
-                    case HANDLE -> JNIMethodSupport.unboxHandle(Word.pointer(rawReturnValue));
-                    case OOP -> ((Pointer) Word.pointer(rawReturnValue)).toObject();
-                    default -> throw VMError.shouldNotReachHereAtRuntime();
-                };
-            case Void -> null;
+            case Object -> {
+                VMError.guarantee(objectKind == ObjectReturnKind.HANDLE);
+                yield JNIMethodSupport.unboxHandle(Word.pointer(rawReturnValue));
+            }
             default -> throw VMError.shouldNotReachHereAtRuntime();
         };
     }

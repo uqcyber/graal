@@ -19,6 +19,7 @@ permalink: /reference-manual/embed-languages/
 * [Polyglot Isolates](#polyglot-isolates)
 * [Managing Internal Resources](#managing-internal-resources)
 * [Build Native Executables from Polyglot Applications](#build-native-executables-from-polyglot-applications)
+* [Manage the Lifecycle of Contexts and Engines](#manage-the-lifecycle-of-contexts-and-engines)
 * [Code Caching Across Multiple Contexts](#code-caching-across-multiple-contexts)
 * [Embed Guest Languages in Java](#embed-guest-languages-in-java)
 * [Build a Shell for Many Languages](#build-a-shell-for-many-languages)
@@ -844,6 +845,56 @@ Copy the following code into `reachability-metadata.json`:
 
 
 Now, you can add `reachability-metadata.json` to `META-INF/native-image/<group-id>/` of your project.
+
+### Generating Guest-to-Java Interface Proxies
+
+Use `@HostAccess.Optimized` for fast access to guest object members or execution of guest functions through a Java interface.
+This is the recommended approach for performance-sensitive interface calls.
+Annotate a public, non-sealed interface and convert the guest value with `Value.as`:
+
+```java
+import org.graalvm.polyglot.HostAccess;
+import org.graalvm.polyglot.Value;
+
+@HostAccess.Optimized
+@HostAccess.Implementable
+public interface Arithmetic {
+    double add(int left, int right);
+    double subtract(int left, int right);
+}
+```
+
+Convert a guest object exposing `add` and `subtract` with `value.as(Arithmetic.class)`.
+`@HostAccess.Implementable` permits the conversion under the default host access policy.
+
+Native Image generates and registers proxies for annotated interfaces included in the image at build time; HotSpot generates them on first use.
+
+## Manage the Lifecycle of Contexts and Engines
+
+A polyglot [`Context`](https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/Context.html) or [`Engine`](https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/Engine.html) can hold resources that are released when it is closed.
+Explicitly close contexts and engines as soon as they are no longer needed, preferably by using a try-with-resources statement.
+Explicit closure provides timely and predictable resource cleanup instead of relying on garbage collection.
+
+An exception to this recommendation applies when the host process is exiting.
+For performance reasons, embedders should not explicitly close contexts or engines in this case.
+Closing an engine can wait for compiler threads to shut down and delay process termination.
+
+Since Polyglot version 24.2.0, a context that is no longer strongly reachable is automatically closed as a fallback.
+A `Context` is eligible for automatic closure when all of the following conditions are satisfied:
+
+* No strong references to the `Context` or to context-bound objects such as `Value` and `PolyglotException` remain.
+* The `Context` has no active polyglot threads and is not explicitly entered by a host thread.
+* No reachable inner contexts prevent their parent context from being closed.
+* Guest state does not retain a host object that directly or indirectly refers to the `Context` or to a context-bound object such as `Value`.
+
+A guest-to-host reference cycle can prevent automatic closure even after the embedder drops all of its direct references to the context.
+Guest-invoked host callbacks should therefore avoid capturing `Context`, `Value`, or other context-bound objects.
+A synchronous callback can obtain the currently entered context by calling `Context.getCurrent()` during each invocation.
+If a callback can tolerate the context becoming unavailable, it can instead retain a `WeakReference<Context>` and handle the reference being cleared.
+
+An `Engine` is automatically closed when it is no longer strongly reachable through the public `Engine` or associated `Language`, `Instrument`, or `ExecutionListener` objects, and it has no active or reachable contexts.
+
+Because garbage collection is nondeterministic, automatic closure should not replace explicit close in a running process.
 
 ## Code Caching Across Multiple Contexts
 

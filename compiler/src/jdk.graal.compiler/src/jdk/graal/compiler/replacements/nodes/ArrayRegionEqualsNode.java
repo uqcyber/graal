@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -47,6 +47,8 @@ import jdk.graal.compiler.nodes.util.ConstantReflectionUtil;
 import jdk.graal.compiler.replacements.NodeStrideUtil;
 import org.graalvm.word.LocationIdentity;
 
+import jdk.vm.ci.amd64.AMD64;
+import jdk.vm.ci.code.Architecture;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
@@ -157,6 +159,7 @@ public class ArrayRegionEqualsNode extends PureFunctionStubIntrinsicNode impleme
     }
 
     @NodeIntrinsic
+    @GenerateStub.Default(runtimeCPUFeaturesAMD64 = "amd64FeaturesAVX2")
     @GenerateStub(name = "arrayRegionEqualsS1S1", parameters = {"S1", "S1"})
     @GenerateStub(name = "arrayRegionEqualsS1S2", parameters = {"S1", "S2"})
     @GenerateStub(name = "arrayRegionEqualsS1S4", parameters = {"S1", "S4"})
@@ -183,6 +186,7 @@ public class ArrayRegionEqualsNode extends PureFunctionStubIntrinsicNode impleme
                     @ConstantNodeParameter EnumSet<?> runtimeCheckedCPUFeatures);
 
     @NodeIntrinsic
+    @GenerateStub.Default(runtimeCPUFeaturesAMD64 = "amd64FeaturesAVX2")
     @GenerateStub(name = "arrayRegionEqualsDynamicStrides")
     public static native boolean regionEquals(Object arrayA, long offsetA, Object arrayB, long offsetB, int length, int dynamicStrides);
 
@@ -238,6 +242,15 @@ public class ArrayRegionEqualsNode extends PureFunctionStubIntrinsicNode impleme
         } else {
             return new ValueNode[]{arrayA, offsetA, arrayB, offsetB, length};
         }
+    }
+
+    @Override
+    public boolean needsExplicitZeroExtension(Architecture arch) {
+        /*
+         * A negative stub index selects dynamic strides. The AMD64 jump table uses the full stride
+         * register for addressing. AArch64 zero-extends the stride inside the operation.
+         */
+        return arch instanceof AMD64 && getDirectStubCallIndex() < 0;
     }
 
     @Override

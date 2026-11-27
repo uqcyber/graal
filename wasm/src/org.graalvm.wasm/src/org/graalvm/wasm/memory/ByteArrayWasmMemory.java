@@ -49,22 +49,22 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 
-import org.graalvm.wasm.vector.Vector128;
-import org.graalvm.wasm.vector.Vector128Ops;
 import org.graalvm.wasm.exception.Failure;
 import org.graalvm.wasm.exception.WasmException;
+import org.graalvm.wasm.vector.Vector128;
+import org.graalvm.wasm.vector.Vector128Ops;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.memory.ByteArraySupport;
 import com.oracle.truffle.api.nodes.Node;
 
 @ExportLibrary(WasmMemoryLibrary.class)
-final class ByteArrayWasmMemory extends WasmMemory {
+public final class ByteArrayWasmMemory extends WasmMemory {
     private byte[] dynamicBuffer;
 
     public static final long MAX_ALLOWED_SIZE = Integer.MAX_VALUE / MEMORY_PAGE_SIZE;
@@ -80,7 +80,7 @@ final class ByteArrayWasmMemory extends WasmMemory {
         this(declaredMinSize, declaredMaxSize, declaredMinSize, Math.min(effectiveDeclaredMaxSize(declaredMaxSize, indexType64), MAX_ALLOWED_SIZE), indexType64);
     }
 
-    private byte[] buffer() {
+    byte[] buffer() {
         return dynamicBuffer;
     }
 
@@ -133,7 +133,7 @@ final class ByteArrayWasmMemory extends WasmMemory {
         currentMinSize = declaredMinSize;
     }
 
-    private void validateAddress(Node node, long address, long length) {
+    void validateAddress(Node node, long address, long length) {
         validateAddress(node, address, length, byteSize());
     }
 
@@ -1045,21 +1045,37 @@ final class ByteArrayWasmMemory extends WasmMemory {
     }
 
     @ExportMessage
-    @TruffleBoundary
     public void fill(Node node, long offset, long length, byte value) {
         validateLength(node, length);
         validateAddress(node, offset, length);
-        Arrays.fill(buffer(), (int) offset, (int) (offset + length), value);
+        ByteArrayMemorySupport.fill(buffer(), (int) offset, (int) length, value);
     }
 
     @ExportMessage
-    public void copyFrom(Node node, WasmMemory source, long sourceOffset, long destinationOffset, long length) {
-        assert source instanceof ByteArrayWasmMemory;
-        ByteArrayWasmMemory s = (ByteArrayWasmMemory) source;
-        validateLength(node, length);
-        s.validateAddress(node, sourceOffset, length);
-        validateAddress(node, destinationOffset, length);
-        System.arraycopy(s.buffer(), (int) sourceOffset, buffer(), (int) destinationOffset, (int) length);
+    static final class CopyFrom {
+        @Specialization
+        static void doByteArray(ByteArrayWasmMemory memory, Node node, ByteArrayWasmMemory source, long sourceOffset, long destinationOffset, long length) {
+            validateLength(node, length);
+            source.validateAddress(node, sourceOffset, length);
+            memory.validateAddress(node, destinationOffset, length);
+            System.arraycopy(source.buffer(), (int) sourceOffset, memory.buffer(), (int) destinationOffset, (int) length);
+        }
+
+        @Specialization
+        static void doUnsafe(ByteArrayWasmMemory memory, Node node, UnsafeWasmMemory source, long sourceOffset, long destinationOffset, long length) {
+            validateLength(node, length);
+            source.validateAddress(node, sourceOffset, length);
+            memory.validateAddress(node, destinationOffset, length);
+            source.copyToBuffer(node, memory.buffer(), sourceOffset, (int) destinationOffset, (int) length);
+        }
+
+        @Specialization
+        static void doNative(ByteArrayWasmMemory memory, Node node, NativeWasmMemory source, long sourceOffset, long destinationOffset, long length) {
+            validateLength(node, length);
+            source.validateAddress(node, sourceOffset, length);
+            memory.validateAddress(node, destinationOffset, length);
+            source.copyToBuffer(node, memory.buffer(), sourceOffset, (int) destinationOffset, (int) length);
+        }
     }
 
     @ExportMessage

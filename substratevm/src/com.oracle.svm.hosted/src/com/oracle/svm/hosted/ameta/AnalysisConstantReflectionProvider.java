@@ -25,7 +25,6 @@
 package com.oracle.svm.hosted.ameta;
 
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.ObjIntConsumer;
 
 import org.graalvm.nativeimage.Platform;
@@ -147,10 +146,8 @@ public class AnalysisConstantReflectionProvider extends SharedConstantReflection
 
     @Override
     public MemoryAccessProvider getMemoryAccessProvider() {
-        return EmptyMemoryAccessProvider.SINGLETON;
+        return NonFoldingMemoryAccessProvider.SINGLETON;
     }
-
-    private static final Set<Class<?>> BOXING_CLASSES = Set.of(Boolean.class, Byte.class, Short.class, Character.class, Integer.class, Long.class, Float.class, Double.class);
 
     @Override
     public JavaConstant unboxPrimitive(JavaConstant source) {
@@ -163,7 +160,7 @@ public class AnalysisConstantReflectionProvider extends SharedConstantReflection
          * correct unboxed type.
          */
         AnalysisType type = imageHeapConstant.getType();
-        if (BOXING_CLASSES.contains(type.getJavaClass())) {
+        if (GuestAccess.get().isBoxingType(type.getWrapped())) {
             imageHeapConstant.ensureReaderInstalled();
             ResolvedJavaField[] fields = type.getInstanceFields(true);
             assert fields.length == 1 && fields[0].getName().equals("value");
@@ -232,7 +229,7 @@ public class AnalysisConstantReflectionProvider extends SharedConstantReflection
         if (array instanceof ImageHeapPrimitiveArray heapArray) {
             /* Unaligned accesses are only allowed for primitive arrays. */
             MetaAccessProvider originalMetaAccess = GuestAccess.get().getProviders().getMetaAccess();
-            JavaKind arrayKind = JavaKind.fromJavaClass(heapArray.getType().getComponentType().getJavaClass());
+            JavaKind arrayKind = heapArray.getType().getComponentType().getJavaKind();
             long hostedIndexScale = originalMetaAccess.getArrayIndexScale(arrayKind);
             assert hostedIndexScale == runtimeIndexScale : "element size must match for primitive arrays";
 
@@ -347,6 +344,7 @@ public class AnalysisConstantReflectionProvider extends SharedConstantReflection
             VMError.guarantee(!SimulateClassInitializerSupport.singleton().isEnabled());
             ImageHeapScanner heapScanner = universe.getHeapScanner();
             HostedValuesProvider hostedValuesProvider = universe.getHostedValuesProvider();
+            /* Constant reflection snapshots speculatively and must not mark the object reachable. */
             value = heapScanner.createImageHeapConstant(hostedValuesProvider.readFieldValueWithReplacement(field, receiver), ObjectScanner.OtherReason.UNKNOWN);
         }
 
@@ -392,7 +390,8 @@ public class AnalysisConstantReflectionProvider extends SharedConstantReflection
 
     @Override
     public JavaConstant asJavaClass(ResolvedJavaType type) {
-        return universe.getHeapScanner().createImageHeapConstant(getHostVM().dynamicHub(type), ObjectScanner.OtherReason.UNKNOWN);
+        JavaConstant hubConst = GuestAccess.get().getSnippetReflection().forObject(getHostVM().dynamicHub(type));
+        return universe.getHeapScanner().createImageHeapConstant(hubConst, ObjectScanner.OtherReason.UNKNOWN);
     }
 
     @Override
@@ -400,7 +399,7 @@ public class AnalysisConstantReflectionProvider extends SharedConstantReflection
         if (value == null) {
             return JavaConstant.NULL_POINTER;
         }
-        return universe.getHeapScanner().createImageHeapConstant(value, ObjectScanner.OtherReason.UNKNOWN);
+        return universe.getHeapScanner().createImageHeapConstant(GuestAccess.get().asGuestString(value), ObjectScanner.OtherReason.UNKNOWN);
     }
 
     @Override

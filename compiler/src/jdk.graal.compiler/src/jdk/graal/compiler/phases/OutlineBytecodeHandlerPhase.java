@@ -40,7 +40,6 @@ import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.phases.util.BytecodeHandlerCallSite;
-import jdk.graal.compiler.phases.util.BytecodeHandlerConfig;
 import jdk.graal.compiler.phases.util.BytecodeInterpreterAnnotations;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
@@ -59,8 +58,14 @@ public abstract class OutlineBytecodeHandlerPhase extends BasePhase<HighTierCont
         return NotApplicable.unlessRunBefore(this, GraphState.StageFlag.LOOP_OVERFLOWS_CHECKED, graphState);
     }
 
-    protected BytecodeHandlerCallSite getBytecodeHandlerCallSite(ResolvedJavaMethod enclosingMethod, int bci, ResolvedJavaMethod targetMethod) {
-        return new BytecodeHandlerCallSite(enclosingMethod, bci, targetMethod);
+    protected BytecodeHandlerCallSite getBytecodeHandlerCallSite(ResolvedJavaMethod enclosingMethod, int bci, ResolvedJavaMethod targetMethod,
+                    @SuppressWarnings("unused") MetaAccessProvider metaAccess) {
+        // HotSpot uses declared parameter types; Native Image overrides this factory.
+        return new BytecodeHandlerCallSite(enclosingMethod, bci, targetMethod, templateModeEnabled(), Function.identity(), false);
+    }
+
+    protected boolean templateModeEnabled() {
+        return false;
     }
 
     protected Function<ResolvedJavaField, ResolvedJavaField> getFieldMap(@SuppressWarnings("unused") MetaAccessProvider metaAccess) {
@@ -106,7 +111,6 @@ public abstract class OutlineBytecodeHandlerPhase extends BasePhase<HighTierCont
                 if (BytecodeInterpreterAnnotations.getBytecodeInterpreterHandler(targetMethod) == null) {
                     continue;
                 }
-                BytecodeHandlerConfig handlerConfig = BytecodeHandlerConfig.getHandlerConfig(enclosingMethod, targetMethod);
 
                 // targetMethod is annotated with @BytecodeInterpreterHandler, replace the
                 // invoke with stub call. Use the invoke's frame-state owner so split inlinees
@@ -119,10 +123,10 @@ public abstract class OutlineBytecodeHandlerPhase extends BasePhase<HighTierCont
                 GraalError.guarantee(invokeState != null, "Missing frame state for handler invoke %s in %s", invoke, graph);
                 ResolvedJavaMethod invokeEnclosingMethod = invokeState.getMethod();
                 GraalError.guarantee(invokeEnclosingMethod != null, "Missing context method for handler invoke %s in %s", invoke, graph);
-                guaranteeConsistentHandlerConfig(handlerConfig, enclosingMethod, invokeEnclosingMethod, targetMethod);
-                BytecodeHandlerCallSite callsite = getBytecodeHandlerCallSite(invokeEnclosingMethod, invoke.bci(), targetMethod);
+                BytecodeHandlerCallSite callsite = getBytecodeHandlerCallSite(invokeEnclosingMethod, invoke.bci(), targetMethod, context.getMetaAccess());
+                guaranteeConsistentHandlerConfig(callsite, enclosingMethod, invokeEnclosingMethod, targetMethod, context.getMetaAccess());
                 ValueNode[] oldArguments = invoke.callTarget().arguments().toArray(ValueNode.EMPTY_ARRAY);
-                ValueNode[] newArguments = callsite.createCallerArguments(oldArguments, invoke.asFixedNode(), getFieldMap(context.getMetaAccess()));
+                ValueNode[] newArguments = callsite.createCallerArguments(oldArguments, invoke.asFixedNode(), getFieldMap(context.getMetaAccess()), getTypeMap(context.getMetaAccess()));
                 FixedNode next = invoke instanceof InvokeNode invokeNode ? invokeNode.next() : ((InvokeWithExceptionNode) invoke).next().next();
                 FixedNode newInvoke = replaceInvoke(context, callsite, invoke, newArguments);
                 callsite.updateCallerReturns(newInvoke, oldArguments, next, getFieldMap(context.getMetaAccess()));
@@ -138,14 +142,15 @@ public abstract class OutlineBytecodeHandlerPhase extends BasePhase<HighTierCont
      * actual callsite method. A mismatch would outline the invoke with one argument layout while
      * updating caller state as if it belonged to another layout.
      */
-    private static void guaranteeConsistentHandlerConfig(BytecodeHandlerConfig enclosingConfig, ResolvedJavaMethod enclosingMethod, ResolvedJavaMethod invokeEnclosingMethod,
-                    ResolvedJavaMethod targetMethod) {
+    private void guaranteeConsistentHandlerConfig(BytecodeHandlerCallSite callsite, ResolvedJavaMethod enclosingMethod, ResolvedJavaMethod invokeEnclosingMethod,
+                    ResolvedJavaMethod targetMethod, MetaAccessProvider metaAccess) {
         if (enclosingMethod.equals(invokeEnclosingMethod)) {
             return;
         }
-        BytecodeHandlerConfig invokeConfig = BytecodeHandlerConfig.getHandlerConfig(invokeEnclosingMethod, targetMethod);
-        GraalError.guarantee(enclosingConfig.equals(invokeConfig), "Inconsistent BytecodeInterpreterHandlerConfig for handler %s between switch methods %s and %s",
-                        targetMethod.format("%H.%n(%p)"), enclosingMethod.format("%H.%n(%p)"), invokeEnclosingMethod.format("%H.%n(%p)"));
+        BytecodeHandlerCallSite enclosingCallsite = getBytecodeHandlerCallSite(enclosingMethod, callsite.getBci(), targetMethod, metaAccess);
+        GraalError.guarantee(enclosingCallsite.getHandlerConfig().equals(callsite.getHandlerConfig()),
+                        "Inconsistent BytecodeInterpreterHandlerConfig for handler %s between switch methods %s and %s",
+                        callsite.getTargetMethod().format("%H.%n(%p)"), enclosingMethod.format("%H.%n(%p)"), callsite.getEnclosingMethod().format("%H.%n(%p)"));
     }
 
     @SuppressWarnings("unused")

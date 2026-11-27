@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.SortedSet;
 import java.util.TreeSet;
@@ -41,7 +42,6 @@ import org.graalvm.collections.Equivalence;
 import org.graalvm.collections.UnmodifiableEconomicMap;
 
 import jdk.graal.compiler.api.replacements.Snippet;
-import jdk.graal.compiler.core.common.CancellationBailoutException;
 import jdk.graal.compiler.core.common.CompilationIdentifier;
 import jdk.graal.compiler.core.common.GraalOptions;
 import jdk.graal.compiler.core.common.cfg.BlockMap;
@@ -50,6 +50,7 @@ import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.debug.JavaMethodContext;
 import jdk.graal.compiler.debug.TTY;
+import jdk.graal.compiler.graph.Cancellable;
 import jdk.graal.compiler.graph.Graph;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeBitMap;
@@ -316,7 +317,6 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
     private final int entryBCI;
     private final ProfileProvider profileProvider;
     private GraphState graphState;
-    private final Cancellable cancellable;
     private final boolean isSubstitution;
 
     /**
@@ -452,7 +452,7 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
                     DebugContext debug,
                     Cancellable cancellable,
                     NodeSourcePosition context) {
-        super(name, options, debug, trackNodeSourcePosition);
+        super(name, options, debug, trackNodeSourcePosition, cancellable);
         this.graphState = graphState;
         this.setStart(add(new StartNode()));
         this.rootMethod = method;
@@ -464,7 +464,6 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
         assert !isSubstitution || profileProvider == null;
         this.profileProvider = profileProvider;
         this.isSubstitution = isSubstitution;
-        this.cancellable = cancellable;
         this.inliningLog = GraalOptions.TraceInlining.getValue(options) || OptimizationLog.isStructuredOptimizationLogEnabled(options) ? new InliningLog(rootMethod) : null;
         this.callerContext = context;
         this.optimizationLog = OptimizationLog.getInstance(this);
@@ -660,16 +659,6 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
         return getGraphState().isAfterStage(stage);
     }
 
-    public Cancellable getCancellable() {
-        return cancellable;
-    }
-
-    public void checkCancellation() {
-        if (cancellable != null && cancellable.isCancelled()) {
-            CancellationBailoutException.cancelCompilation();
-        }
-    }
-
     public boolean isOSR() {
         return entryBCI != JVMCICompiler.INVOCATION_ENTRY_BCI;
     }
@@ -801,7 +790,7 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
                         inlinedMethodsForCopy,
                         trackNodeSourcePositionForCopy,
                         newCompilationId,
-                        optionsForCopy, debugForCopy, null, callerContext);
+                        optionsForCopy, debugForCopy, getCancellable(), callerContext);
         if (allowAssumptions == AllowAssumptions.YES && assumptionsForCopy != null) {
             copy.assumptions.record(assumptionsForCopy);
         }
@@ -896,11 +885,12 @@ public final class StructuredGraph extends Graph implements JavaMethodContext {
 
                     @Override
                     public Invoke next() {
-                        try {
-                            return next;
-                        } finally {
-                            next = null;
+                        if (!hasNext()) {
+                            throw new NoSuchElementException();
                         }
+                        Invoke result = next;
+                        next = null;
+                        return result;
                     }
 
                     @Override

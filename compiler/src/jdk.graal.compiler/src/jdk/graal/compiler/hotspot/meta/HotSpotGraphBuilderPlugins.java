@@ -92,6 +92,7 @@ import jdk.graal.compiler.hotspot.replacements.HotSpotIdentityHashCodeNode;
 import jdk.graal.compiler.hotspot.replacements.HotSpotInvocationPluginHelper;
 import jdk.graal.compiler.hotspot.replacements.HotSpotReflectionGetCallerClassNode;
 import jdk.graal.compiler.hotspot.replacements.HotSpotReplacementsUtil;
+import jdk.graal.compiler.replacements.CallSiteTargetPlugin;
 import jdk.graal.compiler.hotspot.replacements.HubGetClassNode;
 import jdk.graal.compiler.hotspot.replacements.ObjectCloneNode;
 import jdk.graal.compiler.hotspot.replaycomp.ReplayCompilationSupport;
@@ -143,6 +144,7 @@ import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.ConditionalInvocationPlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.InlineOnlyConditionalInvocationPlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.InlineOnlyInvocationPlugin;
+import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.OptionalInlineOnlyInvocationPlugin;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin.Receiver;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins.Registration;
@@ -190,7 +192,6 @@ import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA1Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA256Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA3Node;
 import jdk.graal.compiler.replacements.nodes.MessageDigestNode.SHA512Node;
-import jdk.graal.compiler.replacements.nodes.Poly1305ProcessBlocksNode;
 import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode;
 import jdk.graal.compiler.serviceprovider.GraalServices;
 import jdk.graal.compiler.serviceprovider.SpeculationReasonGroup;
@@ -472,22 +473,11 @@ public class HotSpotGraphBuilderPlugins {
     }
 
     private static void registerCallSitePlugins(InvocationPlugins plugins) {
-        InvocationPlugin plugin = new InlineOnlyInvocationPlugin("getTarget", Receiver.class) {
-            @Override
-            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
-                ValueNode callSite = receiver.get(true);
-                ValueNode folded = CallSiteTargetNode.tryFold(GraphUtil.originalValue(callSite, true), b.getMetaAccess(), b.getAssumptions());
-                if (folded != null) {
-                    b.addPush(JavaKind.Object, folded);
-                } else {
-                    b.addPush(JavaKind.Object, new CallSiteTargetNode(MacroParams.of(b, targetMethod, callSite)));
-                }
-                return true;
-            }
-        };
-        plugins.register(ConstantCallSite.class, plugin);
-        plugins.register(MutableCallSite.class, plugin);
-        plugins.register(VolatileCallSite.class, plugin);
+        CallSiteTargetPlugin.register(plugins, (b, targetMethod, receiver) -> {
+            ValueNode callSite = receiver.get(true);
+            ValueNode folded = CallSiteTargetNode.tryFold(GraphUtil.originalValue(callSite, true), b.getMetaAccess(), b.getAssumptions());
+            return folded != null ? folded : new CallSiteTargetNode(MacroParams.of(b, targetMethod, callSite));
+        }, ConstantCallSite.class, MutableCallSite.class, VolatileCallSite.class);
     }
 
     private static void registerReflectionPlugins(InvocationPlugins plugins, GraalHotSpotVMConfig config) {
@@ -1101,15 +1091,7 @@ public class HotSpotGraphBuilderPlugins {
 
     private static void registerPoly1305Plugin(InvocationPlugins plugins) {
         Registration r = new Registration(plugins, "com.sun.crypto.provider.Poly1305");
-        r.register(new HotSpotPoly1305ProcessBlocksPlugin());
-    }
-
-    private static final class HotSpotPoly1305ProcessBlocksPlugin extends Poly1305ProcessBlocksPlugin {
-
-        @Override
-        public boolean isApplicable(Architecture arch) {
-            return Poly1305ProcessBlocksNode.isSupportedForRuntimeCheckedStub(arch);
-        }
+        r.register(new Poly1305ProcessBlocksPlugin());
     }
 
     private static void registerIntegerPolynomialPlugins(InvocationPlugins plugins) {
@@ -1124,7 +1106,7 @@ public class HotSpotGraphBuilderPlugins {
 
         @Override
         public boolean isApplicable(Architecture arch) {
-            return IntegerPolynomialP256MontgomeryMultNode.isSupportedForRuntimeCheckedStub(arch);
+            return IntegerPolynomialP256MontgomeryMultNode.isSupported(arch);
         }
     }
 
@@ -1132,7 +1114,7 @@ public class HotSpotGraphBuilderPlugins {
 
         @Override
         public boolean isApplicable(Architecture arch) {
-            return IntegerPolynomialAssignNode.isSupportedForRuntimeCheckedStub(arch);
+            return IntegerPolynomialAssignNode.isSupported(arch);
         }
     }
 
@@ -1157,6 +1139,18 @@ public class HotSpotGraphBuilderPlugins {
                 return Options.ForceExplicitReachabilityFence.getValue(b.getOptions());
             }
         });
+        r.register(new OptionalInlineOnlyInvocationPlugin("get0", Receiver.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
+                ValueNode offset = b.add(ConstantNode.forLong(HotSpotReplacementsUtil.referentOffset(b.getMetaAccess())));
+                AddressNode address = b.add(new OffsetAddressNode(receiver.get(true), offset));
+                FieldLocationIdentity locationIdentity = new FieldLocationIdentity(HotSpotReplacementsUtil.referentField(b.getMetaAccess()));
+                JavaReadNode read = b.add(new JavaReadNode(StampFactory.object(), JavaKind.Object, address, locationIdentity, BarrierType.REFERENCE_GET, MemoryOrderMode.PLAIN, true));
+                b.add(new MembarNode(MembarNode.FenceKind.NONE, locationIdentity));
+                b.addPush(JavaKind.Object, read);
+                return true;
+            }
+        });
         r.register(new InlineOnlyInvocationPlugin("refersTo0", Receiver.class, Object.class) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode o) {
@@ -1164,6 +1158,7 @@ public class HotSpotGraphBuilderPlugins {
                 AddressNode address = b.add(new OffsetAddressNode(receiver.get(true), offset));
                 FieldLocationIdentity locationIdentity = new FieldLocationIdentity(HotSpotReplacementsUtil.referentField(b.getMetaAccess()));
                 JavaReadNode read = b.add(new JavaReadNode(StampFactory.object(), JavaKind.Object, address, locationIdentity, BarrierType.WEAK_REFERS_TO, MemoryOrderMode.PLAIN, true));
+                b.add(new MembarNode(MembarNode.FenceKind.NONE, locationIdentity));
                 LogicNode objectEquals = b.add(ObjectEqualsNode.create(b.getConstantReflection(), b.getMetaAccess(), b.getOptions(), read, o, NodeView.DEFAULT));
                 b.addPush(JavaKind.Boolean, ConditionalNode.create(objectEquals, b.add(forBoolean(true)), b.add(forBoolean(false)), NodeView.DEFAULT));
                 return true;
@@ -1292,8 +1287,7 @@ public class HotSpotGraphBuilderPlugins {
                         case Double -> T_DOUBLE;
                         case Int -> T_INT;
                         case Long -> T_LONG;
-                        default ->
-                            throw GraalError.shouldNotReachHere("Unexpected element type " + type.toJavaName());
+                        default -> throw GraalError.shouldNotReachHere("Unexpected element type " + type.toJavaName());
                     };
                     if (isSimdSortSupported(architecture, config, jvmType)) {
                         ValueNode arrayNonNull = b.nullCheckedValue(array);
@@ -1323,8 +1317,7 @@ public class HotSpotGraphBuilderPlugins {
                             case Double -> T_DOUBLE;
                             case Int -> T_INT;
                             case Long -> T_LONG;
-                            default ->
-                                throw GraalError.shouldNotReachHere("Unexpected element type " + type.toJavaName());
+                            default -> throw GraalError.shouldNotReachHere("Unexpected element type " + type.toJavaName());
                         };
                         if (isSimdSortSupported(architecture, config, jvmType)) {
                             ValueNode arrayNonNull = b.nullCheckedValue(array);

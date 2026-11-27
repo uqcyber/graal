@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -86,6 +86,7 @@ import jdk.graal.compiler.debug.DebugDumpHandler;
 import jdk.graal.compiler.debug.DebugDumpHandlersFactory;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.debug.TTY;
+import jdk.graal.compiler.graph.Cancellable;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
 import jdk.graal.compiler.graph.NodeMap;
@@ -100,7 +101,6 @@ import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodeinfo.NodeSize;
 import jdk.graal.compiler.nodeinfo.Verbosity;
 import jdk.graal.compiler.nodes.BreakpointNode;
-import jdk.graal.compiler.nodes.Cancellable;
 import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.FixedWithNextNode;
 import jdk.graal.compiler.nodes.FrameState;
@@ -1236,12 +1236,12 @@ public abstract class GraalCompilerTest extends GraalTest {
         return parseEager(method, AllowAssumptions.YES, getCompilationId(method), options);
     }
 
-    protected final StructuredGraph parseForCompile(ResolvedJavaMethod method, DebugContext debug) {
+    protected StructuredGraph parseForCompile(ResolvedJavaMethod method, DebugContext debug) {
         return parseEager(method, AllowAssumptions.YES, debug);
     }
 
     protected final StructuredGraph parseForCompile(ResolvedJavaMethod method) {
-        return parseEager(method, AllowAssumptions.YES, getCompilationId(method), getInitialOptions());
+        return parseForCompile(method, getInitialOptions());
     }
 
     protected StructuredGraph parseForCompile(ResolvedJavaMethod method, CompilationIdentifier compilationId, OptionValues options) {
@@ -1369,6 +1369,13 @@ public abstract class GraalCompilerTest extends GraalTest {
             speculationLog.collectFailedSpeculations();
         }
         return speculationLog;
+    }
+
+    /**
+     * Returns the same test-wide speculation log for every method. Subclasses may override for test-specific behavior.
+     */
+    protected SpeculationLog getSpeculationLog(ResolvedJavaMethod method) {
+        return getSpeculationLog();
     }
 
     protected SpeculationLog createSpeculationLog() {
@@ -1592,7 +1599,7 @@ public abstract class GraalCompilerTest extends GraalTest {
 
     protected StructuredGraph parse(StructuredGraph.Builder builder, PhaseSuite<HighTierContext> graphBuilderSuite) {
         ResolvedJavaMethod javaMethod = builder.getMethod();
-        builder.speculationLog(getSpeculationLog());
+        builder.speculationLog(getSpeculationLog(javaMethod));
         if (builder.getCancellable() == null) {
             builder.cancellable(getCancellable(javaMethod));
         }

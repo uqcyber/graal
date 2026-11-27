@@ -24,36 +24,67 @@
  */
 package com.oracle.svm.core.jdk;
 
+import static com.oracle.svm.shared.Uninterruptible.CALLED_FROM_UNINTERRUPTIBLE_CODE;
+
 import java.io.PrintStream;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
+import java.lang.reflect.Parameter;
 
-import org.graalvm.nativeimage.RuntimeStateTrimConfig;
+import org.graalvm.nativeimage.MissingReflectionRegistrationError;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.impl.RuntimeStateTrimConfig;
+import org.graalvm.nativeimage.c.type.CCharPointer;
+import org.graalvm.nativeimage.c.type.CCharPointerPointer;
+import org.graalvm.word.LocationIdentity;
+import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.impl.Word;
 
+import com.oracle.svm.guest.staging.option.RuntimeOptionValues.Origin;
+import com.oracle.svm.configure.config.ConfigurationMemberInfo.ConfigurationMemberDeclaration;
+import com.oracle.svm.configure.config.SignatureUtil;
+import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.AssertionsSupport;
-import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.Isolates;
 import com.oracle.svm.core.RuntimeStateTrimSupport;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.util.NonmovableByteArrayReader;
+import com.oracle.svm.shared.AlwaysInline;
+import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.configure.ConfigurationFiles;
 import com.oracle.svm.core.graal.RuntimeCompilation;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.c.NonmovableArray;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.heap.ReferenceAccess;
+import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.hub.DynamicHubIntrinsics;
 import com.oracle.svm.core.hub.RuntimeClassLoading;
+import com.oracle.svm.core.hub.crema.CremaSupport;
 import com.oracle.svm.core.hub.registry.AbstractRuntimeClassRegistry;
+import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.core.log.CoreLogSupport;
 import com.oracle.svm.core.log.FunctionPointerLogHandler;
+import com.oracle.svm.core.metadata.MetadataTracer;
+import com.oracle.svm.core.reflect.MissingReflectionRegistrationUtils;
+import com.oracle.svm.core.reflect.RuntimeConstantPoolImpl;
+import com.oracle.svm.core.reflect.RuntimeReflectionSupport;
 import com.oracle.svm.guest.staging.GuestStagingDependencyBridge;
-import com.oracle.svm.guest.staging.HeapSizeVerifier;
-import com.oracle.svm.guest.staging.SubstrateGCOptions;
 import com.oracle.svm.guest.staging.jdk.RuntimeSupport;
 import com.oracle.svm.guest.staging.log.Log;
-import com.oracle.svm.guest.staging.option.NotifyGCRuntimeOptionKey;
+import com.oracle.svm.guest.staging.reflect.RuntimeConstantPool;
+import com.oracle.svm.sdk.staging.layeredimage.LayeredCompilationBehavior;
+import com.oracle.svm.sdk.staging.layeredimage.LayeredCompilationBehavior.Behavior;
+import com.oracle.svm.shared.Uninterruptible;
 import com.oracle.svm.shared.singletons.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.AllAccess;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
 import com.oracle.svm.shared.singletons.traits.SingletonLayeredInstallationKind.Duplicable;
 import com.oracle.svm.shared.singletons.traits.SingletonTraits;
+import com.oracle.svm.shared.util.VMError;
+
+import jdk.graal.compiler.nodes.NamedLocationIdentity;
 
 /**
  * Provides core implementations for runtime services that guest-staging code cannot yet access
@@ -64,8 +95,21 @@ import com.oracle.svm.shared.singletons.traits.SingletonTraits;
 final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBridge {
 
     @Override
-    public void verifyIsolateArgumentOptionValues() {
-        IsolateArgumentParser.singleton().verifyOptionValues();
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public <T> T getHostedArray(NonmovableArray<?> array) {
+        return NonmovableArrays.getHostedArray(array);
+    }
+
+    @Override
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public Pointer nonmovableByteArrayPointerTo(NonmovableArray<Byte> array, long index) {
+        return NonmovableByteArrayReader.pointerTo(array, index);
+    }
+
+    @Override
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public NonmovableArray<Byte> nonmovableByteArrayFromImageHeap(byte[] array) {
+        return NonmovableArrays.fromImageHeap(array);
     }
 
     @Override
@@ -94,29 +138,19 @@ final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBr
     }
 
     @Override
-    public void minHeapSizeOptionValueChanged(long newValue) {
-        HeapSizeVerifier.verifyMinHeapSizeAgainstMaxAddressSpaceSize(Word.unsigned(newValue));
-        int optionIndex = IsolateArgumentParser.getOptionIndex(SubstrateGCOptions.MinHeapSize);
-        IsolateArgumentParser.singleton().setLongOptionValue(optionIndex, newValue);
+    public LocationIdentity offHeapLocationIdentity() {
+        return NamedLocationIdentity.OFF_HEAP_LOCATION;
     }
 
     @Override
-    public void maxHeapSizeOptionValueChanged(long newValue) {
-        HeapSizeVerifier.verifyMaxHeapSizeAgainstMaxAddressSpaceSize(Word.unsigned(newValue));
-        int optionIndex = IsolateArgumentParser.getOptionIndex(SubstrateGCOptions.MaxHeapSize);
-        IsolateArgumentParser.singleton().setLongOptionValue(optionIndex, newValue);
+    public Class<?> dynamicHubClass() {
+        return DynamicHub.class;
     }
 
     @Override
-    public void maxNewSizeOptionValueChanged(long newValue) {
-        HeapSizeVerifier.verifyMaxNewSizeAgainstMaxAddressSpaceSize(Word.unsigned(newValue));
-        int optionIndex = IsolateArgumentParser.getOptionIndex(SubstrateGCOptions.MaxNewSize);
-        IsolateArgumentParser.singleton().setLongOptionValue(optionIndex, newValue);
-    }
-
-    @Override
-    public void heapOptionValueChanged(NotifyGCRuntimeOptionKey<?> key) {
-        Heap.getHeap().optionValueChanged(key);
+    @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
+    public Object readHub(Object object) {
+        return DynamicHubIntrinsics.readHub(object);
     }
 
     @Override
@@ -156,12 +190,50 @@ final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBr
     }
 
     @Override
-    public boolean shouldParseRuntimeOptions() {
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public boolean shouldParseRuntimeOptions(boolean isCompilationIsolate) {
         return SubstrateOptions.ParseRuntimeOptions.getValue() ||
-                        RuntimeCompilation.isEnabled() && SubstrateOptions.SupportCompileInIsolates.getValue() && IsolateArgumentParser.isCompilationIsolate();
+                        RuntimeCompilation.isEnabled() && SubstrateOptions.SupportCompileInIsolates.getValue() && isCompilationIsolate;
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public boolean isLibCSupported() {
+        return LibC.isSupported();
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public int libcErrno() {
+        return LibC.errno();
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public void libcSetErrno(int value) {
+        LibC.setErrno(value);
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public int libcIsDigit(int value) {
+        return LibC.isdigit(value);
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public UnsignedWord libcStrlen(CCharPointer string) {
+        return LibC.strlen(string);
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public UnsignedWord libcStrtoull(CCharPointer string, CCharPointerPointer endPtr, int base) {
+        return LibC.strtoull(string, endPtr, base);
+    }
+
+    @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public boolean strictRuntimeJavaOptions() {
         return SubstrateOptions.StrictRuntimeJavaOptions.getValue();
     }
@@ -183,13 +255,40 @@ final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBr
     }
 
     @Override
+    public RuntimeConstantPool getRuntimeConstantPool(Class<?> clazz) {
+        if (!RuntimeClassLoading.isSupported()) {
+            return null;
+        }
+        DynamicHub hub = DynamicHub.fromClass(clazz);
+        if (!hub.isRuntimeLoaded()) {
+            return null;
+        }
+        return new RuntimeConstantPoolImpl(CremaSupport.singleton().getConstantPool(hub));
+    }
+
+    @Override
+    public boolean isClassLoaded(Class<?> clazz) {
+        return DynamicHub.fromClass(clazz).isLoaded();
+    }
+
+    @Override
+    public boolean isTypeReached(Class<?> clazz) {
+        return DynamicHub.fromClass(clazz).isReached();
+    }
+
+    @Override
+    public boolean trackUnsatisfiedTypeReachedConditions() {
+        return ConfigurationFiles.Options.TrackUnsatisfiedTypeReachedConditions.getValue();
+    }
+
+    @Override
     public boolean useRistretto() {
         return SubstrateOptions.useRistretto();
     }
 
     @Override
     public void enableTraceClassLoading() {
-        RuntimeClassLoading.Options.TraceClassLoading.update(true);
+        RuntimeClassLoading.Options.TraceClassLoading.update(true, Origin.CommandLine);
     }
 
     @Override
@@ -204,7 +303,7 @@ final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBr
 
     @Override
     public void setVerifyMode(String mode) {
-        RuntimeClassLoading.Options.ClassVerification.update(RuntimeClassLoading.VerifyMode.valueOf(mode));
+        RuntimeClassLoading.Options.ClassVerification.update(RuntimeClassLoading.VerifyMode.valueOf(mode), Origin.CommandLine);
     }
 
     @Override
@@ -224,7 +323,46 @@ final class GuestStagingDependencyBridgeImpl implements GuestStagingDependencyBr
     }
 
     @Override
+    @LayeredCompilationBehavior(Behavior.PINNED_TO_INITIAL_LAYER)
     public void trimRuntimeState(RuntimeStateTrimConfig config) {
         RuntimeStateTrimSupport.singleton().trimRuntimeState(config);
     }
+
+    @Override
+    public boolean isRuntimeLoadedClass(Class<?> clazz) {
+        return DynamicHub.fromClass(clazz).isRuntimeLoaded();
+    }
+
+    @Override
+    public Parameter[] getRuntimeReflectParameters(Executable executable, Object parameterMetadata) {
+        if (!RuntimeClassLoading.isSupported()) {
+            throw VMError.shouldNotReachHere("Runtime class loading is disabled");
+        }
+        return RuntimeReflectionSupport.getRuntimeReflectParameters(executable, parameterMetadata);
+    }
+
+    @Override
+    @AlwaysInline("tracing should fold away when disabled")
+    public boolean isMetadataTracingEnabled() {
+        return MetadataTracer.enabled();
+    }
+
+    @Override
+    public void traceReflectionExecutableAccess(Executable executable) {
+        String methodName = executable instanceof Constructor<?> ? TargetElement.CONSTRUCTOR_NAME : executable.getName();
+        MetadataTracer.singleton().traceMethodAccess(executable.getDeclaringClass(), methodName,
+                        SignatureUtil.toInternalSignature(executable.getParameterTypes()), ConfigurationMemberDeclaration.DECLARED);
+    }
+
+    @Override
+    public MissingReflectionRegistrationError reportInvokedExecutable(Executable executable) {
+        return MissingReflectionRegistrationUtils.reportInvokedExecutable(executable);
+    }
+
+    @Override
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public int currentImageLayerNumber() {
+        return DynamicImageLayerInfo.getCurrentLayerNumber();
+    }
+
 }

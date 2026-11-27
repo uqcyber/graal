@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 package jdk.graal.compiler.virtual.phases.ea;
 
 import java.util.Iterator;
+import java.util.Objects;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.Equivalence;
@@ -41,9 +42,9 @@ import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.calc.BinaryArithmeticNode;
 import jdk.graal.compiler.nodes.java.NewArrayNode;
+import jdk.graal.compiler.nodes.type.StampTool;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
-import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
  * This class maintains a set of known values, identified by base object, locations and offset.
@@ -56,28 +57,42 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
 
         public final ValueNode object;
         public final T identity;
+        // Includes subclass fields. Node IDs used by offset/index keys remain stable for the
+        // lifetime of these phase-local caches.
+        private final int cachedHashCode;
 
         protected CacheEntry(ValueNode object, T identity) {
+            this(object, identity, computeHashCode(object, identity));
+        }
+
+        protected CacheEntry(ValueNode object, T identity, int hashCode) {
             this.object = object;
             this.identity = identity;
+            this.cachedHashCode = hashCode;
         }
 
         public abstract CacheEntry<T> duplicateWithObject(ValueNode newObject);
 
         @Override
         public boolean equals(Object obj) {
-            if (!(obj instanceof CacheEntry<?>)) {
+            if (this == obj) {
+                return true;
+            }
+            if (obj == null || getClass() != obj.getClass()) {
                 return false;
             }
             CacheEntry<?> other = (CacheEntry<?>) obj;
-            return identity.equals(other.identity) && object == other.object;
+            return object == other.object && Objects.equals(identity, other.identity);
         }
 
         @Override
-        public int hashCode() {
+        public final int hashCode() {
+            return cachedHashCode;
+        }
+
+        protected static int computeHashCode(ValueNode object, Object identity) {
             int result = 31 + ((identity == null) ? 0 : identity.hashCode());
-            // we need to use the identity hash code for the object since the node may not yet have
-            // a valid id and thus not have a stable hash code
+            // The receiver may be an unregistered phi, so use identity hashing instead of its node ID.
             return 31 * result + ((object == null) ? 0 : System.identityHashCode(object));
         }
 
@@ -95,14 +110,6 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
 
         public LoadCacheEntry(ValueNode object, LocationIdentity identity) {
             super(object, identity);
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (obj instanceof LoadCacheEntry) {
-                return super.equals(obj);
-            }
-            return false;
         }
 
         @Override
@@ -132,7 +139,7 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
         private final JavaKind kind;
 
         public UnsafeLoadCacheEntry(ValueNode object, ValueNode location, LocationIdentity locationIdentity, JavaKind kind) {
-            super(object, location);
+            super(object, location, computeHashCode(object, location, locationIdentity, kind));
             assert locationIdentity != null;
             this.locationIdentity = locationIdentity;
             this.kind = kind;
@@ -148,9 +155,8 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
             return locationIdentity.equals(other);
         }
 
-        @Override
-        public int hashCode() {
-            int result = super.hashCode();
+        private static int computeHashCode(ValueNode object, ValueNode location, LocationIdentity locationIdentity, JavaKind kind) {
+            int result = CacheEntry.computeHashCode(object, location);
             result = 31 * result + locationIdentity.hashCode();
             result = 31 * result + kind.hashCode();
             return result;
@@ -158,11 +164,11 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
 
         @Override
         public boolean equals(Object obj) {
-            if (obj instanceof UnsafeLoadCacheEntry) {
-                UnsafeLoadCacheEntry other = (UnsafeLoadCacheEntry) obj;
-                return super.equals(other) && locationIdentity.equals(other.locationIdentity) && kind == other.kind;
+            if (!super.equals(obj)) {
+                return false;
             }
-            return false;
+            UnsafeLoadCacheEntry other = (UnsafeLoadCacheEntry) obj;
+            return kind == other.kind && locationIdentity.equals(other.locationIdentity);
         }
 
         @Override
@@ -222,14 +228,6 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
         }
 
         @Override
-        public boolean equals(Object obj) {
-            if (!(obj instanceof ArrayCloneCacheEntry)) {
-                return false;
-            }
-            return super.equals(obj);
-        }
-
-        @Override
         public boolean conflicts(LocationIdentity other, ValueNode index, ValueNode array) {
             return identity.equals(other);
         }
@@ -266,14 +264,6 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
         }
 
         @Override
-        public boolean equals(Object obj) {
-            if (!(obj instanceof NewInitializedArrayCacheEntry)) {
-                return false;
-            }
-            return super.equals(obj);
-        }
-
-        @Override
         public boolean conflicts(LocationIdentity other, ValueNode index, ValueNode array) {
             return identity.equals(other);
         }
@@ -289,25 +279,24 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
         public final JavaKind kind;
 
         public IndexedCacheEntry(ValueNode object, LocationIdentity identity, ValueNode index, JavaKind kind) {
-            super(object, identity);
+            super(object, identity, computeHashCode(object, identity, index, kind));
             this.index = index;
             this.kind = kind;
         }
 
-        @Override
-        public int hashCode() {
-            int result = 31 * super.hashCode() + index.hashCode();
+        private static int computeHashCode(ValueNode object, LocationIdentity identity, ValueNode index, JavaKind kind) {
+            int result = 31 * CacheEntry.computeHashCode(object, identity) + index.hashCode();
             result = 31 * result + kind.ordinal();
             return result;
         }
 
         @Override
         public boolean equals(Object obj) {
-            if (!(obj instanceof IndexedCacheEntry)) {
+            if (!super.equals(obj)) {
                 return false;
             }
             IndexedCacheEntry other = (IndexedCacheEntry) obj;
-            return super.equals(obj) && index == other.index && kind == other.kind;
+            return index == other.index && kind == other.kind;
         }
 
         @Override
@@ -331,6 +320,7 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
         return potentiallyAliasingIndexedAccesses(l1, l2, o1, o2, i1, i2, null);
     }
 
+    /// Checks whether indexed accesses can alias, using array stamps when `metaAccess` is non-null.
     public static boolean potentiallyAliasingIndexedAccesses(LocationIdentity l1, LocationIdentity l2, ValueNode o1, ValueNode o2, ValueNode i1, ValueNode i2, MetaAccessProvider metaAccess) {
         assert l1 != null;
         assert l2 != null;
@@ -417,17 +407,15 @@ public class ReadEliminationBlockState extends EffectsBlockState<ReadElimination
         }
         if (metaAccess != null) {
             /*
-             * We know nothing about the objects or the indices of the accesses: the objects we are
-             * processing are not the same node, however this does not guarantee that they are not
-             * the same object (i.e. two parameters where the caller supplies the same array 2
-             * times), therefore we try to check for this by checking their types and ensuring they
-             * are not cross assignable
+             * Distinct graph values can refer to the same array even if neither declared type is
+             * assignable to the other: for example, Serializable[] and Comparable[] can both denote
+             * String[].
+             * Intersecting stamps preserves such shared concrete subtypes, while still proving
+             * disjointness for incompatible concrete array types. A null-only intersection also
+             * contains no array on which an indexed access can complete.
              */
-            Stamp o1S = o1.stamp(NodeView.DEFAULT);
-            Stamp o2S = o2.stamp(NodeView.DEFAULT);
-            ResolvedJavaType t1 = o1S.javaType(metaAccess);
-            ResolvedJavaType t2 = o2S.javaType(metaAccess);
-            if (!t1.isAssignableFrom(t2) && !t2.isAssignableFrom(t1)) {
+            Stamp overlap = o1.stamp(NodeView.DEFAULT).join(o2.stamp(NodeView.DEFAULT));
+            if (overlap.isEmpty() || StampTool.isPointerAlwaysNull(overlap)) {
                 return false;
             }
         }

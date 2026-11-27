@@ -122,6 +122,51 @@ public final class BytecodeInterpreterDirectives {
                  * primitive fields.
                  */
                 boolean nonNull() default true;
+
+                /**
+                 * Marks this field as template state for threaded bytecode handlers. A value of
+                 * {@code N >= 2} creates one handler variant for each field value in the range
+                 * {@code [0, N)}. A value of {@code 0} disables template specialization for this
+                 * field, and {@code 1} is invalid.
+                 * <p>
+                 * Each variant starts with the corresponding field value. Before control transfers
+                 * to the next threaded handler, every control-flow path must assign a known valid
+                 * value or retain the current value. If multiple template fields are updated, their
+                 * values must be resolved through the same control-flow merge.
+                 * <p>
+                 * When threading ends, the current field value is written back to the original
+                 * argument. When template mode is disabled, the field behaves like an ordinary
+                 * expanded field.
+                 * <p>
+                 * The field must be an {@code int} field of a {@link ExpansionKind#VIRTUAL}
+                 * argument.
+                 * <p>
+                 * See the <a href=
+                 * "https://github.com/oracle/graal/blob/master/truffle/docs/OneCompilationPerBytecodeHandler.md#template">
+                 * template handler documentation</a> for examples and additional restrictions.
+                 */
+                int templateVariable() default 0;
+
+                /**
+                 * Names the template-variable field on the same virtual-expanded argument that
+                 * controls whether this field's incoming value is valid. An empty name disables
+                 * conditional validity and requires {@link #valid()} to be empty.
+                 * <p>
+                 * Only non-final, non-template {@code long} or {@code double} fields of {@link ExpansionKind#VIRTUAL} arguments
+                 * support conditional validity. This metadata is ignored on HotSpot and whenever
+                 * template mode is disabled.
+                 */
+                String validWhen() default "";
+
+                /**
+                 * Values of {@link #validWhen()} for which the incoming field value is valid.
+                 * Otherwise, the generated handler starts with an arbitrary field value that must
+                 * not be observed, including through exception-state materialization. The handler
+                 * may overwrite the field before reading it. This contract applies at handler
+                 * entry, not to subsequent changes of the template-variable field. This metadata
+                 * is ignored on HotSpot and whenever template mode is disabled.
+                 */
+                int[] valid() default {};
             }
 
             /**
@@ -133,6 +178,18 @@ public final class BytecodeInterpreterDirectives {
              * Indicates whether this argument is expanded for bytecode handlers.
              */
             ExpansionKind expand() default ExpansionKind.NONE;
+
+            /**
+             * Exact concrete type reconstructed for a {@link ExpansionKind#VIRTUAL} argument.
+             * {@code void.class} uses the declared parameter type. An explicit type must be a
+             * concrete instance class assignable to the parameter type. It may be defined by a
+             * different class loader from the handler's declaring class. At each outlined call,
+             * the compiler must prove that the argument is non-null and has this exact type. All instance fields,
+             * including inherited fields, are expanded. The expansion type must have at least one
+             * instance field. This property is ignored on HotSpot, which uses the declared
+             * parameter type.
+             */
+            Class<?> expandedType() default void.class;
 
             /**
              * Fields to expand when {@link #expand()} is {@link ExpansionKind#MATERIALIZED}.
@@ -176,6 +233,21 @@ public final class BytecodeInterpreterDirectives {
          *         handler calls must not be outlined when the method is compiled separately
          */
         boolean secondarySwitch() default false;
+
+        /**
+         * Enables tail duplication for this interpreter's threaded bytecode handler stubs. When
+         * enabled, the compiler removes the control-flow anchor at the handler return and encourages
+         * duplication of the dispatch tail, allowing different handler paths to have separate
+         * indirect tail-call sites. Duplication remains subject to compiler safety checks and code
+         * size budgets; enabling this option does not guarantee that a tail will be duplicated.
+         * <p>
+         * Separate dispatch sites can improve branch prediction, but the additional code can also
+         * reduce performance. This option is disabled by default and should only be enabled after
+         * measuring the effect on the interpreter's workloads. When disabled, the return anchor is
+         * retained and no tail-duplication hint is emitted. This option has no effect on non-threaded
+         * stubs, which always retain their return anchor.
+         */
+        boolean enableTailDuplication() default false;
     }
 
     /**

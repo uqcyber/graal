@@ -2,7 +2,19 @@
 
 This changelog summarizes newly introduced optimizations and other compiler related changes.
 
+## GraalVM 25.7
+* (GR-81861): Added Vector API intrinsification to the economy compiler configuration on AMD64 and AArch64.
+  Eligible operations can now use SIMD instructions, for example in Native Image quick builds (`-Ob`) or
+  in Truffle first-tier compilations of Wasm SIMD workloads.
+
 ## GraalVM 25.5 (Internal Version 25.5.5)
+* (GR-79881, GR-79883): Added aggressive partial loop unrolling and simulation-based loop peeling to the community
+  compiler. Aggressive partial unrolling is enabled by default and can be disabled with
+  `-Djdk.graal.AggressivePartialUnroll=false`. The original simple partial unrolling remains
+  available, and all partial unrolling is controlled by the master `-Djdk.graal.PartialUnroll=false` option.
+* (GR-79595): Added `RangeCheckEliminationPhase`, which rewrites eligible 64-bit range checks to
+  equivalent 32-bit forms after counted strip mining. The optimization is enabled by default and
+  can be disabled with `-Djdk.graal.RangeCheckElimination=false`.
 * (GR-79593): Added `BreakChainedPhisPhase`, which splits chained loop phi values in the low tier to
   improve register allocation. The optimization is enabled by default and can be disabled with
   `-Djdk.graal.BreakChainedPhis=false`.

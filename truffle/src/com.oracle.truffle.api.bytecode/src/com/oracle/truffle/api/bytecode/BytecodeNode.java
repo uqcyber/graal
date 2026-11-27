@@ -49,6 +49,7 @@ import java.util.function.Predicate;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.HostCompilerDirectives;
 import com.oracle.truffle.api.TruffleStackTraceElement;
 import com.oracle.truffle.api.bytecode.Instruction.InstructionIterable;
 import com.oracle.truffle.api.dsl.Bind;
@@ -57,6 +58,7 @@ import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstance.FrameAccess;
 import com.oracle.truffle.api.frame.MaterializedFrame;
+import com.oracle.truffle.api.nodes.EncapsulatingNodeReference;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
@@ -123,12 +125,15 @@ public abstract class BytecodeNode extends Node {
      * stack walk.
      *
      * @param frameInstance the frame instance
-     * @return the bytecode location, or null if the frame instance does not originate from a
-     *         Bytecode DSL root node.
+     * @return the bytecode location, or {@code null} if the frame belongs to another bytecode node
+     *         or its BCI is unavailable
      * @since 24.2
      */
     public final BytecodeLocation getBytecodeLocation(FrameInstance frameInstance) {
-        int bytecodeIndex = findBytecodeIndex(frameInstance);
+        if (get(frameInstance) != this) {
+            return null;
+        }
+        int bytecodeIndex = resolveBytecodeIndex(frameInstance);
         if (bytecodeIndex == -1) {
             return null;
         }
@@ -153,19 +158,73 @@ public abstract class BytecodeNode extends Node {
     }
 
     /**
-     * Reads and returns the bytecode index from the {@code frame}. This method should only be
-     * called if the interpreter is configured to {@link GenerateBytecode#storeBytecodeIndexInFrame
-     * store the bytecode index in the frame}; be sure to read the documentation before using this
-     * feature.
+     * Returns the BCI stored in the frame. Supported when
+     * {@link GenerateBytecode#bytecodeIndexMode()} is {@link BytecodeIndexMode#FRAME} or
+     * {@link BytecodeIndexMode#MANUAL}. In {@code MANUAL} mode, the value before the first store is
+     * unspecified.
      *
-     * @return the bytecode index stored in the frame
-     * @throws UnsupportedOperationException if the interpreter does not always store the bytecode
-     *             index in the frame. See {@link GenerateBytecode#storeBytecodeIndexInFrame()}
+     * @param frame the current frame
+     * @return the stored BCI, or {@code -1} if explicitly cleared
+     * @throws UnsupportedOperationException if the configured bytecode index mode does not support
+     *             frame access
      * @since 24.2
      */
     @SuppressWarnings("unused")
     public int getBytecodeIndex(Frame frame) {
-        throw new UnsupportedOperationException("Interpreter does not store the bytecode index in the frame.");
+        throw new UnsupportedOperationException("The configured bytecode index mode does not support frame access.");
+    }
+
+    /**
+     * Stores a bytecode index in the {@code frame}. This method is supported when
+     * {@link GenerateBytecode#bytecodeIndexMode()} is {@link BytecodeIndexMode#FRAME} or
+     * {@link BytecodeIndexMode#MANUAL}. In {@link BytecodeIndexMode#FRAME} mode, a subsequent
+     * automatic update may replace the manually stored value. In {@link BytecodeIndexMode#MANUAL}
+     * mode, resuming a continuation replaces the stored value with the resume bytecode index.
+     * <p>
+     * Use at foreign-call boundaries; ordinary operations should bind {@code $bytecodeIndex} and
+     * pass it explicitly.
+     *
+     * @param frame the current frame
+     * @param bytecodeIndex the bytecode index to store, or {@code -1} to clear the manual value
+     * @throws UnsupportedOperationException if the configured bytecode index mode does not support
+     *             frame access
+     * @since 25.6
+     */
+    @SuppressWarnings("unused")
+    public void setBytecodeIndex(Frame frame, int bytecodeIndex) {
+        throw new UnsupportedOperationException("The configured bytecode index mode does not support frame access.");
+    }
+
+    /**
+     * Looks up the current bytecode node from {@code location} and stores a bytecode index.
+     * Prefer {@link #setBytecodeIndex(Frame, int)} when the bytecode node is already available,
+     * for example through {@code @Bind BytecodeNode bytecodeNode}.
+     * <p>
+     * Cached execution must provide a location, typically {@code this}. During uncached execution,
+     * null or non-adoptable locations use the current encapsulating node, which contains the
+     * bytecode node.
+     *
+     * <pre>{@code
+     * BytecodeNode.setBytecodeIndex(this, frame, bytecodeIndex);
+     * }</pre>
+     *
+     * @param location the current node location, which must be a partial evaluation constant,
+     *            or null for uncached execution
+     * @param frame the frame belonging to the resolved bytecode node
+     * @param bytecodeIndex the index to store, or {@code -1} to clear it
+     * @throws NullPointerException if no bytecode node can be resolved
+     * @throws UnsupportedOperationException if the bytecode index mode does not support frame access
+     * @since 25.6
+     */
+    public static void setBytecodeIndex(Node location, Frame frame, int bytecodeIndex) {
+        BytecodeNode bytecodeNode = BytecodeNode.get(location);
+        if (HostCompilerDirectives.inInterpreterFastPath() &&
+                        bytecodeNode == null && (location == null || !location.isAdoptable())) {
+            bytecodeNode = BytecodeNode.get(EncapsulatingNodeReference.getCurrent().get());
+        }
+        Objects.requireNonNull(bytecodeNode,
+                        "Cannot resolve the current BytecodeNode. Cached execution requires a node location; " +
+                                        "uncached execution requires an encapsulating node.").setBytecodeIndex(frame, bytecodeIndex);
     }
 
     /**
@@ -273,12 +332,16 @@ public abstract class BytecodeNode extends Node {
      * sections can be materialized by calling {@link #ensureSourceInformation()}.
      *
      * @param frameInstance the frame instance
-     * @return the source location, or null if a location could not be found
+     * @return the source location, or null if the frame instance does not originate from this
+     *         bytecode node or a location could not be found
      * @since 24.2
      */
     @TruffleBoundary
     public final SourceSection getSourceLocation(FrameInstance frameInstance) {
-        int bci = findBytecodeIndex(frameInstance);
+        if (get(frameInstance) != this) {
+            return null;
+        }
+        int bci = resolveBytecodeIndex(frameInstance);
         if (bci == -1) {
             return null;
         }
@@ -292,12 +355,16 @@ public abstract class BytecodeNode extends Node {
      * sections can be materialized by calling {@link #ensureSourceInformation()}.
      *
      * @param frameInstance the frame instance
-     * @return the source locations, or null if they could not be found
+     * @return the source locations, or null if the frame instance does not originate from this
+     *         bytecode node or locations could not be found
      * @since 24.2
      */
     @TruffleBoundary
     public final SourceSection[] getSourceLocations(FrameInstance frameInstance) {
-        int bci = findBytecodeIndex(frameInstance);
+        if (get(frameInstance) != this) {
+            return null;
+        }
+        int bci = resolveBytecodeIndex(frameInstance);
         if (bci == -1) {
             return null;
         }
@@ -516,6 +583,17 @@ public abstract class BytecodeNode extends Node {
     }
 
     /**
+     * Represents an illegal frame slot returned by {@link #getLocalValue(int, Frame, int)}.
+     * Pass this marker to {@link #setLocalValue(int, Frame, int, Object)} to mark a slot illegal
+     * without changing its type profile. The marker is reserved for this API representation and
+     * should not be used as a guest value.
+     *
+     * @since 25.7
+     * @see BytecodeVersion#V2
+     */
+    public static final Object INVALID = new Object();
+
+    /**
      * Returns a new array containing the current value of each local in the frame. This method
      * should only be used for slow-path use cases (like frame introspection). Prefer reading locals
      * directly in the bytecode (via {@code LoadLocal} operations or {@link LocalAccessor}) when
@@ -533,7 +611,8 @@ public abstract class BytecodeNode extends Node {
      *            evaluation constant. If the bytecode index is inconsistent with the state of the
      *            frame passed then the result of this method is unspecified.
      * @param frame the frame to read locals from
-     * @return an array of local values
+     * @return an array of local values, using the representation described by
+     *         {@link #getLocalValue(int, Frame, int)}
      * @see GenerateBytecode#enableBlockScoping
      * @since 24.2
      */
@@ -557,7 +636,7 @@ public abstract class BytecodeNode extends Node {
      * operations or {@link LocalAccessor}) when possible.
      * <p>
      * This accessor does not respect the {@link GenerateBytecode#illegalLocalException()}
-     * attribute; if the attribute is set, this method will return null for cleared locals.
+     * attribute; an illegal frame slot is returned as {@link #INVALID}.
      *
      * @param bytecodeIndex the current bytecode index of the given frame. A valid bytecode index
      *            can be obtained by calling {@link BytecodeLocation#getBytecodeIndex()} or
@@ -569,9 +648,9 @@ public abstract class BytecodeNode extends Node {
      *            {@code [0, getLocalCount(bytecodeIndex))} (and may come from
      *            {@link BytecodeLocal#getLocalOffset()} or {@link LocalVariable#getLocalOffset()}).
      *            The value must be a partial evaluation constant.
-     * @return the current local value, or null if the local was never written to (and there is no
-     *         {@link GenerateBytecode#defaultLocalValue() default local value}).
+     * @return the current local value or {@link #INVALID} for an illegal frame slot.
      * @see GenerateBytecode#enableBlockScoping
+     * @see BytecodeVersion#V2
      * @since 24.2
      */
     public abstract Object getLocalValue(int bytecodeIndex, Frame frame, int localOffset);
@@ -785,6 +864,12 @@ public abstract class BytecodeNode extends Node {
      * another root node. Prefer setting locals directly in the bytecode (via {@code StoreLocal}
      * operations or {@link LocalAccessor}) when possible.
      * <p>
+     * Passing {@link #INVALID} marks the frame slot illegal without changing its type profile,
+     * even when a default local value is configured. Passing Java {@code null} stores a valid Java
+     * {@code null} value using normal value profiling. These representations are also used by
+     * {@link #getLocalValues(int, Frame)}, {@link #setLocalValues(int, Frame, Object[])}, and
+     * both {@code copyLocalValues} overloads, so copying preserves illegal slots and null values.
+     * <p>
      * This method will be generated by the Bytecode DSL. Do not override.
      *
      * @param bytecodeIndex the current bytecode index of the given frame. A valid bytecode index
@@ -800,6 +885,7 @@ public abstract class BytecodeNode extends Node {
      * @param value the value to store into the local
      * @since 24.2
      * @see GenerateBytecode#enableBlockScoping
+     * @see BytecodeVersion#V2
      */
     public abstract void setLocalValue(int bytecodeIndex, Frame frame, int localOffset, Object value);
 
@@ -1254,6 +1340,17 @@ public abstract class BytecodeNode extends Node {
      */
     protected abstract int findBytecodeIndex(FrameInstance frameInstance);
 
+    // Caller has established that frameInstance belongs to this bytecode node.
+    final int resolveBytecodeIndex(FrameInstance frameInstance) {
+        int bytecodeIndex = frameInstance.getBytecodeIndex();
+        if (bytecodeIndex == -1) {
+            bytecodeIndex = findBytecodeIndex(frameInstance);
+        }
+        bytecodeIndex = bytecodeIndex < 0 ? -1 : bytecodeIndex;
+        assert bytecodeIndex == -1 || validateBytecodeIndex(bytecodeIndex);
+        return bytecodeIndex;
+    }
+
     /**
      * Internal method to be implemented by generated code.
      *
@@ -1300,8 +1397,8 @@ public abstract class BytecodeNode extends Node {
      * @see #getLocalValues(int, Frame)
      * @see BytecodeFrame#get(FrameInstance, FrameInstance.FrameAccess)
      * @param frameInstance the frame instance
-     * @return a new array of local values, or null if the frame instance does not correspond to a
-     *         {@link BytecodeRootNode}
+     * @return a new array of local values, or {@code null} if the frame instance does not correspond
+     *         to a {@link BytecodeRootNode} or its bytecode index cannot be determined
      * @since 24.2
      */
     @TruffleBoundary
@@ -1311,8 +1408,14 @@ public abstract class BytecodeNode extends Node {
             return null;
         }
         Frame frame = bytecode.resolveFrameImpl(frameInstance, FrameAccess.READ_ONLY);
-        int bci = bytecode.findBytecodeIndexImpl(frame, frameInstance.getCallNode());
-        assert bci != -1;
+        int bci = frameInstance.getBytecodeIndex();
+        if (bci == -1) {
+            bci = bytecode.findBytecodeIndexImpl(frame, frameInstance.getCallNode());
+        }
+        if (bci == -1) {
+            return null;
+        }
+        assert bci >= 0;
         return bytecode.getLocalValues(bci, frame);
     }
 
@@ -1323,8 +1426,8 @@ public abstract class BytecodeNode extends Node {
      * @see #getLocalNames(int)
      * @see BytecodeFrame#get(FrameInstance, FrameInstance.FrameAccess)
      * @param frameInstance the frame instance
-     * @return a new array of names, or null if the frame instance does not correspond to a
-     *         {@link BytecodeRootNode}
+     * @return a new array of names, or {@code null} if the frame instance does not correspond to a
+     *         {@link BytecodeRootNode} or its bytecode index cannot be determined
      * @since 24.2
      */
     @TruffleBoundary
@@ -1333,8 +1436,14 @@ public abstract class BytecodeNode extends Node {
         if (bytecode == null) {
             return null;
         }
-        int bci = bytecode.findBytecodeIndex(frameInstance);
-        assert bci != -1;
+        int bci = frameInstance.getBytecodeIndex();
+        if (bci == -1) {
+            bci = bytecode.findBytecodeIndex(frameInstance);
+        }
+        if (bci == -1) {
+            return null;
+        }
+        assert bci >= 0;
         return bytecode.getLocalNames(bci);
     }
 
@@ -1345,7 +1454,8 @@ public abstract class BytecodeNode extends Node {
      * @see #setLocalValues(int, Frame, Object[])
      * @see BytecodeFrame#get(FrameInstance, FrameInstance.FrameAccess)
      * @param frameInstance the frame instance
-     * @return whether the locals could be set with the information available in the frame instance
+     * @return whether the locals could be set; {@code false} if the frame instance does not
+     *         correspond to a {@link BytecodeRootNode} or its bytecode index cannot be determined
      * @since 24.2
      */
     @TruffleBoundary
@@ -1355,8 +1465,14 @@ public abstract class BytecodeNode extends Node {
             return false;
         }
         Frame frame = bytecode.resolveFrameImpl(frameInstance, FrameAccess.READ_WRITE);
-        int bci = bytecode.findBytecodeIndexImpl(frame, frameInstance.getCallNode());
-        assert bci != -1;
+        int bci = frameInstance.getBytecodeIndex();
+        if (bci == -1) {
+            bci = bytecode.findBytecodeIndexImpl(frame, frameInstance.getCallNode());
+        }
+        if (bci == -1) {
+            return false;
+        }
+        assert bci >= 0;
         bytecode.setLocalValues(bci, frame, values);
         return true;
     }

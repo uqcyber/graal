@@ -65,6 +65,8 @@ import jdk.graal.compiler.nodes.virtual.VirtualArrayNode;
 import jdk.graal.compiler.replacements.SnippetTemplate.Arguments;
 import jdk.graal.compiler.replacements.nodes.MacroNode.MacroParams;
 import jdk.graal.compiler.replacements.nodes.MacroWithExceptionNode;
+import jdk.graal.compiler.vector.architecture.VectorArchitecture;
+import jdk.graal.compiler.vector.architecture.VectorLoweringProvider;
 import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaKind;
@@ -318,6 +320,10 @@ public abstract class CopyOfNode extends MacroWithExceptionNode implements Simpl
             }
             /* Since the new object element type is a constant it can be virtualized. */
             newArrayType = tool.getConstantReflection().asJavaType(getNewObjectArrayType().asConstant());
+            if (newArrayType == null || !newArrayType.isArray()) {
+                // Let the original call throw for a null or non-array class.
+                return;
+            }
         } else {
             /* For a primitive array copy the component type is derived from the element kind. */
             newArrayType = tool.getMetaAccess().lookupJavaType(elementKind.toJavaClass()).getArrayClass();
@@ -350,6 +356,11 @@ public abstract class CopyOfNode extends MacroWithExceptionNode implements Simpl
             replaceWithUncheckedCopyOfNode(tool);
             return;
         }
+        VectorArchitecture vectorArch = ((VectorLoweringProvider) tool.getLowerer()).getVectorArchitecture();
+        if (vectorArch == null || !vectorArch.supportsObjectVectorization()) {
+            super.lower(tool);
+            return;
+        }
         verifyNoWordArray(StampTool.typeOrNull(getSource(), tool.getMetaAccess()), tool.getWordTypes());
         /*
          * Since CopyOfNode can be vectorized during the low-tier, we only postpone the reversal to
@@ -360,7 +371,10 @@ public abstract class CopyOfNode extends MacroWithExceptionNode implements Simpl
         if (sourceArrayType != null && getNewObjectArrayType().asConstant() != null) {
             ResolvedJavaType sourceType = sourceArrayType.getComponentType();
             ResolvedJavaType newArrayType = tool.getConstantReflection().asJavaType(getNewObjectArrayType().asConstant());
-            assert newArrayType.getComponentType() != null : "Null component type: " + newArrayType;
+            if (newArrayType == null || !newArrayType.isArray()) {
+                super.lower(tool);
+                return;
+            }
             if (newArrayType.getComponentType().isAssignableFrom(sourceType)) {
                 replaceWithUncheckedCopyOfNode(tool);
                 return;

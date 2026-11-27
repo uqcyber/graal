@@ -51,7 +51,7 @@ import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvaila
 import com.oracle.svm.core.fieldvaluetransformer.JVMCIFieldValueTransformerWithAvailability;
 import com.oracle.svm.core.fieldvaluetransformer.JVMCIFieldValueTransformerWithReceiverBasedAvailability;
 import com.oracle.svm.core.fieldvaluetransformer.JavaConstantWrapper;
-import com.oracle.svm.core.layered.LayeredFieldValue;
+import com.oracle.svm.guest.staging.layered.LayeredFieldValue;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.guest.staging.core.heap.UnknownObjectField;
 import com.oracle.svm.guest.staging.core.heap.UnknownPrimitiveField;
@@ -325,8 +325,9 @@ public final class FieldValueInterceptionSupport {
     }
 
     /**
-     * Check if the value of the provided field is currently available. After this method has been
-     * called, it is not possible to install a transformer anymore.
+     * Check if the value of the provided field is currently available. This does not register a
+     * notification or retry. After this method has been called, it is not possible to install a
+     * transformer anymore.
      */
     public boolean isValueAvailable(AnalysisField field, JavaConstant receiver) {
         return isValueAvailable(field, receiver, false);

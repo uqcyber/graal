@@ -1,6 +1,54 @@
 {
   "reflection": [
     {
+      "type": "com.sun.tools.attach.VirtualMachine",
+      "methods": [
+        {
+          "name": "attach",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "sun.tools.attach.HotSpotVirtualMachine",
+      "methods": [
+        {
+          "name": "executeJCmd",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        },
+        {
+          "name": "remoteDataDump",
+          "parameterTypes": [
+            "java.lang.Object[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "sun.tools.attach.VirtualMachineImpl",
+      "methods": [
+        {
+          "name": "detach",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "sun.jvmstat.monitor.HostIdentifier",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
       "type": "javax.tools.JavaCompiler$CompilationTask"
     },
     {
@@ -16,14 +64,96 @@
     },
     {
       "type": "sun.launcher.LauncherHelper",
-      "jniAccessible": true,
       "allDeclaredConstructors": true,
       "allDeclaredMethods": true,
       "allDeclaredFields": true
     },
     {
       "type": "com.sun.tools.javac.Main",
-      "jniAccessible": true,
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": [
+            "java.lang.String[]"
+          ]
+        },
+        {
+          "name": "compile",
+          "parameterTypes": [
+            "java.lang.String[]",
+            "java.io.PrintWriter"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "sun.tools.jar.Main",
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": [
+            "java.lang.String[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "com.sun.tools.javap.Main",
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": [
+            "java.lang.String[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "com.sun.tools.jdeps.Main",
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": [
+            "java.lang.String[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "jdk.tools.jlink.internal.Main",
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": [
+            "java.lang.String[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "jdk.tools.jmod.Main",
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": [
+            "java.lang.String[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "com.sun.tools.jnativescan.Main",
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": [
+            "java.lang.String[]"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "jdk.jpackage.main.Main",
       "methods": [
         {
           "name": "main",
@@ -35,7 +165,6 @@
     },
     {
       "type": "jdk.internal.jshell.tool.JShellToolProvider",
-      "jniAccessible": true,
       "methods": [
         {
           "name": "main",
@@ -47,7 +176,6 @@
     },
     {
       "type": "com.sun.tools.javac.launcher.SourceLauncher",
-      "jniAccessible": true,
       "methods": [
         {
           "name": "main",

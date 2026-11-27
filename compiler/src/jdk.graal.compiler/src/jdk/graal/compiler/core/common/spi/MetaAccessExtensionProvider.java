@@ -24,6 +24,7 @@
  */
 package jdk.graal.compiler.core.common.spi;
 
+import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
@@ -52,6 +53,24 @@ public interface MetaAccessExtensionProvider {
     boolean canConstantFoldDynamicAllocation(ResolvedJavaType type);
 
     /**
+     * Returns whether this compilation may embed identity hash codes obtained from
+     * {@link ConstantReflectionProvider#identityHashCode(JavaConstant)}. Return {@code false} if
+     * compilation-time hashes may differ from those of the runtime objects; canonicalization must
+     * then retain the operation without querying constant reflection.
+     *
+     * This compilation-wide policy must apply from source graph construction through analysis and
+     * compilation: disabling it later cannot undo earlier folds. Compiler folding must go through
+     * {@code IdentityHashCodeNode} canonicalization; raw constant-reflection queries for metadata or
+     * heap construction are unaffected.
+     *
+     * @return {@code true} if compilation-time identity hash codes may be used at run time
+     * @implSpec The default implementation returns {@code true}.
+     */
+    default boolean canConstantFoldIdentityHashCode() {
+        return true;
+    }
+
+    /**
      * Checks if the invocation of the provided method is guaranteed to include a safepoint.
      *
      * @param isDirect Whether the method is being directly invoked. For indirect calls, a method is
@@ -73,6 +92,23 @@ public interface MetaAccessExtensionProvider {
     boolean canVirtualize(ResolvedJavaType instanceType);
 
     /**
+     * Returns the byte offset of a static field relative to the storage base used by this
+     * compilation. The default returns the supplied physical offset. Selecting another offset
+     * requires compatible storage and a consistent mapping for the lifetime of compiled graphs.
+     * {@link #getStaticFieldForAccess} must agree with that mapping or return {@code null}
+     * when the field cannot be identified. Ordinary lowering uses the result directly as the byte
+     * displacement. Native Image requires a positive result for both lowering and symbolic
+     * queries and fails compilation if a symbolic query cannot resolve one. When remapping,
+     * runtime reflection metadata and Unsafe static field bases must describe the same layout.
+     *
+     * @param physicalOffset the VM's offset, which may be a missing-location sentinel for a
+     *            symbolic offset query
+     */
+    default int getStaticFieldOffset(@SuppressWarnings("unused") ResolvedJavaField field, int physicalOffset) {
+        return physicalOffset;
+    }
+
+    /**
      * Given an unsafe access, try to find the static field that is being accessed.
      *
      * @param base the base object used in the access.
@@ -82,4 +118,15 @@ public interface MetaAccessExtensionProvider {
      *         can't be determined.
      */
     ResolvedJavaField getStaticFieldForAccess(JavaConstant base, long offset, JavaKind accessKind);
+
+    /**
+     * Given a typed receiver and an unsafe access with a constant offset, returns the instance
+     * field accessed by that offset, or {@code null} if the offset cannot safely be resolved using
+     * the field layout available to this compilation. The default lookup uses the layout of
+     * {@code receiverType}. Providers must override this method if the offset may use a different
+     * layout.
+     */
+    default ResolvedJavaField getInstanceFieldForAccess(ResolvedJavaType receiverType, long offset, JavaKind accessKind) {
+        return receiverType.findInstanceFieldWithOffset(offset, accessKind);
+    }
 }

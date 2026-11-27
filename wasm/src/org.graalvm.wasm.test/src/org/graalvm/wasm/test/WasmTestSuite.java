@@ -51,8 +51,11 @@ import org.graalvm.wasm.test.suites.arithmetic.WideArithmeticSuite;
 import org.graalvm.wasm.test.suites.bytecode.BranchHintSuite;
 import org.graalvm.wasm.test.suites.bytecode.BytecodeSuite;
 import org.graalvm.wasm.test.suites.bytecode.MultiInstantiationSuite;
+import org.graalvm.wasm.test.suites.bytecode.InstanceCodeSharingSuite;
+import org.graalvm.wasm.test.suites.bytecode.WasmBranchTargetSuite;
 import org.graalvm.wasm.test.suites.bytecode.WasmLegacyCatchOSRSuite;
 import org.graalvm.wasm.test.suites.bytecode.WasmOSRSuite;
+import org.graalvm.wasm.test.suites.compiler.CompilationSuite;
 import org.graalvm.wasm.test.suites.control.BlockWithLocalsSuite;
 import org.graalvm.wasm.test.suites.control.BranchBlockSuite;
 import org.graalvm.wasm.test.suites.control.ExceptionSuite;
@@ -67,6 +70,8 @@ import org.graalvm.wasm.test.suites.debugging.DebugSourceLoadSuite;
 import org.graalvm.wasm.test.suites.debugging.DebugValidationSuite;
 import org.graalvm.wasm.test.suites.linker.LinkerSuite;
 import org.graalvm.wasm.test.suites.memory.Memory64Suite;
+import org.graalvm.wasm.test.suites.memory.MemoryFillSuite;
+import org.graalvm.wasm.test.suites.memory.VectorMemorySuite;
 import org.graalvm.wasm.test.suites.memory.MemorySuite;
 import org.graalvm.wasm.test.suites.memory.MultiMemorySuite;
 import org.graalvm.wasm.test.suites.memory.ThreadsSuite;
@@ -97,6 +102,8 @@ import org.junit.runners.Suite;
                 IfThenElseSuite.class,
                 MemorySuite.class,
                 Memory64Suite.class,
+                MemoryFillSuite.class,
+                VectorMemorySuite.class,
                 TableSuite.class,
                 Table64Suite.class,
                 IssueSuite.class,
@@ -107,6 +114,9 @@ import org.junit.runners.Suite;
                 LinkerSuite.class,
                 WasmPolyglotTestSuite.class,
                 WasmJsApiSuite.class,
+                WasmStackTraceTest.class,
+                WasmIndirectCallTest.class,
+                WasmReturnCallTest.class,
                 GCSuite.class,
                 ValidationSuite.class,
                 MultiValueValidationSuite.class,
@@ -116,8 +126,11 @@ import org.junit.runners.Suite;
                 BranchHintSuite.class,
                 BytecodeSuite.class,
                 MultiInstantiationSuite.class,
+                InstanceCodeSharingSuite.class,
+                WasmBranchTargetSuite.class,
                 WasmLegacyCatchOSRSuite.class,
                 WasmOSRSuite.class,
+                CompilationSuite.class,
                 MultiMemorySuite.class,
                 ThreadsSuite.class,
                 ExceptionSuite.class,

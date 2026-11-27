@@ -41,7 +41,7 @@ import com.oracle.graal.pointsto.heap.ImageHeapRelocatableConstant;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.shared.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
 import com.oracle.svm.core.imagelayer.PriorLayerMarker;
 import com.oracle.svm.guest.staging.util.ObservableImageHeapMapProvider;
@@ -119,11 +119,14 @@ public class CrossLayerConstantRegistryFeature implements InternalFeature, Cross
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
-        var config = (FeatureImpl.DuringSetupAccessImpl) access;
+        var accessImpl = (FeatureImpl.DuringSetupAccessImpl) access;
         loader = HostedImageLayerBuildingSupport.singleton().getLoader();
         ImageHeapObjectAdder.singleton().registerObjectAdder(this::addInitialObjects);
         var registry = CrossLayerConstantRegistry.singletonOrNull();
-        config.registerObjectToConstantReplacer(obj -> replacePriorMarkersWithConstant(registry, obj));
+        var hostedValuesProvider = accessImpl.getUniverse().getHostedValuesProvider();
+        // JVMCI migration blocked by GR-80021: Adapt the CrossLayerConstantRegistry for Terminus
+        accessImpl.registerJVMCIObjectToConstantReplacer(constant -> replacePriorMarkersWithConstant(registry,
+                        hostedValuesProvider.asObject(Object.class, constant)));
     }
 
     /**

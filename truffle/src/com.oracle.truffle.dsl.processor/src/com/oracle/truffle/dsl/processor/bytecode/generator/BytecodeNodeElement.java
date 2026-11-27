@@ -69,6 +69,7 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
 
 import com.oracle.truffle.dsl.processor.bytecode.generator.BytecodeRootNodeElement.InstructionGroup;
+import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.BytecodeDSLModel.LoadIllegalLocalStrategy;
 import com.oracle.truffle.dsl.processor.bytecode.model.InstructionModel;
 import com.oracle.truffle.dsl.processor.bytecode.model.InstructionModel.ImmediateKind;
@@ -201,9 +202,11 @@ final class BytecodeNodeElement extends AbstractElement {
         this.add(createGetBranchProfiles());
         this.add(createFindBytecodeIndex1());
         this.add(createFindBytecodeIndex2());
-        if (parent.model.storeBciInFrame) {
+        if (parent.model.supportsBytecodeIndexAccess()) {
             this.add(createGetBytecodeIndex());
-        } else {
+            this.add(createSetBytecodeIndex());
+        }
+        if (parent.model.bytecodeIndexMode == BytecodeDSLModel.BytecodeIndexMode.CACHED_NODE) {
             this.add(createFindBytecodeIndexOfOperationNode());
         }
         this.add(createToString());
@@ -288,11 +291,13 @@ final class BytecodeNodeElement extends AbstractElement {
     }
 
     private boolean useOperationNodeForBytecodeIndex() {
-        return !parent.model.storeBciInFrame && tier == InterpreterTier.CACHED;
+        return parent.model.bytecodeIndexMode == BytecodeDSLModel.BytecodeIndexMode.CACHED_NODE && tier == InterpreterTier.CACHED;
     }
 
     private boolean useFrameForBytecodeIndex() {
-        return parent.model.storeBciInFrame || tier == InterpreterTier.UNCACHED;
+        return parent.model.bytecodeIndexMode == BytecodeDSLModel.BytecodeIndexMode.FRAME ||
+                        parent.model.bytecodeIndexMode == BytecodeDSLModel.BytecodeIndexMode.MANUAL ||
+                        (parent.model.bytecodeIndexMode == BytecodeDSLModel.BytecodeIndexMode.CACHED_NODE && tier == InterpreterTier.UNCACHED);
     }
 
     private CodeExecutableElement createGetLocalValue() {
@@ -319,9 +324,15 @@ final class BytecodeNodeElement extends AbstractElement {
             b.startAssign("tag");
             b.string("frame.getTag(frameIndex)");
             b.end();
+            if (parent.model.version.usesInvalidLocalMarker()) {
+                b.startIf().string("tag == ").staticReference(parent.frameTagsElement.getIllegal()).end().startBlock();
+                b.statement("return INVALID");
+                b.end();
+            }
 
             b.end().startElseBlock();
 
+            b.lineComment("Improve compiled performance by using PE-constant tag instead of dynamic frame tag.");
             if (parent.model.enableBlockScoping) {
                 b.declaration(type(int.class), "localIndex", "localOffsetToLocalIndex(bci, localOffset)");
                 b.startAssign("tag").startCall("getCachedLocalTagInternal");
@@ -331,6 +342,13 @@ final class BytecodeNodeElement extends AbstractElement {
             } else {
                 b.startAssign("tag").string("getCachedLocalTag(localOffset)").end();
             }
+            if (parent.model.version.usesInvalidLocalMarker()) {
+                b.lineComment("Explicitly check the frame tag for a cleared frame slot.");
+                b.startIf().string("frame.getTag(frameIndex) == ").staticReference(parent.frameTagsElement.getIllegal()).end().startBlock();
+                b.statement("return INVALID");
+                b.end();
+            }
+
             b.end();
 
             b.startSwitch().string("tag").end().startBlock();
@@ -345,22 +363,25 @@ final class BytecodeNodeElement extends AbstractElement {
             }
 
             b.startCase().staticReference(parent.frameTagsElement.getObject()).end();
+            if (parent.model.version.usesInvalidLocalMarker()) {
+                /*
+                 * We already checked for ILLEGAL frame tag, so this is only reached in compiled code
+                 * if the cached tag wasn't populated. Just expect the frame value as object.
+                 */
+                b.startCase().staticReference(parent.frameTagsElement.getIllegal()).string(" /* reachable in compiled code */").end();
+            }
             b.startCaseBlock();
             b.startReturn();
             BytecodeRootNodeElement.startExpectFrame(b, "frame", type(Object.class), false).string("frameIndex").end();
             b.end();
             b.end(); // case block
 
-            b.startCase().staticReference(parent.frameTagsElement.getIllegal()).end();
-            b.startCaseBlock();
-            b.startReturn();
-            if (parent.model.loadIllegalLocalStrategy == LoadIllegalLocalStrategy.DEFAULT_VALUE) {
-                b.string("DEFAULT_LOCAL_VALUE");
-            } else {
-                b.string("null");
+            if (!parent.model.version.usesInvalidLocalMarker()) {
+                b.startCase().staticReference(parent.frameTagsElement.getIllegal()).end();
+                b.startCaseBlock();
+                b.statement(parent.model.loadIllegalLocalStrategy == LoadIllegalLocalStrategy.DEFAULT_VALUE ? "return DEFAULT_LOCAL_VALUE" : "return null");
+                b.end();
             }
-            b.end();
-            b.end(); // case block
 
             b.caseDefault().startCaseBlock();
             b.tree(GeneratorUtils.createShouldNotReachHere("Unexpected tag"));
@@ -369,19 +390,19 @@ final class BytecodeNodeElement extends AbstractElement {
             b.end(); // switch block
             b.end().startCatchBlock(types.UnexpectedResultException, "ex");
             b.tree(GeneratorUtils.createTransferToInterpreterAndInvalidate());
-            b.startReturn().string("ex.getResult()").end();
+            b.statement("return ex.getResult()");
             b.end(); // catch
         } else {
             b.startIf().string("frame.isObject(frameIndex)").end().startBlock();
-            b.startReturn().string("frame.getObject(frameIndex)").end();
+            b.statement("return frame.getObject(frameIndex)");
             b.end();
             if (parent.model.usesBoxingElimination() && tier.isUncached()) {
                 b.startIf().string("frame.getTag(frameIndex) == ").staticReference(parent.frameTagsElement.getIllegal()).end().startBlock();
-                b.statement("return null");
+                b.statement(parent.model.version.usesInvalidLocalMarker() ? "return INVALID" : "return null");
                 b.end();
                 b.statement("return frame.getValue(frameIndex)");
             } else {
-                b.statement("return null");
+                b.statement(parent.model.version.usesInvalidLocalMarker() ? "return INVALID" : "return null");
             }
         }
 
@@ -396,6 +417,7 @@ final class BytecodeNodeElement extends AbstractElement {
         b.statement("assert validateBytecodeIndex(bci)");
         AbstractBytecodeNodeElement.buildVerifyLocalsIndex(b);
         AbstractBytecodeNodeElement.buildVerifyFrameDescriptor(b, true);
+        parent.abstractBytecodeNode.emitMaybeInvalidateLocalValue(b, "USER_LOCALS_START_INDEX + localOffset");
         if (parent.model.usesBoxingElimination() && tier.isCached()) {
             b.startStatement().startCall("setLocalValueImpl");
             b.string("frame").string("localOffset").string("value");
@@ -911,6 +933,9 @@ final class BytecodeNodeElement extends AbstractElement {
             b.staticReference(types.FrameInstance_FrameAccess, "READ_ONLY");
             b.end();
             b.end(); // frame declaration
+            b.startIf().string("frame == null || frame.getTag(BCI_INDEX) == ").staticReference(types.FrameSlotKind, "Illegal").string(".tag").end().startBlock();
+            b.startReturn().string("-1").end();
+            b.end();
             b.startReturn();
             parent.emitReadBytecodeIndexFromFrame(b, "frame", true);
             b.end();
@@ -932,6 +957,9 @@ final class BytecodeNodeElement extends AbstractElement {
             b.end();
             b.startReturn().string("-1").end();
         } else if (useFrameForBytecodeIndex()) {
+            b.startIf().string("frame == null || frame.getTag(BCI_INDEX) == ").staticReference(types.FrameSlotKind, "Illegal").string(".tag").end().startBlock();
+            b.startReturn().string("-1").end();
+            b.end();
             b.startReturn();
             parent.emitReadBytecodeIndexFromFrame(b, "frame", true);
             b.end();
@@ -948,6 +976,14 @@ final class BytecodeNodeElement extends AbstractElement {
         b.startReturn();
         parent.emitReadBytecodeIndexFromFrame(b, "frame", true);
         b.end();
+        return ex;
+    }
+
+    private CodeExecutableElement createSetBytecodeIndex() {
+        CodeExecutableElement ex = GeneratorUtils.override(types.BytecodeNode, "setBytecodeIndex", new String[]{"frame", "bytecodeIndex"}, new TypeMirror[]{types.Frame, type(int.class)});
+        CodeTreeBuilder b = ex.createBuilder();
+        b.statement("assert bytecodeIndex == -1 || validateBytecodeIndex(bytecodeIndex)");
+        parent.emitWriteBytecodeIndexToFrame(b, "frame", "bytecodeIndex");
         return ex;
     }
 
@@ -1211,7 +1247,7 @@ final class BytecodeNodeElement extends AbstractElement {
             b.statement("handlers__ = handlers_");
             b.statement("numNodes__ = numNodes_");
             b.statement("locals__ = locals_");
-            if (parent.model.enableInstructionRewriting || parent.model.enableTagInstrumentation) {
+            if (parent.model.needsStableBciRemappings()) {
                 b.statement("stableBciDeltas__ = stableBciDeltas_");
             }
             b.statement("configEncoding__ = configEncoding_");
@@ -1229,7 +1265,7 @@ final class BytecodeNodeElement extends AbstractElement {
         b.statement("handlers__ = this.handlers");
         b.statement("numNodes__ = this.numNodes");
         b.statement("locals__ = this.locals");
-        if (parent.model.enableInstructionRewriting || parent.model.enableTagInstrumentation) {
+        if (parent.model.needsStableBciRemappings()) {
             b.statement("stableBciDeltas__ = this.stableBciDeltas");
         }
         b.statement("configEncoding__ = configEncoding_");
@@ -1678,18 +1714,9 @@ final class BytecodeNodeElement extends AbstractElement {
             b.declaration(this.getStackPointerType(), "sp", BytecodeRootNodeElement.decodeSp("startState"));
         }
 
-        if (parent.model.needsBciSlot() && !parent.model.storeBciInFrame && !tier.isUncached()) {
-            // If a bci slot is allocated but not used for non-uncached interpreters, set it to
-            // an invalid value just in case it gets read during a stack walk.
-            if (mayWrapLocalFrame()) {
-                b.declaration(types.FrameWithoutBoxing, localFrame(), "frame");
-                startIfHasSeparateLocalFrame(b, true, true);
-                b.startAssign(localFrame()).tree(readContinuationFrame("frame", types.FrameWithoutBoxing)).end();
-                b.end();
-            }
-            parent.emitWriteBytecodeIndexToFrame(b, localFrame(), "-1");
+        if (tier.isCached()) {
+            b.startAssign("bci").startStaticCall(types.CompilerDirectives, "mergeExplodeKey").string("bci").end(2);
         }
-
         b.string("loop: ").startWhile().string("true").end().startBlock();
         if (tier.isCached()) {
             b.lineComment("Detect if a tier-down occurred.");
@@ -2107,6 +2134,10 @@ final class BytecodeNodeElement extends AbstractElement {
 
     private CodeExecutableElement createHandleException() {
         CodeExecutableElement method = createInstructionHandler(type(long.class), "handleException");
+        if (!parent.model.unwindExceptions.isEmpty()) {
+            // Catch handlers deliberately fall through to the shared finally dispatch.
+            GeneratorUtils.mergeSuppressWarnings(method, "fallthrough");
+        }
         method.findParameter("bci").setSimpleName(CodeNames.of("originalBci"));
         method.addParameter(new CodeVariableElement(getStackPointerType(), "originalSp"));
         method.addParameter(new CodeVariableElement(type(Throwable.class), "originalThrowable"));
@@ -2142,15 +2173,22 @@ final class BytecodeNodeElement extends AbstractElement {
         /*
          * Three kinds of exceptions are supported: AbstractTruffleException, ControlFlowException,
          * and internal error (anything else). All of these can be intercepted by user-provided
-         * hooks.
+         * hooks, unless they are unwind exceptions.
          *
          * The interception order is ControlFlowException -> internal error ->
          * AbstractTruffleException. An intercept method can produce a new exception that can be
          * intercepted by a subsequent intercept method.
          */
         b.declaration(type(Throwable.class), "throwable", "originalThrowable");
+        if (!parent.model.unwindExceptions.isEmpty()) {
+            b.declaration(type(boolean.class), "unwind", "isUnwindException(throwable)");
+        }
         if (parent.model.interceptControlFlowException != null) {
-            b.startIf().string("throwable instanceof ").type(types.ControlFlowException).string(" cfe").end().startBlock();
+            b.startIf();
+            if (!parent.model.unwindExceptions.isEmpty()) {
+                b.string("!unwind && ");
+            }
+            b.string("throwable instanceof ").type(types.ControlFlowException).string(" cfe").end().startBlock();
             b.startTryBlock();
             b.startDeclaration(type(long.class), "target");
             BytecodeRootNodeElement.emitCallDefault(b, this.add(createHandleControlFlowException()));
@@ -2160,7 +2198,7 @@ final class BytecodeNodeElement extends AbstractElement {
             b.statement("return target");
 
             b.end().startCatchBlock(types.ControlFlowException, "rethrownCfe");
-            b.startThrow().string("rethrownCfe").end();
+            b.statement("throwable = rethrownCfe");
             b.end().startCatchBlock(types.AbstractTruffleException, "t");
             b.statement("throwable = t");
             b.end().startCatchBlock(type(Throwable.class), "t");
@@ -2172,6 +2210,9 @@ final class BytecodeNodeElement extends AbstractElement {
         b.startAssign("throwable");
         BytecodeRootNodeElement.emitCallDefault(b, this.resolveThrowable);
         b.end();
+        if (!parent.model.unwindExceptions.isEmpty()) {
+            b.statement("unwind = isUnwindException(throwable)");
+        }
 
         b.startDeclaration(type(int[].class), "handlerTable").string("this.handlers").end();
         b.startDeclaration(type(int.class), "handler").string("-EXCEPTION_HANDLER_LENGTH").end();
@@ -2182,12 +2223,20 @@ final class BytecodeNodeElement extends AbstractElement {
         b.startWhile().string("(handler = resolveHandler(bci, handler + EXCEPTION_HANDLER_LENGTH, handlerTable)) != -1").end().startBlock();
 
         boolean hasSpecialHandler = parent.model.enableTagInstrumentation || parent.model.epilogExceptional != null;
+        boolean hasHandlerSwitch = hasSpecialHandler || !parent.model.unwindExceptions.isEmpty();
 
         if (hasSpecialHandler) {
             b.startTryBlock();
+        }
+        if (hasHandlerSwitch) {
             b.startSwitch().string("handlerTable[handler + EXCEPTION_HANDLER_OFFSET_KIND]").end().startBlock();
             if (parent.model.epilogExceptional != null) {
                 b.startCase().string("HANDLER_EPILOG_EXCEPTIONAL").end().startCaseBlock();
+                if (!parent.model.unwindExceptions.isEmpty()) {
+                    b.startIf().string("unwind").end().startBlock();
+                    b.statement("continue");
+                    b.end();
+                }
                 b.startIf().string("throwable instanceof ").type(type(ThreadDeath.class)).end().startBlock();
                 b.statement("continue");
                 b.end();
@@ -2317,12 +2366,24 @@ final class BytecodeNodeElement extends AbstractElement {
                 b.end();
             }
 
+            if (!parent.model.unwindExceptions.isEmpty()) {
+                b.startCase().string("HANDLER_CATCH").end().startCaseBlock();
+                b.startIf().string("unwind").end().startBlock();
+                b.statement("continue");
+                b.end();
+                b.end(); // case catch
+                b.lineComment("fall through");
+            }
             b.caseDefault().startCaseBlock();
         }
         b.startIf().string("throwable instanceof ").type(type(ThreadDeath.class)).end().startBlock();
         b.statement("continue");
         b.end();
-        b.startAssert().string("throwable instanceof ").type(types.AbstractTruffleException).end();
+        b.startAssert();
+        if (!parent.model.unwindExceptions.isEmpty()) {
+            b.string("unwind || ");
+        }
+        b.string("throwable instanceof ").type(types.AbstractTruffleException).end();
         b.statement("bci = handlerTable[handler + EXCEPTION_HANDLER_OFFSET_HANDLER_BCI]");
         b.statement("targetSp = handlerTable[handler + EXCEPTION_HANDLER_OFFSET_HANDLER_SP] + root.stackBase");
         if (parent.model.enableBlockScoping) {
@@ -2330,10 +2391,12 @@ final class BytecodeNodeElement extends AbstractElement {
         }
         b.statement(BytecodeRootNodeElement.setFrameObject("targetSp - 1", "throwable"));
 
-        if (hasSpecialHandler) {
+        if (hasHandlerSwitch) {
             b.statement("break");
             b.end(); // case block
             b.end(); // switch
+        }
+        if (hasSpecialHandler) {
             b.end(); // try
             b.startCatchBlock(type(Throwable.class), "t");
             b.startIf().string("t != throwable").end().startBlock();
@@ -2346,6 +2409,9 @@ final class BytecodeNodeElement extends AbstractElement {
                 }
             });
             b.end();
+            if (!parent.model.unwindExceptions.isEmpty()) {
+                b.statement("unwind = isUnwindException(throwable)");
+            }
             b.end();
             b.statement("continue");
             b.end();
@@ -2489,6 +2555,12 @@ final class BytecodeNodeElement extends AbstractElement {
 
         CodeTreeBuilder b = method.createBuilder();
 
+        if (!parent.model.unwindExceptions.isEmpty()) {
+            b.startIf().string("isUnwindException(throwable)").end().startBlock();
+            b.startReturn().string("throwable").end();
+            b.end();
+        }
+
         if (parent.model.interceptTruffleException == null) {
             b.startIf().startGroup().string("throwable instanceof ").type(types.AbstractTruffleException).string(" ate").end(2).startBlock();
             b.startReturn().string("ate").end();
@@ -2532,16 +2604,32 @@ final class BytecodeNodeElement extends AbstractElement {
                 b.startThrow().startCall("sneakyThrow").string("throwable").end(2);
             }
             b.end().startCatchBlock(types.AbstractTruffleException, "ate");
+            if (!parent.model.unwindExceptions.isEmpty()) {
+                b.startIf().string("isUnwindException(ate)").end().startBlock();
+                b.startReturn().string("ate").end();
+                b.end();
+            }
             if (parent.model.interceptTruffleException == null) {
                 b.startReturn().string("ate").end();
             } else {
                 b.startAssign("ex").string("ate").end();
             }
             b.end();
+            if (!parent.model.unwindExceptions.isEmpty()) {
+                b.startCatchBlock(type(Throwable.class), "t");
+                b.startIf().string("isUnwindException(t)").end().startBlock();
+                b.startReturn().string("t").end();
+                b.end();
+                b.startThrow().string("sneakyThrow(t)").end();
+                b.end();
+            }
             b.end();
         }
 
         if (parent.model.interceptTruffleException != null) {
+            if (!parent.model.unwindExceptions.isEmpty()) {
+                b.startTryBlock();
+            }
             if (mayWrapLocalFrame()) {
                 startIfHasSeparateLocalFrame(b, false, true);
                 b.startReturn().startCall("root", parent.model.interceptTruffleException).string("ex").tree(readContinuationFrame("frame", types.FrameWithoutBoxing)).string("this").string(
@@ -2549,6 +2637,14 @@ final class BytecodeNodeElement extends AbstractElement {
                 b.end();
             }
             b.startReturn().startCall("root", parent.model.interceptTruffleException).string("ex").string("frame").string("this").string(parent.castBytecodeIndexToInt("bci")).end(2);
+            if (!parent.model.unwindExceptions.isEmpty()) {
+                b.end().startCatchBlock(type(Throwable.class), "t");
+                b.startIf().string("isUnwindException(t)").end().startBlock();
+                b.startReturn().string("t").end();
+                b.end();
+                b.startThrow().string("sneakyThrow(t)").end();
+                b.end();
+            }
         }
 
         return method;
@@ -2665,6 +2761,10 @@ final class BytecodeNodeElement extends AbstractElement {
         b.end(); // case default
         b.end(); // switch
 
+        if (parent.model.bytecodeIndexMode == BytecodeDSLModel.BytecodeIndexMode.MANUAL) {
+            // Exceptional callbacks bypass the tag instruction handlers.
+            storeBciInFrame(b);
+        }
         b.startReturn().startCall("node.findProbe().onReturnExceptionalOrUnwind");
         b.string(localFrame());
         b.string("throwable");
@@ -2848,9 +2948,7 @@ final class BytecodeNodeElement extends AbstractElement {
     }
 
     void storeBciInFrame(CodeTreeBuilder b) {
-        if (BytecodeRootNodeElement.isStoreBciEnabled(parent.model, tier)) {
-            parent.emitWriteBytecodeIndexToFrame(b, localFrame(), "bci");
-        }
+        parent.emitWriteBytecodeIndexToFrame(b, localFrame(), "bci");
     }
 
     void emitStackEffect(CodeTreeBuilder b, int stackEffect) {

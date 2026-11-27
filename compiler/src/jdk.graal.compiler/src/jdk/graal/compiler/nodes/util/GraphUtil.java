@@ -30,6 +30,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -1120,11 +1121,12 @@ public class GraphUtil {
 
                     @Override
                     public FixedNode next() {
-                        try {
-                            return current;
-                        } finally {
-                            current = (FixedNode) current.predecessor();
+                        if (!hasNext()) {
+                            throw new NoSuchElementException();
                         }
+                        FixedNode result = current;
+                        current = (FixedNode) current.predecessor();
+                        return result;
                     }
                 };
             }
@@ -1281,7 +1283,7 @@ public class GraphUtil {
         } else {
             /* The source array is not virtualized, emit index loads. */
             ResolvedJavaType sourceType = StampTool.typeOrNull(sourceAlias, tool.getMetaAccess());
-            if (sourceType == null || !sourceType.isArray() || !newComponentType.isAssignableFrom(sourceType.getElementalType())) {
+            if (sourceType == null || !sourceType.isArray() || !newComponentType.isAssignableFrom(sourceType.getComponentType())) {
                 return;
             }
             for (int i = 0; i < readLength; i++) {

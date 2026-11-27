@@ -33,6 +33,7 @@ import com.oracle.truffle.api.bytecode.BytecodeLocal;
 import com.oracle.truffle.api.bytecode.BytecodeNode;
 import com.oracle.truffle.api.bytecode.BytecodeRootNode;
 import com.oracle.truffle.api.bytecode.BytecodeRootNodes;
+import com.oracle.truffle.api.bytecode.BytecodeVersion;
 import com.oracle.truffle.api.bytecode.ConstantOperand;
 import com.oracle.truffle.api.bytecode.ContinuationResult;
 import com.oracle.truffle.api.bytecode.ContinuationRootNode;
@@ -237,7 +238,7 @@ public class GR79495Test extends PartialEvaluationTest {
                         graph.getNodes().filter(AbstractNewObjectNode.class).isEmpty());
     }
 
-    @GenerateBytecode(languageClass = BytecodeDSLTestLanguage.class, enableYield = true)
+    @GenerateBytecode(version = BytecodeVersion.LATEST, languageClass = BytecodeDSLTestLanguage.class, enableYield = true)
     abstract static class TestInterpreter extends DebugBytecodeRootNode implements BytecodeRootNode {
         protected TestInterpreter(BytecodeDSLTestLanguage language, FrameDescriptor frameDescriptor) {
             super(language, frameDescriptor);
@@ -259,7 +260,7 @@ public class GR79495Test extends PartialEvaluationTest {
             }
         }
 
-        @Operation(storeBytecodeIndex = true)
+        @Operation
         @ConstantOperand(type = TestInterpreter.class)
         static final class InvokeInlined {
             @Specialization
@@ -289,7 +290,7 @@ public class GR79495Test extends PartialEvaluationTest {
             }
         }
 
-        @Operation(storeBytecodeIndex = true)
+        @Operation
         @ConstantOperand(type = LocalAccessor.class)
         static final class ResumeAndUnpack {
             @Specialization(guards = "target == rootNode", limit = "2")
@@ -310,7 +311,7 @@ public class GR79495Test extends PartialEvaluationTest {
             }
         }
 
-        @Operation(storeBytecodeIndex = true)
+        @Operation
         static final class ContinueInlined {
             @SuppressWarnings("unused")
             @Specialization(guards = "result.getContinuationRootNode() == rootNode", limit = "3")

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,10 +26,10 @@ package jdk.graal.compiler.nodes.loop;
 
 import java.util.Collection;
 
+import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.type.IntegerStamp;
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.core.common.util.UnsignedLong;
-import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.LogicNode;
@@ -39,11 +39,13 @@ import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.ValuePhiNode;
 import jdk.graal.compiler.nodes.calc.AddNode;
 import jdk.graal.compiler.nodes.calc.BinaryArithmeticNode;
+import jdk.graal.compiler.nodes.calc.IntegerBelowNode;
 import jdk.graal.compiler.nodes.calc.IntegerConvertNode;
 import jdk.graal.compiler.nodes.calc.NegateNode;
 import jdk.graal.compiler.nodes.calc.SubNode;
 import jdk.graal.compiler.replacements.nodes.arithmetic.IntegerAddExactOverflowNode;
 import jdk.graal.compiler.replacements.nodes.arithmetic.IntegerMulExactOverflowNode;
+import jdk.vm.ci.code.CodeUtil;
 
 public class BasicInductionVariable extends InductionVariable {
 
@@ -86,23 +88,22 @@ public class BasicInductionVariable extends InductionVariable {
 
     @Override
     public Direction direction() {
-        Stamp stamp = rawStride.stamp(NodeView.DEFAULT);
-        if (stamp instanceof IntegerStamp) {
-            IntegerStamp integerStamp = (IntegerStamp) stamp;
-            Direction dir = null;
-            if (integerStamp.isStrictlyPositive()) {
-                dir = Direction.Up;
-            } else if (integerStamp.isStrictlyNegative()) {
-                dir = Direction.Down;
+        return directionForRawStride(rawStride.stamp(NodeView.DEFAULT));
+    }
+
+    /**
+     * Computes the direction of this basic induction variable for a raw stride stamp. The
+     * raw stride is the right-hand operand of the update operation, so a subtraction requires
+     * negating the raw stride in the native integer width to correctly handle {@code -MIN_VALUE} overflow.
+     */
+    public Direction directionForRawStride(Stamp rawStrideStamp) {
+        if (rawStrideStamp instanceof IntegerStamp integerStamp) {
+            if (op instanceof SubNode) {
+                integerStamp = (IntegerStamp) IntegerStamp.OPS.getNeg().foldStamp(integerStamp);
+            } else {
+                assert op instanceof AddNode : "basicIv op=" + op;
             }
-            if (dir != null) {
-                if (op instanceof AddNode) {
-                    return dir;
-                } else {
-                    assert op instanceof SubNode : Assertions.errorMessage(op);
-                    return dir.opposite();
-                }
-            }
+            return Direction.fromStrideStamp(integerStamp);
         }
         return null;
     }
@@ -153,7 +154,8 @@ public class BasicInductionVariable extends InductionVariable {
             return rawStride.asJavaConstant().asLong();
         }
         if (op instanceof SubNode) {
-            return -rawStride.asJavaConstant().asLong();
+            int bits = IntegerStamp.getBits(rawStride.stamp(NodeView.DEFAULT));
+            return CodeUtil.signExtend(-rawStride.asJavaConstant().asLong(), bits);
         }
         throw GraalError.shouldNotReachHereUnexpectedValue(op); // ExcludeFromJacocoGeneratedReport
     }
@@ -184,7 +186,7 @@ public class BasicInductionVariable extends InductionVariable {
     }
 
     @Override
-    protected ValueNode collectLocalExtremumOverflowConditions(boolean assumeLoopEntered, Stamp stamp, ValueNode effectiveMaxTripCount, ValueNode baseExtremum,
+    protected ValueNode collectLocalEndpointOverflowConditions(boolean assumeLoopEntered, Stamp stamp, ValueNode effectiveMaxTripCount, ValueNode baseEndpoint,
                     Collection<LogicNode> conditions) {
         GraalError.guarantee(stamp instanceof IntegerStamp, "Expected integer stamp for %s but got %s", this, stamp);
         ValueNode stride = strideNode();
@@ -193,8 +195,21 @@ public class BasicInductionVariable extends InductionVariable {
             stride = IntegerConvertNode.convert(stride, stamp, graph(), NodeView.DEFAULT);
             initNode = IntegerConvertNode.convert(initNode, stamp, graph(), NodeView.DEFAULT);
         }
+        IntegerStamp maxTripCountStamp = (IntegerStamp) effectiveMaxTripCount.stamp(NodeView.DEFAULT);
+        int ivStampBits = ((IntegerStamp) stamp).getBits();
+        if (maxTripCountStamp.getBits() >= ivStampBits) {
+            /*
+             * The exact overflow checks use signed arithmetic, so the unsigned maxTripCount must not be
+             * above the (signed) maximum of the IV's native width.
+             */
+            ValueNode signedMax = ConstantNode.forIntegerStamp(maxTripCountStamp, NumUtil.maxValue(ivStampBits), graph());
+            LogicNode maxTripCountTooBig = IntegerBelowNode.create(signedMax, effectiveMaxTripCount, NodeView.DEFAULT);
+            if (!maxTripCountTooBig.isContradiction()) {
+                conditions.add(graph().addOrUniqueWithInputs(maxTripCountTooBig));
+            }
+        }
         ValueNode convertedMaxTripCount = effectiveMaxTripCount;
-        if (!convertedMaxTripCount.stamp(NodeView.DEFAULT).isCompatible(stamp)) {
+        if (!maxTripCountStamp.isCompatible(stamp)) {
             convertedMaxTripCount = IntegerConvertNode.convertUnsigned(convertedMaxTripCount, stamp, graph(), NodeView.DEFAULT);
         }
         ValueNode tripCountMinusOne = MathUtil.sub(graph(), convertedMaxTripCount, ConstantNode.forIntegerStamp(stamp, 1, graph()));

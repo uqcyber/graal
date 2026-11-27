@@ -459,7 +459,7 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
         final boolean supportsStubBasedPlugins = !SubstrateOptions.useLLVMBackend();
 
         SubstrateTarget target = SubstrateTarget.singleton();
-        NativeImageGenerator.registerGraphBuilderPlugins(featureHandler, runtimeConfig, hostedProviders, config.getMetaAccess(), config.getUniverse(), config.getNativeLibraries(),
+        NativeImageGenerator.registerGraphBuilderPlugins(featureHandler, hostedProviders, config.getMetaAccess(), config.getNativeLibraries(),
                         config.getImageClassLoader(), ParsingReason.JITCompilation, ((Inflation) config.getBigBang()).getAnnotationSubstitutionProcessor(),
                         new SubstrateClassInitializationPlugin(config.getHostVM()), target, supportsStubBasedPlugins);
 
@@ -528,7 +528,8 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
         /*
          * Ensure runtime snippet graphs are analyzed.
          */
-        NativeImageGenerator.performSnippetGraphAnalysis(config.getBigBang(), replacements, config.getBigBang().getOptions(), objectTransformer);
+        Inflation bb = (Inflation) config.getBigBang();
+        NativeImageGenerator.performSnippetGraphAnalysis(bb, replacements, bb.getOptions(), objectTransformer);
 
         /*
          * Ensure that all snippet methods have their SubstrateMethod object created by the object
@@ -922,9 +923,8 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
             if (key == RUNTIME_COMPILED_METHOD) {
                 /*
                  * For runtime compiled methods, we must be careful to ensure new SubstrateTypes are
-                 * not created during the AnalysisStrengthenGraphsPhase. If the type does not
-                 * already exist at this point (which is after the analysis phase), then we must
-                 * return false.
+                 * not created during graph strengthening. If the type does not already exist at
+                 * this point (which is after the analysis phase), then we must return false.
                  */
                 return (t) -> objectReplacer.typeCreated(t);
             }
@@ -1274,9 +1274,10 @@ public final class RuntimeCompilationFeature implements Feature, RuntimeCompilat
 }
 
 /**
- * Same behavior as {@link SubstrateMetaAccessExtensionProvider}, but operating on
- * {@link AnalysisType} instead of {@link SharedType} since parsing of graphs for runtime
- * compilation happens in the Analysis universe.
+ * Similar to {@link SubstrateMetaAccessExtensionProvider}, but operating on {@link AnalysisType}
+ * instead of {@link SharedType} since parsing of graphs for runtime compilation happens in the
+ * Analysis universe. Constant instance offsets are not resolved here because they may use the
+ * image layout while {@link AnalysisType} resolves offsets using the builder VM layout.
  */
 class GraphPrepareMetaAccessExtensionProvider implements MetaAccessExtensionProvider {
 
@@ -1313,6 +1314,11 @@ class GraphPrepareMetaAccessExtensionProvider implements MetaAccessExtensionProv
          * com.oracle.svm.core.StaticFieldsSupport for details on the static field base during
          * analysis, compilation, and JIT compilation.
          */
+        return null;
+    }
+
+    @Override
+    public ResolvedJavaField getInstanceFieldForAccess(ResolvedJavaType receiverType, long offset, JavaKind accessKind) {
         return null;
     }
 }

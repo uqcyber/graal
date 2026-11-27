@@ -39,8 +39,8 @@ import com.oracle.svm.core.graal.snippets.GCAllocationSupport;
 import com.oracle.svm.core.heap.Pod;
 import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
-import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
-import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.guest.staging.snippets.SubstrateForeignCallTarget;
+import com.oracle.svm.guest.staging.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.ContinuationSupport;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.BuildtimeAccessOnly;
 import com.oracle.svm.shared.singletons.traits.BuiltinTraits.NoLayeredCallbacks;
@@ -94,7 +94,7 @@ public class GenScavengeAllocationSupport implements GCAllocationSupport {
 
     @Override
     public boolean shouldAllocateInTLAB(UnsignedWord size, boolean isArray) {
-        return !isArray || arrayAllocatedInAlignedChunk(size);
+        return !isArray || shouldAllocateInAlignedChunk(size);
     }
 
     @Override
@@ -113,7 +113,7 @@ public class GenScavengeAllocationSupport implements GCAllocationSupport {
     }
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
-    public static boolean arrayAllocatedInAlignedChunk(UnsignedWord objectSize) {
+    public static boolean shouldAllocateInAlignedChunk(UnsignedWord objectSize) {
         return objectSize.belowThan(HeapParameters.getLargeArrayThreshold());
     }
 

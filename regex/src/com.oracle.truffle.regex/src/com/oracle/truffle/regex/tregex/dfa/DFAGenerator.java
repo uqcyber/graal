@@ -51,6 +51,7 @@ import java.util.Map;
 import java.util.Objects;
 
 import org.graalvm.collections.EconomicMap;
+import org.graalvm.collections.Equivalence;
 import org.graalvm.collections.MapCursor;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -71,6 +72,7 @@ import com.oracle.truffle.regex.tregex.automaton.TransitionBuilder;
 import com.oracle.truffle.regex.tregex.automaton.TransitionConstraint;
 import com.oracle.truffle.regex.tregex.automaton.TransitionOp;
 import com.oracle.truffle.regex.tregex.automaton.TransitionSet;
+import com.oracle.truffle.regex.tregex.buffer.ByteArrayBuffer;
 import com.oracle.truffle.regex.tregex.buffer.CompilationBuffer;
 import com.oracle.truffle.regex.tregex.buffer.IntArrayBuffer;
 import com.oracle.truffle.regex.tregex.buffer.LongArrayBuffer;
@@ -81,33 +83,30 @@ import com.oracle.truffle.regex.tregex.nfa.NFAState;
 import com.oracle.truffle.regex.tregex.nfa.NFAStateTransition;
 import com.oracle.truffle.regex.tregex.nfa.NFATraceFinderGenerator;
 import com.oracle.truffle.regex.tregex.nodes.dfa.AllTransitionsInOneTreeMatcher;
-import com.oracle.truffle.regex.tregex.nodes.dfa.CGTrackingAnchoredFinalTransitionNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.CGTrackingDFAStateNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.CGTrackingPreFinalTransitionNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.CGTrackingTransitionNode;
+import com.oracle.truffle.regex.tregex.nodes.dfa.CGTrackingAnchoredFinalTransition;
+import com.oracle.truffle.regex.tregex.nodes.dfa.CGTrackingDFAState;
+import com.oracle.truffle.regex.tregex.nodes.dfa.CGTrackingPreFinalTransition;
+import com.oracle.truffle.regex.tregex.nodes.dfa.CGTrackingTransition;
 import com.oracle.truffle.regex.tregex.nodes.dfa.CounterTracker;
 import com.oracle.truffle.regex.tregex.nodes.dfa.CounterTrackerData;
 import com.oracle.truffle.regex.tregex.nodes.dfa.DFAAbstractNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFAAbstractStateNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFAAbstractTransitionNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFABQTrackingStateNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFABQTrackingTransitionConstraintsNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFABQTrackingTransitionOpsNode;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFAAbstractState;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFAAbstractTransition;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFABQTrackingState;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFABQTrackingTransitionConstraints;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFABQTrackingTransitionOps;
 import com.oracle.truffle.regex.tregex.nodes.dfa.DFACaptureGroupLazyTransition;
 import com.oracle.truffle.regex.tregex.nodes.dfa.DFACaptureGroupPartialTransition;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFACaptureGroupPartialTransition.IndexOperation;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFACaptureGroupPartialTransition.LastGroupUpdate;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFAFindInnerLiteralStateNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFAInitialStateNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFASimpleCGTrackingStateNode;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFAFindInnerLiteralState;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFAInitialState;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFASimpleCGTrackingState;
 import com.oracle.truffle.regex.tregex.nodes.dfa.DFASimpleCGTransition;
-import com.oracle.truffle.regex.tregex.nodes.dfa.DFAStateNode;
-import com.oracle.truffle.regex.tregex.nodes.dfa.Matchers;
+import com.oracle.truffle.regex.tregex.nodes.dfa.DFAState;
 import com.oracle.truffle.regex.tregex.nodes.dfa.SequentialMatchers;
 import com.oracle.truffle.regex.tregex.nodes.dfa.TRegexDFAExecutorDebugRecorder;
 import com.oracle.truffle.regex.tregex.nodes.dfa.TRegexDFAExecutorNode;
 import com.oracle.truffle.regex.tregex.nodes.dfa.TRegexDFAExecutorProperties;
-import com.oracle.truffle.regex.tregex.nodes.dfa.TraceFinderDFAStateNode;
+import com.oracle.truffle.regex.tregex.nodes.dfa.TraceFinderDFAState;
 import com.oracle.truffle.regex.tregex.parser.Counter;
 import com.oracle.truffle.regex.tregex.parser.RegexProperties;
 import com.oracle.truffle.regex.tregex.parser.ast.CharacterClass;
@@ -130,6 +129,18 @@ import com.oracle.truffle.regex.util.TBitSet;
 public final class DFAGenerator implements JsonConvertible {
 
     private static final DFAStateTransitionBuilder[] EMPTY_TRANSITIONS_ARRAY = new DFAStateTransitionBuilder[0];
+    private static final Equivalence BYTE_ARRAY_EQUIVALENCE = new Equivalence() {
+
+        @Override
+        public boolean equals(Object a, Object b) {
+            return Arrays.equals((byte[]) a, (byte[]) b);
+        }
+
+        @Override
+        public int hashCode(Object o) {
+            return Arrays.hashCode((byte[]) o);
+        }
+    };
 
     private final TRegexCompilationRequest compilationRequest;
     private final NFA nfa;
@@ -139,7 +150,7 @@ public final class DFAGenerator implements JsonConvertible {
     private final boolean pruneUnambiguousPaths;
 
     private final Map<DFAStateNodeBuilder, DFAStateNodeBuilder> stateMap = new HashMap<>();
-    private final Map<DFAAbstractTransitionNode, DFAAbstractTransitionNode> dfaTransitionsDedupMap = new HashMap<>();
+    private final Map<DFAAbstractTransition, DFAAbstractTransition> dfaTransitionsDedupMap = new HashMap<>();
     private final ArrayDeque<DFAStateNodeBuilder> expansionQueue = new ArrayDeque<>();
     private final int[] boundedQuantifierTrackerSizes;
     private final TBitSet bqTrivialAlwaysReEnter;
@@ -150,6 +161,10 @@ public final class DFAGenerator implements JsonConvertible {
     private final DFAStateNodeBuilder lookupDummyState;
     private final Counter transitionIDCounter;
     private final Counter cgPartialTransitionIDCounter = new Counter.ThresholdCounter(TRegexOptions.TRegexMaxDFACGPartialTransitions, "too many partial transitions");
+    private final EconomicMap<byte[], Integer> cgPartialTransitionIds = EconomicMap.create(BYTE_ARRAY_EQUIVALENCE);
+    private final ArrayList<byte[]> cgPartialTransitionRecords = new ArrayList<>();
+    private final DFACaptureGroupLazyTransition.FlatRecordBuilder cgTransitionRecordBuilder;
+    private final DFASimpleCGTransition.Builder simpleCGTransitionBuilder = new DFASimpleCGTransition.Builder();
     private int maxNumberOfNfaStates = 1;
     private boolean hasAmbiguousStates = false;
     private boolean doSimpleCG = false;
@@ -163,11 +178,12 @@ public final class DFAGenerator implements JsonConvertible {
 
     private List<DFAStateTransitionBuilder[]> bfsTraversalCur;
     private List<DFAStateTransitionBuilder[]> bfsTraversalNext;
-    private EconomicMap<Integer, DFAAbstractStateNode> stateReplacements;
+    private EconomicMap<Integer, DFAAbstractState> stateReplacements;
 
     private TRegexDFAExecutorNode innerLiteralPrefixMatcher = null;
 
     private final SequentialMatchers.Builder matchersBuilder;
+    private final List<AllTransitionsInOneTreeMatcher> treeMatchers = new ArrayList<>();
     private final List<TruffleString.CodePointSet> indexOfParams = new ArrayList<>();
 
     public DFAGenerator(TRegexCompilationRequest compilationRequest, NFA nfa, TRegexDFAExecutorProperties executorProps, CompilationBuffer compilationBuffer) {
@@ -178,13 +194,12 @@ public final class DFAGenerator implements JsonConvertible {
         this.pruneUnambiguousPaths = executorProps.isBackward() && nfa.isTraceFinderNFA() && nfa.hasReverseUnAnchoredEntry();
         this.compilationBuffer = compilationBuffer;
         this.cgPartialTransitions = debugMode() ? new ArrayList<>() : null;
+        this.cgTransitionRecordBuilder = new DFACaptureGroupLazyTransition.FlatRecordBuilder(debugMode());
         this.bfsTraversalCur = needBFSTraversalLists() ? new ArrayList<>() : null;
         this.bfsTraversalNext = needBFSTraversalLists() ? new ArrayList<>() : null;
-        this.cgPartialTransitionIDCounter.inc(); // zero is reserved for static empty instance
+        byte[] emptyCGPartialTransitionRecord = internCGPartialTransition(DFACaptureGroupPartialTransition.getEmptyRecord());
+        assert getCGPartialTransitionId(emptyCGPartialTransitionRecord) == 0;
         this.lookupDummyState = new DFAStateNodeBuilder((short) -1, null, false, false, isForward(), isForward() && !isBooleanMatch());
-        if (debugMode()) {
-            registerCGPartialTransitionDebugInfo(new DFACaptureGroupTransitionBuilder.PartialTransitionDebugInfo(DFACaptureGroupPartialTransition.getEmptyInstance()));
-        }
         assert !nfa.isDead();
         this.canonicalizer = new DFATransitionCanonicalizer(this);
         this.matchersBuilder = nfa.getAst().getEncoding().createMatchersBuilder();
@@ -271,15 +286,40 @@ public final class DFAGenerator implements JsonConvertible {
         }
     }
 
-    public Counter getCgPartialTransitionIDCounter() {
-        return cgPartialTransitionIDCounter;
+    public byte[] internCGPartialTransition(byte[] partialTransitionRecord) {
+        Integer existingId = cgPartialTransitionIds.get(partialTransitionRecord);
+        if (existingId != null) {
+            return cgPartialTransitionRecords.get(existingId);
+        }
+        int id = cgPartialTransitionIDCounter.inc();
+        assert id == cgPartialTransitionRecords.size();
+        cgPartialTransitionIds.put(partialTransitionRecord, id);
+        cgPartialTransitionRecords.add(partialTransitionRecord);
+        if (debugMode()) {
+            cgPartialTransitions.add(new DFACaptureGroupTransitionBuilder.PartialTransitionDebugInfo(partialTransitionRecord, id));
+        }
+        return partialTransitionRecord;
+    }
+
+    public int getCGPartialTransitionId(byte[] partialTransitionRecord) {
+        Integer id = cgPartialTransitionIds.get(partialTransitionRecord);
+        assert id != null;
+        return id;
+    }
+
+    public int getCGPartialTransitionId(int partialTransitionRef) {
+        assert debugMode();
+        return getCGPartialTransitionId(cgTransitionRecordBuilder.getPartialTransitionRecord(partialTransitionRef));
     }
 
     public void registerCGPartialTransitionDebugInfo(DFACaptureGroupTransitionBuilder.PartialTransitionDebugInfo partialTransition) {
-        if (cgPartialTransitions.size() == partialTransition.getNode().getId()) {
-            cgPartialTransitions.add(partialTransition);
+        int id = getCGPartialTransitionId(partialTransition.getRecord());
+        partialTransition.setId(id);
+        DFACaptureGroupTransitionBuilder.PartialTransitionDebugInfo existing = cgPartialTransitions.get(id);
+        if (!existing.hasResultMapping()) {
+            cgPartialTransitions.set(id, partialTransition);
         } else {
-            assert partialTransition.getNode() == cgPartialTransitions.get(partialTransition.getNode().getId()).getNode();
+            assert existing.getRecord() == partialTransition.getRecord();
         }
     }
 
@@ -362,11 +402,11 @@ public final class DFAGenerator implements JsonConvertible {
             }
         }
         if (executorProps.canFindStart()) {
-            assert isForward() && getReplacement(getUnanchoredInitialState().getId()) instanceof DFAFindInnerLiteralStateNode;
+            assert isForward() && getReplacement(getUnanchoredInitialState().getId()) instanceof DFAFindInnerLiteralState;
             entryStateIDs = new short[]{(short) getUnanchoredInitialState().getId(), (short) getUnanchoredInitialState().getId()};
         }
         assert nodes.get(0) == null;
-        nodes.set(0, new DFAInitialStateNode(entryStateIDs, cgLastTransition));
+        nodes.set(0, new DFAInitialState(entryStateIDs, cgLastTransition));
         executorProps.setSimpleCG(doSimpleCG);
         executorProps.setSimpleCGMustCopy(simpleCGMustCopy);
         TRegexDFAExecutorDebugRecorder debugRecorder = TRegexDFAExecutorDebugRecorder.create(getOptions(), this);
@@ -378,7 +418,10 @@ public final class DFAGenerator implements JsonConvertible {
         checkIfAllQuantifierOperationsAreSupported(nodes, counterTrackers);
 
         return new TRegexDFAExecutorNode(nfa.getAst().getSource(), executorProps, getNfa().getAst().getNumberOfCaptureGroups(), maxNumberOfNfaStates,
-                        indexOfParams.toArray(TruffleString.CodePointSet[]::new), nodes.toArray(DFAAbstractNode[]::new), matchersBuilder.finish(),
+                        indexOfParams.toArray(TruffleString.CodePointSet[]::new), nodes.toArray(DFAAbstractNode[]::new), matchersBuilder.getEncodedMatchers(),
+                        matchersBuilder.getMatcherRecords(), treeMatchers.isEmpty() ? null : treeMatchers.toArray(AllTransitionsInOneTreeMatcher[]::new),
+                        isGenericCG() ? cgTransitionRecordBuilder.getPartialTransitionRecords() : doSimpleCG ? simpleCGTransitionBuilder.getTransitionRecords() : null,
+                        isGenericCG() ? cgTransitionRecordBuilder.getLazyTransitionRecords() : null,
                         debugRecorder, innerLiteralPrefixMatcher, counterDataBuilder, counterTrackers);
     }
 
@@ -808,10 +851,10 @@ public final class DFAGenerator implements JsonConvertible {
      */
     private static final class BQOpBucket {
         private final ArrayList<DFAStateTransitionBuilder> transitions = new ArrayList<>();
-        private DFABQTrackingTransitionOpsNode bqTransition = null;
+        private DFABQTrackingTransitionOps bqTransition = null;
         private BQOpBucket parent;
 
-        DFABQTrackingTransitionOpsNode getBQTransition(DFAGenerator dfaGen, ObjectArrayBuffer<DFAAbstractNode> nodes, DFAStateTransitionBuilder t, int curLevel) {
+        DFABQTrackingTransitionOps getBQTransition(DFAGenerator dfaGen, ObjectArrayBuffer<DFAAbstractNode> nodes, DFAStateTransitionBuilder t, int curLevel) {
             if (bqTransition != null) {
                 return bqTransition;
             }
@@ -819,7 +862,7 @@ public final class DFAGenerator implements JsonConvertible {
             int fromIndex = ops.length - curLevel;
             int toIndex = fromIndex;
             BQOpBucket curBucket = this;
-            DFABQTrackingTransitionOpsNode parentTransition = null;
+            DFABQTrackingTransitionOps parentTransition = null;
             do {
                 parentTransition = curBucket.bqTransition;
                 if (parentTransition != null) {
@@ -831,23 +874,23 @@ public final class DFAGenerator implements JsonConvertible {
             short successorID = parentTransition == null ? (short) t.getTarget().getId() : parentTransition.getId();
             assert fromIndex >= 0 && fromIndex < ops.length && toIndex > fromIndex && toIndex <= ops.length;
             long[] opsSlice = Arrays.copyOfRange(ops, fromIndex, toIndex);
-            bqTransition = insertNode(nodes, new DFABQTrackingTransitionOpsNode(dfaGen.nextID++, successorID, opsSlice));
+            bqTransition = insertNode(nodes, new DFABQTrackingTransitionOps(dfaGen.nextID++, successorID, opsSlice));
             return bqTransition;
         }
     }
 
     /**
      * Transforms all DFA transitions' {@link TransitionOp quantifier operations} into
-     * {@link DFABQTrackingTransitionOpsNode}s, de-duplicating equal operations where possible.
+     * {@link DFABQTrackingTransitionOps}s, de-duplicating equal operations where possible.
      * <p>
      * De-duplication is done per DFA state by comparing all preceding transition's operations in
      * reverse order and merging them into a reverse tree structure. For example, if a state has two
      * predecessors, where predecessor 0 performs a {@link TransitionOp#set1} followed by
      * {@link TransitionOp#inc}, and predecessor 1 performs a {@link TransitionOp#maintain} followed
      * by {@link TransitionOp#inc}, the two {@link TransitionOp#inc inc} operations would be merged
-     * into a single {@link DFABQTrackingTransitionOpsNode} whose successor would be the DFA state,
+     * into a single {@link DFABQTrackingTransitionOps} whose successor would be the DFA state,
      * and the {@link TransitionOp#set1 set1} and {@link TransitionOp#maintain maintain} operations
-     * would be put into separate {@link DFABQTrackingTransitionOpsNode}s whose successor would be
+     * would be put into separate {@link DFABQTrackingTransitionOps}s whose successor would be
      * the merged {@link TransitionOp#inc inc}-node.
      */
     private void createBQTransitions(ObjectArrayBuffer<DFAAbstractNode> nodes) {
@@ -862,7 +905,7 @@ public final class DFAGenerator implements JsonConvertible {
                 if (predecessors[0].getOperations() == null || predecessors[0].getOperations().length == 0) {
                     continue;
                 }
-                predecessors[0].setBqTransition(insertNode(nodes, new DFABQTrackingTransitionOpsNode(nextID++, (short) s.getId(), predecessors[0].getOperations())));
+                predecessors[0].setBqTransition(insertNode(nodes, new DFABQTrackingTransitionOps(nextID++, (short) s.getId(), predecessors[0].getOperations())));
                 continue;
             }
             EconomicMap<Long, BQOpBucket> topLevelBuckets = bucketStack.get(0);
@@ -997,7 +1040,7 @@ public final class DFAGenerator implements JsonConvertible {
 
     private static void checkIfAllQuantifierOperationsAreSupported(ObjectArrayBuffer<DFAAbstractNode> nodes, CounterTracker[] counterTrackers) {
         for (DFAAbstractNode node : nodes) {
-            if (node instanceof DFABQTrackingTransitionOpsNode t) {
+            if (node instanceof DFABQTrackingTransitionOps t) {
                 for (long op : t.getOperations()) {
                     int qId = TransitionOp.getQuantifierID(op);
                     if (!counterTrackers[qId].support(op)) {
@@ -1415,7 +1458,7 @@ public final class DFAGenerator implements JsonConvertible {
                             // found a state containing the literal's end that is NOT dominated by the first occurrence
                             // of such a state, implying that there are at least two parallel paths through the DFA that
                             // could be taken on the literal's first occurrence, which is not supported by
-                            // DFAFindInnerLiteralStateNode - bail out.
+                            // DFAFindInnerLiteralState - bail out.
                             bfsTraversalNext.clear();
                             return;
                         }
@@ -1453,7 +1496,7 @@ public final class DFAGenerator implements JsonConvertible {
              * Redirect all transitions to prefix states to the initial state. The prefix states are
              * all covered/duplicated by the backward matcher, so instead of going to the original
              * prefix states (where "prefix" in this case means the part of the regex preceding the
-             * literal), we can go to the DFAFindInnerLiteralStateNode that is inserted as the
+             * literal), we can go to the DFAFindInnerLiteralState that is inserted as the
              * initial state, and benefit from the vectorized search for the literal. An example for
              * why this is important: Given the regex /.?abc[0-9]/, the "inner literal" is abc, and
              * the prefix is .?. The dot (.) matches everything except newlines. When performing a
@@ -1519,7 +1562,7 @@ public final class DFAGenerator implements JsonConvertible {
             nfa.getReverseUnAnchoredEntry().setSource(reverseUnAnchoredInitialState);
         }
         executorProps.setCanFindStart(innerLiteralCanFindMatchStart(unanchoredInitialState, literalLastDFAState));
-        registerStateReplacement(unanchoredInitialState.getId(), new DFAFindInnerLiteralStateNode((short) unanchoredInitialState.getId(),
+        registerStateReplacement(unanchoredInitialState.getId(), new DFAFindInnerLiteralState((short) unanchoredInitialState.getId(),
                         new short[]{(short) literalLastDFAState.getId()}, nfa.getAst().extractInnerLiteral()));
     }
 
@@ -1602,14 +1645,14 @@ public final class DFAGenerator implements JsonConvertible {
         return true;
     }
 
-    private void registerStateReplacement(int id, DFAAbstractStateNode replacement) {
+    private void registerStateReplacement(int id, DFAAbstractState replacement) {
         if (stateReplacements == null) {
             stateReplacements = EconomicMap.create();
         }
         stateReplacements.put(id, replacement);
     }
 
-    private DFAAbstractStateNode getReplacement(int id) {
+    private DFAAbstractState getReplacement(int id) {
         return stateReplacements == null ? null : stateReplacements.get(id);
     }
 
@@ -1649,7 +1692,7 @@ public final class DFAGenerator implements JsonConvertible {
 
             assert s.getId() <= Short.MAX_VALUE;
             short id = (short) s.getId();
-            DFAAbstractStateNode replacement = getReplacement(id);
+            DFAAbstractState replacement = getReplacement(id);
             if (replacement != null) {
                 nodes.set(id, replacement);
                 continue;
@@ -1702,7 +1745,7 @@ public final class DFAGenerator implements JsonConvertible {
                     loopToSelf = (short) i;
                     CodePointSet loopMB = t.getCodePointSet();
                     CodePointSet inverse = loopMB.createInverse(getEncoding());
-                    if (coversCharSpace && !loopMB.matchesEverything(getEncoding()) && !(getEncoding().isUTF16() && inverse.intersects(Constants.SURROGATES))) {
+                    if (!loopMB.matchesEverything(getEncoding()) && !(getEncoding().isUTF16() && inverse.intersects(Constants.SURROGATES))) {
                         TruffleString.CodePointSet indexOfParam = TruffleString.CodePointSet.fromRanges(inverse.getRanges(), getEncoding().getTStringEncoding());
                         indexOfIsFast = checkIndexOfIsFast(indexOfParam);
                         if (indexOfIsFast != 0) {
@@ -1735,7 +1778,7 @@ public final class DFAGenerator implements JsonConvertible {
                         for (int j = 0; j < tConstraints.length; j++) {
                             tSuccessors[j] = s.getSuccessors()[iT + j].getBqSuccessor();
                         }
-                        successors[i] = insertNode(nodes, new DFABQTrackingTransitionConstraintsNode(nextID++, tSuccessors, tConstraints)).getId();
+                        successors[i] = insertNode(nodes, new DFABQTrackingTransitionConstraints(nextID++, tSuccessors, tConstraints)).getId();
                     }
                 } else {
                     successors[i] = (short) t.getTarget().getId();
@@ -1744,50 +1787,51 @@ public final class DFAGenerator implements JsonConvertible {
                 iT += trackBoundedQuantifiers() ? constraints.get(i).length() : 1;
             }
 
-            final Matchers matchers;
+            final int matcherRef;
             // Very conservative heuristic for whether we should use AllTransitionsInOneTreeMatcher.
             // TODO: Potential benefits of this should be further explored.
             boolean useTreeTransitionMatcher = nRanges > 1 && MathUtil.log2ceil(nRanges + 2) * 8 < estimatedTransitionsCost && !anyConstraints;
             if (useTreeTransitionMatcher) {
-                matchers = createAllTransitionsInOneTreeMatcher(s, coversCharSpace);
+                matcherRef = DFAState.treeMatcherRef(treeMatchers.size());
+                treeMatchers.add(createAllTransitionsInOneTreeMatcher(s, coversCharSpace));
             } else {
-                matchers = getEncoding().toMatchers(matchersBuilder);
+                matcherRef = matchersBuilder.createMatcherRecord();
             }
 
             if (s.hasBackwardPrefixState()) {
                 successors[successors.length - 1] = s.getBackwardPrefixState();
             }
-            byte flags = DFAStateNode.buildFlags(s.isUnAnchoredFinalState(), s.isAnchoredFinalState(), s.hasBackwardPrefixState(), utf16MustDecode, s.isGuardedUnAnchoredFinalState(),
-                            s.isGuardedAnchoredFinalState());
-            DFAStateNode stateNode;
+            byte flags = DFAState.buildFlags(s.isUnAnchoredFinalState(), s.isAnchoredFinalState(), s.hasBackwardPrefixState(), utf16MustDecode, s.isGuardedUnAnchoredFinalState(),
+                            s.isGuardedAnchoredFinalState(), indexOfNodeId >= 0 && !coversCharSpace);
+            DFAState stateNode;
             if (isGenericCG()) {
-                stateNode = createCGTrackingDFAState(nodes, s, id, matchers, successors, indexOfNodeId, indexOfIsFast, loopToSelf, flags);
+                stateNode = createCGTrackingDFAState(nodes, s, id, matcherRef, successors, indexOfNodeId, indexOfIsFast, loopToSelf, flags);
             } else if (nfa.isTraceFinderNFA()) {
-                stateNode = new TraceFinderDFAStateNode(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matchers,
+                stateNode = new TraceFinderDFAState(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matcherRef,
                                 s.getPreCalculatedUnAnchoredResult(),
                                 s.getPreCalculatedAnchoredResult());
             } else if (anyConstraints || anyOps || s.isGuardedFinalState()) {
                 assert isBooleanMatch();
-                stateNode = new DFABQTrackingStateNode(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matchers,
+                stateNode = new DFABQTrackingState(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matcherRef,
                                 s.getUnAnchoredFinalConstraints(),
                                 s.getAnchoredFinalConstraints());
             } else if (doSimpleCG) {
-                stateNode = new DFASimpleCGTrackingStateNode(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matchers,
-                                createSimpleCGTransition((short) -1, (short) -1, s.getUnAnchoredFinalStateTransition()),
+                stateNode = new DFASimpleCGTrackingState(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matcherRef,
+                                createSimpleCGTransitionRef(s.getUnAnchoredFinalStateTransition()),
                                 createAndDedupSimpleCGTransition(nodes, (short) -1, s.getAnchoredFinalStateTransition()));
             } else {
-                stateNode = new DFAStateNode(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matchers, (short) -1);
+                stateNode = new DFAState(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matcherRef, (short) -1);
             }
             nodes.set(id, stateNode);
         }
         if (isGenericCG()) {
             for (DFAStateNodeBuilder s : stateMap.values()) {
-                CGTrackingDFAStateNode cgTrackingStateNode = (CGTrackingDFAStateNode) nodes.get(s.getId());
-                DFACaptureGroupLazyTransition[] lazyTransitions = s.getLazyTransitions();
+                CGTrackingDFAState cgTrackingStateNode = (CGTrackingDFAState) nodes.get(s.getId());
+                int[] lazyTransitionRefs = s.getLazyTransitionRefs();
                 short[] successors = cgTrackingStateNode.getSuccessors();
                 for (int i = 0; i < successors.length; i++) {
                     successors[i] = dedupDFATransition(nodes, successors[i],
-                                    CGTrackingTransitionNode.create(nextID, successors[i], lazyTransitions[i], getLazyTransitionBuilder(s.getSuccessors()[i]).getLastTransitionIndex()));
+                                    CGTrackingTransition.create(nextID, successors[i], lazyTransitionRefs[i], getLazyTransitionBuilder(s.getSuccessors()[i]).getLastTransitionIndex()));
                 }
             }
         }
@@ -1831,41 +1875,41 @@ public final class DFAGenerator implements JsonConvertible {
      * branches which would do the same update operations together.
      */
     @SuppressWarnings("unchecked")
-    private CGTrackingDFAStateNode createCGTrackingDFAState(ObjectArrayBuffer<DFAAbstractNode> nodes, DFAStateNodeBuilder s,
-                    short id, Matchers matchers, short[] successors, short indexOfNodeId, byte indexOfIsFast, short loopToSelf, byte flags) {
-        DFACaptureGroupLazyTransition[] lazyTransitions = new DFACaptureGroupLazyTransition[s.getSuccessors().length];
-        final DFACaptureGroupLazyTransition lazyPreFinalTransition;
-        final DFACaptureGroupLazyTransition lazyPreAnchoredFinalTransition;
+    private CGTrackingDFAState createCGTrackingDFAState(ObjectArrayBuffer<DFAAbstractNode> nodes, DFAStateNodeBuilder s,
+                    short id, int matcherRef, short[] successors, short indexOfNodeId, byte indexOfIsFast, short loopToSelf, byte flags) {
+        int[] lazyTransitionRefs = new int[s.getSuccessors().length];
+        final int lazyPreFinalTransitionRef;
+        final int lazyPreAnchoredFinalTransitionRef;
         DFACaptureGroupLazyTransitionBuilder firstPredecessor = getLazyTransitionBuilder(s.getPredecessors()[0]);
         int nMaps = s.getSuccessors().length;
-        int iTransitionToFinalState = firstPredecessor.getTransitionToFinalState() == null ? -1 : nMaps++;
-        int iTransitionToAnchoredFinalState = firstPredecessor.getTransitionToAnchoredFinalState() == null ? -1 : nMaps++;
-        EconomicMap<DFACaptureGroupPartialTransition, ArrayList<Integer>>[] maps = new EconomicMap[nMaps];
+        int iTransitionToFinalState = firstPredecessor.getTransitionToFinalStateRecord() == null ? -1 : nMaps++;
+        int iTransitionToAnchoredFinalState = firstPredecessor.getTransitionToAnchoredFinalStateRecord() == null ? -1 : nMaps++;
+        EconomicMap<byte[], ArrayList<Integer>>[] maps = new EconomicMap[nMaps];
         int maxDedupSize = 0;
         // for every successor, group all preceding transitions by DFACaptureGroupPartialTransition
         for (int i = 0; i < maps.length; i++) {
-            EconomicMap<DFACaptureGroupPartialTransition, ArrayList<Integer>> dedup = EconomicMap.create();
+            EconomicMap<byte[], ArrayList<Integer>> dedup = EconomicMap.create(Equivalence.IDENTITY);
             maps[i] = dedup;
             for (int j = 0; j < s.getPredecessors().length; j++) {
                 DFACaptureGroupLazyTransitionBuilder predecessor = getLazyTransitionBuilder(s.getPredecessors()[j]);
-                assert iTransitionToFinalState >= 0 || predecessor.getTransitionToFinalState() == null;
-                assert iTransitionToAnchoredFinalState >= 0 || predecessor.getTransitionToAnchoredFinalState() == null;
-                DFACaptureGroupPartialTransition partialTransition;
-                if (i < predecessor.getPartialTransitions().length) {
-                    partialTransition = predecessor.getPartialTransitions()[i];
+                assert iTransitionToFinalState >= 0 || predecessor.getTransitionToFinalStateRecord() == null;
+                assert iTransitionToAnchoredFinalState >= 0 || predecessor.getTransitionToAnchoredFinalStateRecord() == null;
+                byte[] partialTransitionRecord;
+                if (i < predecessor.getPartialTransitionRecords().length) {
+                    partialTransitionRecord = predecessor.getPartialTransitionRecords()[i];
                 } else if (i == iTransitionToAnchoredFinalState) {
-                    partialTransition = predecessor.getTransitionToAnchoredFinalState();
+                    partialTransitionRecord = predecessor.getTransitionToAnchoredFinalStateRecord();
                 } else {
                     assert i == iTransitionToFinalState;
-                    partialTransition = predecessor.getTransitionToFinalState();
+                    partialTransitionRecord = predecessor.getTransitionToFinalStateRecord();
                 }
-                assert partialTransition != null;
-                if (dedup.containsKey(partialTransition)) {
-                    dedup.get(partialTransition).add(j);
+                assert partialTransitionRecord != null;
+                if (dedup.containsKey(partialTransitionRecord)) {
+                    dedup.get(partialTransitionRecord).add(j);
                 } else {
                     ArrayList<Integer> list = new ArrayList<>();
                     list.add(j);
-                    dedup.put(partialTransition, list);
+                    dedup.put(partialTransitionRecord, list);
                 }
             }
             maxDedupSize = Math.max(maxDedupSize, dedup.size());
@@ -1878,10 +1922,10 @@ public final class DFAGenerator implements JsonConvertible {
             for (DFAStateTransitionBuilder p : s.getPredecessors()) {
                 getLazyTransitionBuilder(p).setLastTransitionIndex(DFACaptureGroupLazyTransitionBuilder.DO_NOT_SET_LAST_TRANSITION);
             }
-            lazyPreAnchoredFinalTransition = createSingleLazyTransition(maps, iTransitionToAnchoredFinalState);
-            lazyPreFinalTransition = createSingleLazyTransition(maps, iTransitionToFinalState);
-            for (int i = 0; i < lazyTransitions.length; i++) {
-                lazyTransitions[i] = createSingleLazyTransition(maps, i);
+            lazyPreAnchoredFinalTransitionRef = createSingleLazyTransition(maps, iTransitionToAnchoredFinalState);
+            lazyPreFinalTransitionRef = createSingleLazyTransition(maps, iTransitionToFinalState);
+            for (int i = 0; i < lazyTransitionRefs.length; i++) {
+                lazyTransitionRefs[i] = createSingleLazyTransition(maps, i);
             }
         } else if (allSameValues(maps)) {
             /*
@@ -1890,113 +1934,59 @@ public final class DFAGenerator implements JsonConvertible {
              * if-else cascade with one branch per group.
              */
             int iPartialTransition = 0;
-            MapCursor<DFACaptureGroupPartialTransition, ArrayList<Integer>> cursor = maps[0].getEntries();
+            MapCursor<byte[], ArrayList<Integer>> cursor = maps[0].getEntries();
             while (cursor.advance()) {
                 for (int i : cursor.getValue()) {
                     getLazyTransitionBuilder(s.getPredecessors()[i]).setLastTransitionIndex(iPartialTransition);
                 }
                 iPartialTransition++;
             }
-            for (int i = 0; i < lazyTransitions.length; i++) {
-                lazyTransitions[i] = createBranchesDirect(s, maps, i);
+            for (int i = 0; i < lazyTransitionRefs.length; i++) {
+                lazyTransitionRefs[i] = createBranchesDirect(s, maps, i);
             }
-            lazyPreAnchoredFinalTransition = createBranchesDirect(s, maps, iTransitionToAnchoredFinalState);
-            lazyPreFinalTransition = createBranchesDirect(s, maps, iTransitionToFinalState);
+            lazyPreAnchoredFinalTransitionRef = createBranchesDirect(s, maps, iTransitionToAnchoredFinalState);
+            lazyPreFinalTransitionRef = createBranchesDirect(s, maps, iTransitionToFinalState);
         } else {
             // There are different groupings, we will have to map them at runtime.
             for (int i = 0; i < s.getPredecessors().length; i++) {
                 getLazyTransitionBuilder(s.getPredecessors()[i]).setLastTransitionIndex(i);
             }
-            for (int i = 0; i < lazyTransitions.length; i++) {
-                lazyTransitions[i] = createWithLookup(s, maps, i);
+            for (int i = 0; i < lazyTransitionRefs.length; i++) {
+                lazyTransitionRefs[i] = createWithLookup(s, maps, i);
             }
-            lazyPreAnchoredFinalTransition = createWithLookup(s, maps, iTransitionToAnchoredFinalState);
-            lazyPreFinalTransition = createWithLookup(s, maps, iTransitionToFinalState);
+            lazyPreAnchoredFinalTransitionRef = createWithLookup(s, maps, iTransitionToAnchoredFinalState);
+            lazyPreFinalTransitionRef = createWithLookup(s, maps, iTransitionToFinalState);
         }
-        s.setLazyTransitions(lazyTransitions);
-        DFACaptureGroupPartialTransition cgLoopToSelf = null;
+        s.setLazyTransitionRefs(lazyTransitionRefs);
+        int cgLoopToSelfRef = DFACaptureGroupPartialTransition.NO_TRANSITION;
         boolean cgLoopToSelfHasDependency = false;
         if (loopToSelf >= 0) {
-            cgLoopToSelf = getLazyTransitionBuilder(s.getSuccessors()[loopToSelf]).getPartialTransitions()[loopToSelf];
-            cgLoopToSelfHasDependency = calcCGLoopToSelfDependency(cgLoopToSelf);
+            byte[] cgLoopToSelfRecord = getLazyTransitionBuilder(s.getSuccessors()[loopToSelf]).getPartialTransitionRecords()[loopToSelf];
+            cgLoopToSelfHasDependency = DFACaptureGroupPartialTransition.hasLoopToSelfDependency(cgLoopToSelfRecord);
+            cgLoopToSelfRef = cgTransitionRecordBuilder.getOrCreatePartialTransitionRef(cgLoopToSelfRecord);
         }
         short preAnchoredFinalTransition;
         if (s.getAnchoredFinalStateTransition() == null) {
             preAnchoredFinalTransition = -1;
         } else {
-            short anchoredFinalTransition = dedupDFATransition(nodes, (short) -1, new CGTrackingAnchoredFinalTransitionNode(nextID, createCGFinalTransition(s.getAnchoredFinalStateTransition())));
-            preAnchoredFinalTransition = dedupDFATransition(nodes, anchoredFinalTransition, CGTrackingPreFinalTransitionNode.create(nextID, anchoredFinalTransition, lazyPreAnchoredFinalTransition));
+            short anchoredFinalTransition = dedupDFATransition(nodes, (short) -1, new CGTrackingAnchoredFinalTransition(nextID, createCGFinalTransition(s.getAnchoredFinalStateTransition())));
+            preAnchoredFinalTransition = dedupDFATransition(nodes, anchoredFinalTransition,
+                            CGTrackingPreFinalTransition.create(nextID, anchoredFinalTransition, lazyPreAnchoredFinalTransitionRef));
         }
-        return new CGTrackingDFAStateNode(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matchers,
-                        preAnchoredFinalTransition, lazyPreFinalTransition, createCGFinalTransition(s.getUnAnchoredFinalStateTransition()), cgLoopToSelf, cgLoopToSelfHasDependency);
+        return new CGTrackingDFAState(id, flags, loopToSelf, indexOfNodeId, indexOfIsFast, successors, matcherRef,
+                        preAnchoredFinalTransition, lazyPreFinalTransitionRef, createCGFinalTransition(s.getUnAnchoredFinalStateTransition()), cgLoopToSelfRef, cgLoopToSelfHasDependency);
     }
 
-    /**
-     * Check if the capture group updates in the given looping transition have a dependency on their
-     * previous application in the loop. This happens when the transition contains a copy operation
-     * where the source array isn't updated at the same indices as the target array, for example:
-     *
-     * <pre>
-     * {@code copy array 0 -> 1}
-     * {@code update array 0, indices [0, 1]}
-     * {@code update array 1, indices [1]}
-     * </pre>
-     * <p>
-     * In this case, array 1 at index 0 will always contain the value of array 0 of the previous
-     * loop iteration. We have to take this into account in {@link CGTrackingDFAStateNode}'s
-     * {@code afterIndexOf}-method.
-     */
-    private boolean calcCGLoopToSelfDependency(DFACaptureGroupPartialTransition cgLoopToSelf) {
-        byte[] arrayCopies = cgLoopToSelf.getArrayCopies();
-        if (cgLoopToSelf.doesReorderResults() || arrayCopies.length == 0) {
-            return false;
-        }
-        int maxArrayIndex = 0;
-        for (byte i : arrayCopies) {
-            maxArrayIndex = Math.max(maxArrayIndex, Byte.toUnsignedInt(i));
-        }
-        TBitSet[] updates = new TBitSet[maxArrayIndex + 1];
-        for (IndexOperation op : cgLoopToSelf.getIndexUpdates()) {
-            if (op.getTargetArray() > maxArrayIndex) {
-                continue;
-            }
-            TBitSet bs = new TBitSet(nfa.getAst().getNumberOfCaptureGroups() * 2);
-            for (int i = 0; i < op.getNumberOfIndices(); i++) {
-                bs.set(op.getIndex(i));
-            }
-            assert updates[op.getTargetArray()] == null;
-            updates[op.getTargetArray()] = bs;
-        }
-        TBitSet cmp = new TBitSet(nfa.getAst().getNumberOfCaptureGroups() * 2);
-        for (int i = 0; i < arrayCopies.length; i += 2) {
-            int src = Byte.toUnsignedInt(arrayCopies[i]);
-            int dst = Byte.toUnsignedInt(arrayCopies[i + 1]);
-            if (updates[src] == null) {
-                continue;
-            }
-            if (updates[dst] == null) {
-                return true;
-            }
-            cmp.clear();
-            cmp.union(updates[src]);
-            cmp.subtract(updates[dst]);
-            if (!cmp.isEmpty()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private DFACaptureGroupLazyTransition createWithLookup(DFAStateNodeBuilder s,
-                    EconomicMap<DFACaptureGroupPartialTransition, ArrayList<Integer>>[] maps, int i) {
+    private int createWithLookup(DFAStateNodeBuilder s,
+                    EconomicMap<byte[], ArrayList<Integer>>[] maps, int i) {
         if (i < 0) {
-            return null;
+            return DFACaptureGroupLazyTransition.NO_TRANSITION;
         }
-        EconomicMap<DFACaptureGroupPartialTransition, ArrayList<Integer>> map = maps[i];
+        EconomicMap<byte[], ArrayList<Integer>> map = maps[i];
         if (map.size() == 1) {
             return createSingleLazyTransition(maps, i);
         }
-        DFACaptureGroupPartialTransition[] transitions = new DFACaptureGroupPartialTransition[map.size()];
+        byte[][] partialTransitionRecords = new byte[map.size()][];
         if (lookupTableRequired(map)) {
             /*
              * Generate a lookup table to map lastTransitionIndex to the current successor's
@@ -2007,16 +1997,16 @@ public final class DFAGenerator implements JsonConvertible {
                 throw new UnsupportedRegexException("too many branches in capture group tracking DFA", getNfa().getAst().getSource());
             }
             byte[] lookupTable = new byte[s.getPredecessors().length];
-            MapCursor<DFACaptureGroupPartialTransition, ArrayList<Integer>> cursor = map.getEntries();
+            MapCursor<byte[], ArrayList<Integer>> cursor = map.getEntries();
             int iCursor = 0;
             while (cursor.advance()) {
-                transitions[iCursor] = cursor.getKey();
+                partialTransitionRecords[iCursor] = cursor.getKey();
                 for (int t : cursor.getValue()) {
                     lookupTable[t] = (byte) iCursor;
                 }
                 iCursor++;
             }
-            return DFACaptureGroupLazyTransition.BranchesWithLookupTable.create(transitions, lookupTable);
+            return cgTransitionRecordBuilder.createBranchesWithLookupTable(partialTransitionRecords, lookupTable, this);
         } else {
             /*
              * There is only one group with more than one element, so we can avoid the lookup table
@@ -2024,30 +2014,30 @@ public final class DFAGenerator implements JsonConvertible {
              * than one element.
              */
             short[] possibleValues = new short[map.size() - 1];
-            MapCursor<DFACaptureGroupPartialTransition, ArrayList<Integer>> cursor = map.getEntries();
+            MapCursor<byte[], ArrayList<Integer>> cursor = map.getEntries();
             int iCursor = 0;
-            DFACaptureGroupPartialTransition last = null;
+            byte[] lastPartialTransitionRecord = null;
             while (cursor.advance()) {
-                if (cursor.getValue().size() == 1 && iCursor < transitions.length - 1) {
-                    transitions[iCursor] = cursor.getKey();
+                if (cursor.getValue().size() == 1 && iCursor < partialTransitionRecords.length - 1) {
+                    partialTransitionRecords[iCursor] = cursor.getKey();
                     possibleValues[iCursor] = cursor.getValue().get(0).shortValue();
                     iCursor++;
                 } else {
-                    assert last == null;
-                    last = cursor.getKey();
+                    assert lastPartialTransitionRecord == null;
+                    lastPartialTransitionRecord = cursor.getKey();
                 }
             }
-            if (last != null) {
-                transitions[transitions.length - 1] = last;
+            if (lastPartialTransitionRecord != null) {
+                partialTransitionRecords[partialTransitionRecords.length - 1] = lastPartialTransitionRecord;
             }
-            return DFACaptureGroupLazyTransition.BranchesIndirect.create(transitions, possibleValues);
+            return cgTransitionRecordBuilder.createBranchesIndirect(partialTransitionRecords, possibleValues, this);
         }
     }
 
     /**
      * Checks if there are more than one lists with {@code size > 1} in {@code map}.
      */
-    private static boolean lookupTableRequired(EconomicMap<DFACaptureGroupPartialTransition, ArrayList<Integer>> map) {
+    private static boolean lookupTableRequired(EconomicMap<byte[], ArrayList<Integer>> map) {
         boolean foundSizeGreaterOne = false;
         for (ArrayList<Integer> l : map.getValues()) {
             if (l.size() > 1) {
@@ -2060,42 +2050,43 @@ public final class DFAGenerator implements JsonConvertible {
         return false;
     }
 
-    private DFACaptureGroupLazyTransition.BranchesDirect createBranchesDirect(DFAStateNodeBuilder s, EconomicMap<DFACaptureGroupPartialTransition, ArrayList<Integer>>[] maps, int i) {
+    private int createBranchesDirect(DFAStateNodeBuilder s, EconomicMap<byte[], ArrayList<Integer>>[] maps, int i) {
         if (i < 0) {
-            return null;
+            return DFACaptureGroupLazyTransition.NO_TRANSITION;
         }
-        DFACaptureGroupPartialTransition[] transitions = new DFACaptureGroupPartialTransition[maps[0].size()];
-        MapCursor<DFACaptureGroupPartialTransition, ArrayList<Integer>> cursor = maps[i].getEntries();
+        byte[][] partialTransitionRecords = new byte[maps[0].size()][];
+        MapCursor<byte[], ArrayList<Integer>> cursor = maps[i].getEntries();
         while (cursor.advance()) {
             int iT = getLazyTransitionBuilder(s.getPredecessors()[cursor.getValue().get(0)]).getLastTransitionIndex();
             assert iT >= 0;
             for (int j : cursor.getValue()) {
                 assert getLazyTransitionBuilder(s.getPredecessors()[j]).getLastTransitionIndex() == iT;
             }
-            assert transitions[iT] == null;
-            transitions[iT] = cursor.getKey();
+            assert partialTransitionRecords[iT] == null;
+            partialTransitionRecords[iT] = cursor.getKey();
         }
-        return DFACaptureGroupLazyTransition.BranchesDirect.create(transitions);
+        return cgTransitionRecordBuilder.createBranchesDirect(partialTransitionRecords, this);
     }
 
-    private static DFACaptureGroupLazyTransition.Single createSingleLazyTransition(EconomicMap<DFACaptureGroupPartialTransition, ArrayList<Integer>>[] maps, int i) {
+    private int createSingleLazyTransition(EconomicMap<byte[], ArrayList<Integer>>[] maps, int i) {
         if (i < 0) {
-            return null;
+            return DFACaptureGroupLazyTransition.NO_TRANSITION;
         }
-        return DFACaptureGroupLazyTransition.Single.create(maps[i].getKeys().iterator().next());
+        return cgTransitionRecordBuilder.createSingle(maps[i].getKeys().iterator().next());
     }
 
     private DFACaptureGroupTransitionBuilder createInitialCGTransition(DFAStateNodeBuilder target) {
         assert target.isInitialState();
-        DFACaptureGroupTransitionBuilder ret = new DFACaptureGroupTransitionBuilder(null, null, null, null, null);
-        DFACaptureGroupPartialTransition[] partialTransitions = new DFACaptureGroupPartialTransition[target.getSuccessors().length];
-        Arrays.fill(partialTransitions, DFACaptureGroupPartialTransition.getEmptyInstance());
+        DFACaptureGroupTransitionBuilder ret = new DFACaptureGroupTransitionBuilder(null, null, null, null, this);
+        byte[][] partialTransitionRecords = new byte[target.getSuccessors().length][];
+        Arrays.fill(partialTransitionRecords, DFACaptureGroupPartialTransition.getEmptyRecord());
         short id = (short) transitionIDCounter.inc();
         DFACaptureGroupLazyTransitionBuilder emptyInitialTransition = new DFACaptureGroupLazyTransitionBuilder(
+                        this,
                         id,
-                        partialTransitions,
-                        target.isUnAnchoredFinalState() ? DFACaptureGroupPartialTransition.getEmptyInstance() : null,
-                        target.isAnchoredFinalState() ? DFACaptureGroupPartialTransition.getEmptyInstance() : null);
+                        partialTransitionRecords,
+                        target.isUnAnchoredFinalState() ? DFACaptureGroupPartialTransition.getEmptyRecord() : null,
+                        target.isAnchoredFinalState() ? DFACaptureGroupPartialTransition.getEmptyRecord() : null);
         ret.setId(id);
         ret.setLazyTransition(emptyInitialTransition);
         return ret;
@@ -2105,7 +2096,7 @@ public final class DFAGenerator implements JsonConvertible {
         return ((DFACaptureGroupTransitionBuilder) precedingTransitions).toLazyTransitionBuilder(compilationBuffer);
     }
 
-    private static boolean allSameValues(EconomicMap<DFACaptureGroupPartialTransition, ArrayList<Integer>>[] maps) {
+    private static boolean allSameValues(EconomicMap<byte[], ArrayList<Integer>>[] maps) {
         for (int i = 1; i < maps.length; i++) {
             if (maps[0].size() != maps[i].size()) {
                 return false;
@@ -2121,7 +2112,7 @@ public final class DFAGenerator implements JsonConvertible {
         return true;
     }
 
-    private static boolean allSameValuesInner(EconomicMap<DFACaptureGroupPartialTransition, ArrayList<Integer>> map, ArrayList<Integer> value) {
+    private static boolean allSameValuesInner(EconomicMap<byte[], ArrayList<Integer>> map, ArrayList<Integer> value) {
         for (ArrayList<Integer> v : map.getValues()) {
             if (value.equals(v)) {
                 return true;
@@ -2135,16 +2126,20 @@ public final class DFAGenerator implements JsonConvertible {
     }
 
     private DFASimpleCGTransition createSimpleCGTransition(short id, short successor, NFAStateTransition nfaTransition) {
-        boolean fullClear = isForward() && nfaTransition != null && nfa.getInitialLoopBackTransition() != null && nfaTransition.getSource() == nfa.getInitialLoopBackTransition().getSource();
-        boolean isFinalTransition = nfaTransition != null && nfaTransition.getTarget(isForward()).isFinalState();
-        return DFASimpleCGTransition.create(id, successor, nfaTransition, fullClear, isFinalTransition);
+        return DFASimpleCGTransition.create(id, successor, createSimpleCGTransitionRef(nfaTransition));
     }
 
-    private short dedupDFATransition(ObjectArrayBuffer<DFAAbstractNode> nodes, short successor, DFAAbstractTransitionNode t) {
+    private int createSimpleCGTransitionRef(NFAStateTransition nfaTransition) {
+        boolean fullClear = isForward() && nfaTransition != null && nfa.getInitialLoopBackTransition() != null && nfaTransition.getSource() == nfa.getInitialLoopBackTransition().getSource();
+        boolean isFinalTransition = nfaTransition != null && nfaTransition.getTarget(isForward()).isFinalState();
+        return simpleCGTransitionBuilder.create(nfaTransition, fullClear, isFinalTransition);
+    }
+
+    private short dedupDFATransition(ObjectArrayBuffer<DFAAbstractNode> nodes, short successor, DFAAbstractTransition t) {
         if (t == null) {
             return successor;
         }
-        DFAAbstractTransitionNode existing = dfaTransitionsDedupMap.get(t);
+        DFAAbstractTransition existing = dfaTransitionsDedupMap.get(t);
         if (existing == null) {
             nextID++;
             insertNode(nodes, t);
@@ -2273,36 +2268,41 @@ public final class DFAGenerator implements JsonConvertible {
                         byteMatchers.toArray(new AllTransitionsInOneTreeMatcher.AllTransitionsInOneTreeLeafMatcher[byteMatchers.length()]));
     }
 
-    private DFACaptureGroupPartialTransition createCGFinalTransition(NFAStateTransition transition) {
+    private int createCGFinalTransition(NFAStateTransition transition) {
         if (transition == null) {
-            return null;
+            return DFACaptureGroupPartialTransition.NO_TRANSITION;
         }
         GroupBoundaries groupBoundaries = transition.getGroupBoundaries();
-        IndexOperation[] indexUpdates = DFACaptureGroupPartialTransition.EMPTY_INDEX_OPS;
-        IndexOperation[] indexClears = DFACaptureGroupPartialTransition.EMPTY_INDEX_OPS;
-        LastGroupUpdate[] lastGroupUpdates = DFACaptureGroupPartialTransition.EMPTY_LAST_GROUP_UPDATES;
-        if (groupBoundaries.hasIndexUpdates()) {
-            indexUpdates = new IndexOperation[]{new IndexOperation(0, groupBoundaries.updatesToByteArray())};
+        ByteArrayBuffer emptyReorderSwapsAndArrayCopies = compilationBuffer.getByteArrayBuffer();
+        ByteArrayBuffer indexUpdates = compilationBuffer.getByteArrayBuffer2();
+        ByteArrayBuffer indexClears = compilationBuffer.getByteArrayBuffer3();
+        ByteArrayBuffer lastGroupUpdates = compilationBuffer.getByteArrayBuffer4();
+        int numberOfIndexUpdates = groupBoundaries.hasIndexUpdates() ? 1 : 0;
+        int numberOfIndexClears = groupBoundaries.hasIndexClears() ? 1 : 0;
+        if (numberOfIndexUpdates != 0) {
+            DFACaptureGroupTransitionBuilder.appendIndexOperation(indexUpdates, 0, groupBoundaries.getUpdateIndices());
         }
-        if (groupBoundaries.hasIndexClears()) {
-            indexClears = new IndexOperation[]{new IndexOperation(0, groupBoundaries.clearsToByteArray())};
+        if (numberOfIndexClears != 0) {
+            DFACaptureGroupTransitionBuilder.appendIndexOperation(indexClears, 0, groupBoundaries.getClearIndices());
         }
         if (groupBoundaries.hasLastGroup()) {
-            lastGroupUpdates = new LastGroupUpdate[]{new LastGroupUpdate(0, groupBoundaries.getLastGroup())};
+            DFACaptureGroupTransitionBuilder.appendLastGroupUpdate(lastGroupUpdates, 0, groupBoundaries.getLastGroup());
         }
-        DFACaptureGroupPartialTransition partialTransitionNode = DFACaptureGroupPartialTransition.create(this,
-                        DFACaptureGroupPartialTransition.EMPTY,
-                        DFACaptureGroupPartialTransition.EMPTY,
+        byte[] partialTransitionRecord = internCGPartialTransition(DFACaptureGroupPartialTransition.create(
+                        emptyReorderSwapsAndArrayCopies,
+                        emptyReorderSwapsAndArrayCopies,
                         indexUpdates,
+                        numberOfIndexUpdates,
                         indexClears,
+                        numberOfIndexClears,
                         lastGroupUpdates,
-                        (byte) DFACaptureGroupPartialTransition.FINAL_STATE_RESULT_INDEX);
+                        (byte) DFACaptureGroupPartialTransition.FINAL_STATE_RESULT_INDEX));
         if (debugMode()) {
-            DFACaptureGroupTransitionBuilder.PartialTransitionDebugInfo debugInfo = new DFACaptureGroupTransitionBuilder.PartialTransitionDebugInfo(partialTransitionNode, 1);
+            DFACaptureGroupTransitionBuilder.PartialTransitionDebugInfo debugInfo = new DFACaptureGroupTransitionBuilder.PartialTransitionDebugInfo(partialTransitionRecord, -1, 1);
             debugInfo.mapResultToNFATransition(0, transition);
             registerCGPartialTransitionDebugInfo(debugInfo);
         }
-        return partialTransitionNode;
+        return cgTransitionRecordBuilder.getOrCreatePartialTransitionRef(partialTransitionRecord);
     }
 
     void updateMaxNumberOfNFAStatesInOneTransition(int value) {

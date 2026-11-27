@@ -450,6 +450,23 @@ suite = {
       "graalCompilerSourceEdition": "ignore",
     },
 
+    "com.oracle.truffle.api.test.jdk22" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "com.oracle.truffle.api.test",
+      ],
+      "overlayTarget" : "com.oracle.truffle.api.test",
+      "checkPackagePrefix" : "false",
+      "multiReleaseJarVersion" : "22",
+      "testProject" : True,
+      "checkstyle" : "com.oracle.truffle.dsl.processor",
+      "javaCompliance" : "22+",
+      "workingSets" : "API,Truffle,Test",
+      "jacoco" : "exclude",
+      "graalCompilerSourceEdition": "ignore",
+    },
+
     "com.oracle.truffle.api.library" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
@@ -725,6 +742,7 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [
         "TRUFFLE_API",
+        "com.oracle.truffle.api.test",
         "mx:JUNIT",
         "TRUFFLE_JCODINGS",
       ],
@@ -757,6 +775,8 @@ suite = {
         "TRUFFLE_TEST",
       ],
       "requires" : [
+        "java.management",
+        "jdk.management",
         "jdk.unsupported", # sun.misc.Unsafe
       ],
       "checkstyle" : "com.oracle.truffle.api",
@@ -2048,7 +2068,7 @@ suite = {
           "java.logging",
           "java.management",
           "jdk.management",
-          "java.sql", # java.sql.date java.sql.Time
+          "static java.sql", # java.sql.date java.sql.Time, see HostSqlTypes
           "org.graalvm.collections",
           "org.graalvm.nativeimage",
           "static org.graalvm.nativebridge",

@@ -50,6 +50,8 @@ import jdk.vm.ci.meta.JavaConstant;
 public class ClassLoaderFeature implements InternalFeature {
 
     private static final String APP_PACKAGE_KEY_NAME = "ClassLoader.Packages#App";
+    private static final String PLATFORM_PACKAGE_KEY_NAME = "ClassLoader.Packages#Platform";
+    private static final String BOOT_PACKAGE_KEY_NAME = "ClassLoader.Packages#Boot";
     private static final NativeImageSystemClassLoader nativeImageSystemClassLoader = NativeImageSystemClassLoader.singleton();
 
     /**
@@ -118,20 +120,24 @@ public class ClassLoaderFeature implements InternalFeature {
             packageManager.initialize(appClassLoader, registry);
         }
 
-        var config = (FeatureImpl.DuringSetupAccessImpl) access;
+        var accessImpl = (FeatureImpl.DuringSetupAccessImpl) access;
         if (ImageLayerBuildingSupport.firstImageBuild()) {
             access.registerObjectReplacer(this::runtimeClassLoaderObjectReplacer);
             if (ImageLayerBuildingSupport.buildingInitialLayer()) {
-                config.registerObjectReachableCallback(ClassLoader.class, (_, classLoader, _) -> {
+                accessImpl.registerObjectReachabilityHandler(classLoader -> {
                     if (HostedClassLoaderPackageManagement.isGeneratedSerializationClassLoader(classLoader)) {
                         registry.registerHeapConstant(HostedClassLoaderPackageManagement.getClassLoaderSerializationLookupKey(classLoader), classLoader);
                     }
-                });
+                }, ClassLoader.class);
             }
         } else {
-            config.registerObjectToConstantReplacer(obj -> (ImageHeapConstant) replaceClassLoadersWithLayerConstant(registry, obj));
+            var hostedValuesProvider = accessImpl.getUniverse().getHostedValuesProvider();
+            // JVMCI migration blocked by GR-72593: Migrate ClassLoaderFeature to terminus
+            accessImpl.registerJVMCIObjectToConstantReplacer(constant -> (ImageHeapConstant) replaceClassLoadersWithLayerConstant(registry,
+                            hostedValuesProvider.asObject(Object.class, constant)));
             // relink packages defined in the prior layers
-            config.registerObjectToConstantReplacer(packageManager::replaceWithPriorLayerPackage);
+            accessImpl.registerJVMCIObjectToConstantReplacer(constant -> packageManager.replaceWithPriorLayerPackage(
+                            hostedValuesProvider.asObject(Object.class, constant)));
         }
     }
 
@@ -161,6 +167,8 @@ public class ClassLoaderFeature implements InternalFeature {
             registry.registerHeapConstant(ResourceLoaderKeys.PLATFORM, platformClassLoader);
             registry.registerHeapConstant(ResourceLoaderKeys.BOOT, bootClassLoader);
             registry.registerFutureHeapConstant(APP_PACKAGE_KEY_NAME, config.getMetaAccess().lookupJavaType(ConcurrentHashMap.class));
+            registry.registerFutureHeapConstant(PLATFORM_PACKAGE_KEY_NAME, config.getMetaAccess().lookupJavaType(ConcurrentHashMap.class));
+            registry.registerFutureHeapConstant(BOOT_PACKAGE_KEY_NAME, config.getMetaAccess().lookupJavaType(ConcurrentHashMap.class));
         }
 
         if (ImageLayerBuildingSupport.buildingApplicationLayer()) {
@@ -170,6 +178,8 @@ public class ClassLoaderFeature implements InternalFeature {
              */
             ScanReason reason = new OtherReason("Manual rescan triggered from " + ClassLoaderFeature.class);
             config.rescanObject(HostedClassLoaderPackageManagement.singleton().getPriorAppClassLoaderPackages(), reason);
+            config.rescanObject(HostedClassLoaderPackageManagement.singleton().getPriorPlatformClassLoaderPackages(), reason);
+            config.rescanObject(HostedClassLoaderPackageManagement.singleton().getPriorBootClassLoaderPackages(), reason);
         }
     }
 
@@ -179,6 +189,8 @@ public class ClassLoaderFeature implements InternalFeature {
         if (ImageLayerBuildingSupport.buildingApplicationLayer()) {
             var registry = CrossLayerConstantRegistry.singletonOrNull();
             registry.finalizeFutureHeapConstant(APP_PACKAGE_KEY_NAME, HostedClassLoaderPackageManagement.singleton().getAppClassLoaderPackages());
+            registry.finalizeFutureHeapConstant(PLATFORM_PACKAGE_KEY_NAME, HostedClassLoaderPackageManagement.singleton().getPlatformClassLoaderPackages());
+            registry.finalizeFutureHeapConstant(BOOT_PACKAGE_KEY_NAME, HostedClassLoaderPackageManagement.singleton().getBootClassLoaderPackages());
         }
     }
 
@@ -220,6 +232,10 @@ public class ClassLoaderFeature implements InternalFeature {
                  * register a relocatable constant.
                  */
                 return new JavaConstantWrapper(registry.getConstant(APP_PACKAGE_KEY_NAME));
+            } else if (receiver == platformClassLoader) {
+                return new JavaConstantWrapper(registry.getConstant(PLATFORM_PACKAGE_KEY_NAME));
+            } else if (receiver == bootClassLoader) {
+                return new JavaConstantWrapper(registry.getConstant(BOOT_PACKAGE_KEY_NAME));
             }
 
             return doTransform(receiver, originalValue);

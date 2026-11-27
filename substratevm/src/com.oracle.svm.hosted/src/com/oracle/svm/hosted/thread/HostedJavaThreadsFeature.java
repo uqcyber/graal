@@ -28,10 +28,11 @@ import java.util.Arrays;
 import java.util.Map;
 
 import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.hosted.RuntimeClassInitialization;
+import com.oracle.svm.util.JVMCIRuntimeClassInitializationSupport;
 
 import com.oracle.graal.pointsto.ObjectScanner.OtherReason;
 import com.oracle.graal.pointsto.ObjectScanner.ScanReason;
+import com.oracle.svm.core.deopt.RuntimeAssumptionSupport;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
 import com.oracle.svm.core.fieldvaluetransformer.JVMCIFieldValueTransformerWithAvailability;
 import com.oracle.svm.core.fieldvaluetransformer.NewInstanceOfFixedClassFieldValueTransformer;
@@ -105,15 +106,16 @@ public class HostedJavaThreadsFeature extends JavaThreadsFeature {
     @Override
     public void duringSetup(DuringSetupAccess a) {
         FeatureImpl.DuringSetupAccessImpl access = (FeatureImpl.DuringSetupAccessImpl) a;
-        access.registerObjectReachableCallback(Thread.class, (_, thread, _) -> collectReachableThreads(thread));
-        access.registerObjectReachableCallback(ThreadGroup.class, (_, group, _) -> collectReachableThreadGroups(group));
+        access.registerObjectReachabilityHandler(this::collectReachableThreads, Thread.class);
+        access.registerObjectReachabilityHandler(this::collectReachableThreadGroups, ThreadGroup.class);
 
         /*
          * This currently only means that we don't support setting custom values for
          * java.lang.ScopedValue.cacheSize at runtime.
          */
-        RuntimeClassInitialization.initializeAtBuildTime("java.lang.ScopedValue");
-        RuntimeClassInitialization.initializeAtBuildTime("java.lang.ScopedValue$Cache");
+        JVMCIRuntimeClassInitializationSupport rci = JVMCIRuntimeClassInitializationSupport.singleton();
+        rci.initializeAtBuildTime("java.lang.ScopedValue");
+        rci.initializeAtBuildTime("java.lang.ScopedValue$Cache");
     }
 
     @Override
@@ -161,6 +163,9 @@ public class HostedJavaThreadsFeature extends JavaThreadsFeature {
         registerDeferredThreadField(access, "java.util.concurrent.locks.AbstractQueuedSynchronizer$Node", "waiter");
         registerDeferredThreadField(access, "java.util.concurrent.locks.AbstractQueuedLongSynchronizer$Node", "waiter");
         registerDeferredThreadField(access, "java.util.concurrent.locks.ReentrantReadWriteLock$Sync", "firstReader");
+
+        // Analysis can observe a hosted worker as the transient runtime-assumption lock owner.
+        registerDeferredThreadField(access, RuntimeAssumptionSupport.class.getName(), "lockHolder");
 
         var trackerType = GuestAccess.get().lookupType(jdk.internal.misc.ThreadTracker.class);
         resetThreadTracker(access, "java.net.URL$ThreadTrackHolder", "TRACKER", trackerType);

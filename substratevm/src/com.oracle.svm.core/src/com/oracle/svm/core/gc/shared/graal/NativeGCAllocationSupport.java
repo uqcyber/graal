@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,15 +35,15 @@ import org.graalvm.word.impl.Word;
 
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
 import com.oracle.svm.core.graal.snippets.GCAllocationSupport;
-import com.oracle.svm.core.heap.Heap;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.heap.NoAllocationVerifier;
 import com.oracle.svm.core.heap.OutOfMemoryUtil;
 import com.oracle.svm.core.heap.Pod;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.snippets.SnippetRuntime;
 import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescriptor;
-import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
-import com.oracle.svm.core.stack.StackOverflowCheck;
+import com.oracle.svm.guest.staging.snippets.SubstrateForeignCallTarget;
+import com.oracle.svm.guest.staging.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.thread.ContinuationSupport;
 import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.guest.staging.core.threadlocal.FastThreadLocalObject;
@@ -116,7 +116,7 @@ public abstract class NativeGCAllocationSupport implements GCAllocationSupport {
     private static Object slowPathNewInstance(Word objectHeader) {
         StackOverflowCheck.singleton().makeYellowZoneAvailable();
         try {
-            DynamicHub hub = Heap.getHeap().getObjectHeader().dynamicHubFromObjectHeader(objectHeader);
+            DynamicHub hub = (DynamicHub) Heap.getHeap().getObjectHeader().dynamicHubFromObjectHeader(objectHeader);
             guaranteeAllocationAllowed("allocateInstance", hub);
 
             Object result = NativeGCAllocationSupport.singleton().allocateInstance0(hub);
@@ -131,7 +131,7 @@ public abstract class NativeGCAllocationSupport implements GCAllocationSupport {
     private static Object slowPathNewArray(Word objectHeader, int length) {
         StackOverflowCheck.singleton().makeYellowZoneAvailable();
         try {
-            DynamicHub hub = Heap.getHeap().getObjectHeader().dynamicHubFromObjectHeader(objectHeader);
+            DynamicHub hub = (DynamicHub) Heap.getHeap().getObjectHeader().dynamicHubFromObjectHeader(objectHeader);
             guaranteeAllocationAllowed("allocateArray", hub);
             checkArrayLength(length);
 
@@ -147,7 +147,7 @@ public abstract class NativeGCAllocationSupport implements GCAllocationSupport {
     private static Object slowPathNewStoredContinuation(Word objectHeader, int length) {
         StackOverflowCheck.singleton().makeYellowZoneAvailable();
         try {
-            DynamicHub hub = Heap.getHeap().getObjectHeader().dynamicHubFromObjectHeader(objectHeader);
+            DynamicHub hub = (DynamicHub) Heap.getHeap().getObjectHeader().dynamicHubFromObjectHeader(objectHeader);
             guaranteeAllocationAllowed("allocateStoredContinuation", hub);
             checkArrayLength(length);
 
@@ -163,7 +163,7 @@ public abstract class NativeGCAllocationSupport implements GCAllocationSupport {
     private static Object slowPathNewPodInstance(Word objectHeader, int length, byte[] referenceMap) {
         StackOverflowCheck.singleton().makeYellowZoneAvailable();
         try {
-            DynamicHub hub = Heap.getHeap().getObjectHeader().dynamicHubFromObjectHeader(objectHeader);
+            DynamicHub hub = (DynamicHub) Heap.getHeap().getObjectHeader().dynamicHubFromObjectHeader(objectHeader);
             guaranteeAllocationAllowed("allocatePod", hub);
             checkArrayLength(length);
 
@@ -188,6 +188,16 @@ public abstract class NativeGCAllocationSupport implements GCAllocationSupport {
 
     @Uninterruptible(reason = "The newly allocated object must be young or all its covered cards must be dirty.", callerMustBe = true, calleeMustBe = false)
     protected abstract Object allocatePod0(int length, DynamicHub hub);
+
+    public abstract DynamicHub allocateMetaspaceDynamicHub(int numVTableEntries);
+
+    public abstract byte[] allocateMetaspaceByteArray(int length);
+
+    public abstract int[] allocateMetaspaceIntArray(int length);
+
+    public abstract long[] allocateMetaspaceLongArray(int length);
+
+    public abstract Object allocateMetaspaceInstance(DynamicHub hub);
 
     @Uninterruptible(reason = CALLED_FROM_UNINTERRUPTIBLE_CODE, mayBeInlined = true)
     private static void checkArrayLength(int length) {

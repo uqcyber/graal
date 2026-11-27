@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2026, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,10 +24,12 @@
  */
 package com.oracle.svm.hosted.meta;
 
+import com.oracle.svm.core.config.ObjectLayoutCompilerSupport;
 import com.oracle.svm.hosted.ExcludeFromReferenceMapGuestValue;
 import com.oracle.svm.hosted.ContendedGuestValue;
 import java.io.Serializable;
 import java.lang.reflect.Modifier;
+import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -41,9 +43,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ForkJoinTask;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
+import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.Platform;
@@ -65,32 +66,33 @@ import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.meta.BaseLayerMethod;
 import com.oracle.graal.pointsto.meta.BaseLayerType;
 import com.oracle.graal.pointsto.results.StrengthenGraphs;
-import com.oracle.svm.core.FunctionPointerHolder;
+import com.oracle.svm.guest.staging.c.function.FunctionPointerHolder;
 import com.oracle.svm.core.MethodRefHolder;
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.BoxedRelocatedPointer;
 import com.oracle.svm.guest.staging.c.function.CFunctionOptions;
 import com.oracle.svm.core.classinitialization.ClassInitializationInfo;
-import com.oracle.svm.core.config.ObjectLayout;
+import com.oracle.svm.shared.config.ObjectLayout;
 import com.oracle.svm.core.heap.FillerArray;
 import com.oracle.svm.core.heap.FillerObject;
+import com.oracle.svm.guest.staging.core.heap.Heap;
 import com.oracle.svm.core.heap.InstanceReferenceMapEncoder;
 import com.oracle.svm.core.heap.ReferenceMapEncoder;
 import com.oracle.svm.core.heap.SmallestPossibleObject;
 import com.oracle.svm.core.heap.StoredContinuation;
 import com.oracle.svm.core.heap.SubstrateReferenceMap;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.hub.DynamicHubSupport;
+import com.oracle.svm.guest.staging.hub.DynamicHubSupport;
 import com.oracle.svm.core.hub.DynamicHubUtils;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.imagelayer.DynamicImageLayerInfo;
 import com.oracle.svm.core.imagelayer.ImageLayerBuildingSupport;
-import com.oracle.svm.core.meta.MethodOffset;
-import com.oracle.svm.core.meta.MethodPointer;
-import com.oracle.svm.core.meta.MethodRef;
+import com.oracle.svm.core.meta.MethodRefSupport;
+import com.oracle.svm.guest.staging.meta.MethodRef;
 import com.oracle.svm.core.reflect.SubstrateConstructorAccessor;
 import com.oracle.svm.core.reflect.SubstrateMethodAccessor;
+import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.DeadlockWatchdog;
 import com.oracle.svm.hosted.HostedConfiguration;
 import com.oracle.svm.hosted.NativeImageOptions;
@@ -306,7 +308,7 @@ public class UniverseBuilder {
          * time by their subtypes.
          */
         if (hType.wrapped.isReachable() &&
-                        ClassInitializationSupport.singleton().maybeInitializeAtBuildTime(hostedJavaClass) &&
+                        ClassInitializationSupport.singleton().maybeInitializeAtBuildTime(aType) &&
                         hub.getClassInitializationInfo().getTypeReached() == ClassInitializationInfo.TypeReached.NOT_REACHED) {
             hType.wrapped.forAllSuperTypes(t -> {
                 var superHub = hUniverse.hostVM().dynamicHub(t);
@@ -539,7 +541,7 @@ public class UniverseBuilder {
             /*
              * Reserve the vtable and typeslots
              */
-            int intSize = layout.sizeInBytes(JavaKind.Int);
+            int intSize = ObjectLayoutCompilerSupport.sizeInBytes(layout, JavaKind.Int);
             int afterVTableLengthOffset = dynamicHubLayout.getVTableLengthOffset() + intSize;
 
             /*
@@ -566,7 +568,7 @@ public class UniverseBuilder {
             }
 
         } else if (mustReserveArrayFields(clazz)) {
-            int intSize = layout.sizeInBytes(JavaKind.Int);
+            int intSize = ObjectLayoutCompilerSupport.sizeInBytes(layout, JavaKind.Int);
             int afterArrayLengthOffset = layout.getArrayLengthOffset() + intSize;
             firstInstanceFieldOffset = afterArrayLengthOffset;
 
@@ -590,20 +592,24 @@ public class UniverseBuilder {
          */
         Object uncontendedSentinel = new Object();
         Object unannotatedGroup = GuestAnnotationAccess.isAnnotationPresent(clazz, Contended.class) ? new Object() : uncontendedSentinel;
-        Function<HostedField, Object> getAnnotationGroup = field -> Optional.ofNullable(ContendedGuestValue.get(field))
-                        .map(a -> "".equals(a.value()) ? new Object() : a.value())
-                        .orElse(unannotatedGroup);
-        Map<Object, ArrayList<HostedField>> contentionGroups = rawFields.stream()
-                        .sorted(HostedUniverse.FIELD_COMPARATOR_RELAXED)
-                        .collect(Collectors.groupingBy(getAnnotationGroup, Collectors.toCollection(ArrayList::new)));
+        /* Preserve insertion order because identity hashes of unnamed groups can differ between image builds. */
+        EconomicMap<Object, ArrayList<HostedField>> contentionGroups = EconomicMap.create();
+        rawFields.sort(HostedUniverse.FIELD_COMPARATOR_RELAXED);
+        for (HostedField field : rawFields) {
+            Object group = Optional.ofNullable(ContendedGuestValue.get(field))
+                            .map(a -> "".equals(a.value()) ? new Object() : a.value())
+                            .orElse(unannotatedGroup);
+            contentionGroups.computeIfAbsent(group, _ -> new ArrayList<>()).add(field);
+        }
 
-        ArrayList<HostedField> uncontendedFields = contentionGroups.remove(uncontendedSentinel);
+        /* Place uncontended fields first so they can fill available gaps before adding padded groups. */
+        ArrayList<HostedField> uncontendedFields = contentionGroups.removeKey(uncontendedSentinel);
         if (uncontendedFields != null) {
             assert !uncontendedFields.isEmpty();
             placeFields(uncontendedFields, usedBytes, 0, layout);
         }
 
-        for (ArrayList<HostedField> groupFields : contentionGroups.values()) {
+        for (ArrayList<HostedField> groupFields : contentionGroups.getValues()) {
             reserveAtEnd(usedBytes, getContendedPadding());
             int firstOffset = usedBytes.length();
             placeFields(groupFields, usedBytes, firstOffset, layout);
@@ -711,7 +717,7 @@ public class UniverseBuilder {
         int lastSearchSize = -1;
         boolean lastSearchSuccess = false;
         for (HostedField field : fields) {
-            int fieldSize = layout.sizeInBytes(field.getStorageKind());
+            int fieldSize = ObjectLayoutCompilerSupport.sizeInBytes(layout, field.getStorageKind());
             int offset = -1;
             int endOffset = usedBytes.length();
             if (lastSearchSuccess || lastSearchSize != fieldSize) {
@@ -850,15 +856,15 @@ public class UniverseBuilder {
                         offsets = layeredStaticFieldSupport.getFutureLayerOffsets(field, layerNum);
                     }
                     if (field.getStorageKind().isObject()) {
-                        field.setLocation(NumUtil.safeToInt(layout.getArrayElementOffset(JavaKind.Object, offsets.nextObjectField)), layerNum);
+                        field.setLocation(NumUtil.safeToInt(ObjectLayoutCompilerSupport.getArrayElementOffset(layout, JavaKind.Object, offsets.nextObjectField)), layerNum);
                         offsets.nextObjectField += 1;
                     } else {
-                        int fieldSize = layout.sizeInBytes(field.getStorageKind());
-                        while (layout.getArrayElementOffset(JavaKind.Byte, offsets.nextPrimitiveField) % fieldSize != 0) {
+                        int fieldSize = ObjectLayoutCompilerSupport.sizeInBytes(layout, field.getStorageKind());
+                        while (ObjectLayoutCompilerSupport.getArrayElementOffset(layout, JavaKind.Byte, offsets.nextPrimitiveField) % fieldSize != 0) {
                             // Insert padding byte for alignment
                             offsets.nextPrimitiveField++;
                         }
-                        field.setLocation(NumUtil.safeToInt(layout.getArrayElementOffset(JavaKind.Byte, offsets.nextPrimitiveField)), layerNum);
+                        field.setLocation(NumUtil.safeToInt(ObjectLayoutCompilerSupport.getArrayElementOffset(layout, JavaKind.Byte, offsets.nextPrimitiveField)), layerNum);
                         offsets.nextPrimitiveField += fieldSize;
                     }
                 }
@@ -938,6 +944,10 @@ public class UniverseBuilder {
         boolean closedTypeWorldHubLayout = SubstrateOptions.useClosedTypeWorldHubLayout();
         boolean useOffsets = SubstrateOptions.useRelativeCodePointers();
 
+        // Hash tables are immutable once constructed. Share equal contents within this image layer;
+        // the build-local map and its content-based LongBuffer keys do not enter the image heap.
+        Map<LongBuffer, long[]> interfaceHashTables = new HashMap<>();
+
         for (HostedType type : hUniverse.getTypes()) {
             hUniverse.hostVM().recordActivity();
 
@@ -950,21 +960,26 @@ public class UniverseBuilder {
                 if (instanceClass.isAbstract()) {
                     layoutHelper = LayoutEncoding.forAbstract();
                 } else if (dynamicHubLayout.isDynamicHub(type)) {
-                    layoutHelper = LayoutEncoding.forDynamicHub(type, dynamicHubLayout.vTableOffset(), ol.getArrayIndexShift(dynamicHubLayout.getVTableSlotStorageKind()));
+                    layoutHelper = LayoutEncoding.forDynamicHub(type, dynamicHubLayout.vTableOffset(), ObjectLayoutCompilerSupport.getArrayIndexShift(ol, dynamicHubLayout.getVTableSlotStorageKind()));
                 } else if (HybridLayout.isHybrid(type)) {
                     HybridLayout hybridLayout = new HybridLayout(instanceClass, ol, hMetaAccess);
                     JavaKind storageKind = hybridLayout.getArrayElementStorageKind();
                     boolean isObject = (storageKind == JavaKind.Object);
-                    layoutHelper = LayoutEncoding.forHybrid(type, isObject, hybridLayout.getArrayBaseOffset(), ol.getArrayIndexShift(storageKind));
+                    layoutHelper = LayoutEncoding.forHybrid(type, isObject, hybridLayout.getArrayBaseOffset(), ObjectLayoutCompilerSupport.getArrayIndexShift(ol, storageKind));
                 } else {
-                    layoutHelper = LayoutEncoding.forPureInstance(type, ObjectLayout.singleton().alignUp(instanceClass.getInstanceSize()));
+                    int instanceSize = instanceClass.getInstanceSize();
+                    long sizeWithIdentityHash = LayoutEncoding.getPureInstanceSize(instanceSize, instanceClass.getIdentityHashOffset(), true);
+                    UserError.guarantee(instanceSize > 0 && sizeWithIdentityHash <= Heap.getHeap().getMaxInstanceSize(),
+                                    "Size of %s exceeds the maximum supported by the garbage collector.", type.toJavaName());
+                    layoutHelper = LayoutEncoding.forPureInstance(type, instanceSize);
                 }
                 monitorOffset = instanceClass.getMonitorFieldOffset();
                 identityHashOffset = instanceClass.getIdentityHashOffset();
             } else if (type.isArray()) {
                 JavaKind storageKind = type.getComponentType().getStorageKind();
                 boolean isObject = (storageKind == JavaKind.Object);
-                layoutHelper = LayoutEncoding.forArray(type, isObject, ol.getArrayBaseOffset(storageKind), ol.getArrayIndexShift(storageKind));
+                layoutHelper = LayoutEncoding.forArray(type, isObject, ObjectLayoutCompilerSupport.getArrayBaseOffset(ol, storageKind), ObjectLayoutCompilerSupport.getArrayIndexShift(ol,
+                                storageKind));
                 if (ol.isIdentityHashFieldInObjectHeader() || ol.isIdentityHashFieldAtTypeSpecificOffset()) {
                     identityHashOffset = NumUtil.safeToInt(ol.getObjectHeaderIdentityHashOffset());
                 }
@@ -987,13 +1002,16 @@ public class UniverseBuilder {
 
             DynamicHub hub = type.getHub();
             hub.setSharedData(layoutHelper, monitorOffset, identityHashOffset, referenceMapIndex, type.isInstantiated());
+            if (HostedImageLayerBuildingSupport.buildingExtensionLayer()) {
+                HostedImageLayerBuildingSupport.singleton().getLoader().verifyObjectLayoutCompatibility(type);
+            }
 
             if (closedTypeWorldHubLayout) {
                 MethodRef[] vtable = createVTable(type.closedTypeWorldVTable, useOffsets);
                 hub.setClosedTypeWorldData(vtable, type.getTypeID(), type.getTypeCheckStart(), type.getTypeCheckRange(),
                                 type.getTypeCheckSlot(), type.getClosedTypeWorldTypeCheckSlots());
             } else {
-                setOpenTypeWorldData(type, dynamicHubLayout, hub, useOffsets);
+                setOpenTypeWorldData(type, dynamicHubLayout, hub, useOffsets, interfaceHashTables);
             }
         }
     }
@@ -1002,7 +1020,7 @@ public class UniverseBuilder {
      * See {@link DynamicHubUtils#computeOpenTypeWorldTypeCheckData} for details on the
      * {@link DynamicHub} type check layout in the open type world.
      */
-    private static void setOpenTypeWorldData(HostedType type, DynamicHubLayout dynamicHubLayout, DynamicHub hub, boolean useOffsets) {
+    private static void setOpenTypeWorldData(HostedType type, DynamicHubLayout dynamicHubLayout, DynamicHub hub, boolean useOffsets, Map<LongBuffer, long[]> interfaceHashTables) {
         boolean implementsMethods = type.itableStartingOffsets.length > 0;
         int numClassTypes = type.numClassTypes;
         int[] typeHierarchy = new int[numClassTypes];
@@ -1018,10 +1036,15 @@ public class UniverseBuilder {
         DynamicHubUtils.TypeCheckData typeCheckData = DynamicHubUtils.computeOpenTypeWorldTypeCheckData(implementsMethods, typeHierarchy, interfaceIDs, iTableOffsets, vTableOffset,
                         vTableSlotSize);
 
+        long[] interfaceHashTable = typeCheckData.openTypeWorldInterfaceHashTable();
+        if (interfaceHashTable != null) {
+            interfaceHashTable = interfaceHashTables.computeIfAbsent(LongBuffer.wrap(interfaceHashTable), LongBuffer::array);
+        }
+
         MethodRef[] vtable = createVTable(type.openTypeWorldDispatchTables, useOffsets);
         hub.setOpenTypeWorldData(vtable, type.getTypeID(), type.getInterfaceID(), type.getTypeIDDepth(), type.getNumClassTypes(), typeCheckData.numIterableInterfaces(),
                         typeCheckData.openTypeWorldTypeCheckSlots(),
-                        typeCheckData.openTypeWorldInterfaceHashTable(), typeCheckData.openTypeWorldInterfaceHashParam());
+                        interfaceHashTable, typeCheckData.openTypeWorldInterfaceHashParam());
     }
 
     private static MethodRef[] createVTable(HostedMethod[] methods, boolean useOffsets) {
@@ -1032,13 +1055,13 @@ public class UniverseBuilder {
         for (int i = 0; i < methods.length; i++) {
             HostedMethod method = methods[i];
             if (useOffsets) {
-                vtable[i] = new MethodOffset(method);
+                vtable[i] = MethodRefSupport.createMethodOffset(method);
             } else {
                 /*
                  * We install a CodePointer in the vtable; when generating relocation info, we will
                  * know these point into .text
                  */
-                vtable[i] = new MethodPointer(method);
+                vtable[i] = MethodRefSupport.createMethodPointer(method);
             }
         }
         return vtable;

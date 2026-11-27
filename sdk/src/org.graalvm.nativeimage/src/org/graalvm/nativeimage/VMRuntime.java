@@ -89,29 +89,6 @@ public final class VMRuntime {
         ImageSingletons.lookup(HeapDumpSupport.class).dumpHeap(outputFile, live);
     }
 
-    /**
-     * Trims runtime state.
-     * <p>
-     * Depending on the selected mode, runtime-state trimming may run garbage collection, free
-     * unused heap memory, and zero retained heap memory. It may also invoke configured callbacks
-     * before and after the trim phase.
-     * <p>
-     * Recursive calls, including calls from either callback, are not supported.
-     *
-     * @throws RuntimeStateTrimCallbackException if a configured callback returns a nonzero status
-     *             code
-     * @throws IllegalStateException if invoked recursively while a runtime-state trim is in progress
-     * @throws UnsupportedOperationException if runtime-state trim or the selected mode is not
-     *             supported by the runtime
-     *
-     * @since 25.5
-     *
-     * @see RuntimeStateTrimConfig
-     */
-    public static void trimRuntimeState(RuntimeStateTrimConfig config) {
-        ImageSingletons.lookup(VMRuntimeSupport.class).trimRuntimeState(config);
-    }
-
     private VMRuntime() {
     }
 }
